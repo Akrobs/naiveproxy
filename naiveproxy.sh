@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v3.5.0 — by ivanstudiya-cpu
+#   NaiveProxy Manager v3.6.0 — by ivanstudiya-cpu
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #   GitHub: https://github.com/ivanstudiya-cpu/naiveproxy
@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-VERSION="3.5.0"
+VERSION="3.6.0"
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivanstudiya-cpu/naiveproxy/releases/latest"
 SCRIPT_PATH="/usr/local/bin/naiveproxy.sh"
@@ -725,19 +725,48 @@ install_deps() {
 # ─── Сборка Caddy ────────────────────────────────────────────
 build_caddy() {
     info "Собираю Caddy с forwardproxy (naive)..."
-    info "Занимает 3-10 минут, не прерывай..."
+    info "Занимает 5-15 минут, не прерывай..."
 
     export PATH="/usr/local/go/bin:$PATH"
     export GOPATH="/root/go"
     export GOCACHE="/root/.cache/go-build"
 
+    # Ставим git если нет
+    command -v git &>/dev/null || apt-get install -y -q git
+
     go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 
-    "$GOPATH/bin/xcaddy" build \
-        --with github.com/caddyserver/forwardproxy@caddy2=github.com/klzgrad/forwardproxy@naive \
+    # Клонируем naive ветку напрямую — единственный надёжный способ
+    local fp_dir="/tmp/klzgrad-forwardproxy"
+    rm -rf "$fp_dir"
+    info "Клонирую klzgrad/forwardproxy@naive..."
+    if ! git clone -b naive --depth 1         https://github.com/klzgrad/forwardproxy.git "$fp_dir" 2>/dev/null; then
+        err "Не удалось клонировать forwardproxy. Проверь интернет."
+        exit 1
+    fi
+
+    # Читаем точную версию Caddy из go.mod forwardproxy
+    local caddy_ver
+    caddy_ver=$(grep 'github.com/caddyserver/caddy/v2 ' "$fp_dir/go.mod"         | awk '{print $2}' | head -1)
+    info "Forwardproxy требует Caddy: $caddy_ver"
+
+    # Собираем именно эту версию Caddy с локальным forwardproxy
+    "$GOPATH/bin/xcaddy" build "${caddy_ver}" \
+        --with github.com/caddyserver/forwardproxy="$fp_dir" \
         --output "$CADDY_BIN"
 
     chmod +x "$CADDY_BIN"
+
+    # Проверяем наличие naive padding в бинарнике
+    if command -v strings &>/dev/null; then
+        if strings "$CADDY_BIN" 2>/dev/null | grep -q "Padding"; then
+            ok "Naive padding модуль подтверждён ✓"
+        else
+            warn "Padding не найден — возможна проблема совместимости"
+        fi
+    fi
+
+    rm -rf "$fp_dir"
     ok "Caddy собран: $("$CADDY_BIN" version 2>/dev/null | head -1)"
 }
 
@@ -759,6 +788,9 @@ write_caddyfile_multi() {
     cat > "$CADDYFILE" <<EOF
 {
     order forward_proxy before file_server
+    servers :443 {
+        protocols h1 h2 h3
+    }
     log {
         output file ${LOG_DIR}/access.log {
             roll_size 50mb
