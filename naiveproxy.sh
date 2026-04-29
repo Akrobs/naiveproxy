@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v3.9.0 — by ivanstudiya-cpu
+#   NaiveProxy Manager v4.1.0 — by ivanstudiya-cpu
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #   GitHub: https://github.com/ivanstudiya-cpu/naiveproxy
@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-VERSION="3.9.0"
+VERSION="4.1.0"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivanstudiya-cpu/naiveproxy/releases/latest"
@@ -483,7 +483,15 @@ load_config() {
         fi
         [[ "$perms" != "600" ]] && chmod 600 "$CONFIG_FILE"
         # shellcheck source=/dev/null
-        source "$CONFIG_FILE"
+        # Проверяем владельца перед source
+        local _cfg_owner
+        _cfg_owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || echo "unknown")
+        if [[ "$_cfg_owner" == "root" ]]; then
+            # shellcheck source=/dev/null
+            source "$CONFIG_FILE"
+        else
+            warn "CONFIG_FILE принадлежит не root — пропускаю source"
+        fi
     fi
 }
 
@@ -495,6 +503,8 @@ DOMAINS="${DOMAINS:-${DOMAIN:-}}"
 EMAIL="${EMAIL:-}"
 TG_TOKEN="${TG_TOKEN:-}"
 TG_CHAT_ID="${TG_CHAT_ID:-}"
+TG_ADMINS="${TG_ADMINS:-}"  # Доп. администраторы через запятую: id1,id2,id3
+TG_ADMINS="${TG_ADMINS:-}"
 INSTALLED_AT="$(date '+%Y-%m-%d %H:%M:%S')"
 EOF
     chmod 600 "$CONFIG_FILE"
@@ -804,7 +814,7 @@ build_caddy() {
 
     # Клонируем naive ветку напрямую — единственный надёжный способ
     local fp_dir="/tmp/klzgrad-forwardproxy"
-    rm -rf "$fp_dir"
+    [[ -n "${fp_dir}" ]] && rm -rf "${fp_dir}"
     info "Клонирую klzgrad/forwardproxy@naive..."
     if ! git clone -b naive --depth 1         https://github.com/klzgrad/forwardproxy.git "$fp_dir" 2>/dev/null; then
         err "Не удалось клонировать forwardproxy. Проверь интернет."
@@ -832,7 +842,7 @@ build_caddy() {
         fi
     fi
 
-    rm -rf "$fp_dir"
+    [[ -n "${fp_dir}" ]] && rm -rf "${fp_dir}"
     ok "Caddy собран: $("$CADDY_BIN" version 2>/dev/null | head -1)"
 }
 
@@ -1531,6 +1541,7 @@ cmd_users() {
                 # Безопасная замена без sed regex
                 local tmp_users
                 tmp_users=$(mktemp)
+                trap 'rm -f "${tmp_users:-}" 2>/dev/null' RETURN
                 while IFS=: read -r u p; do
                     if [[ "$u" == "$chg_user" ]]; then
                         printf '%s:%s
@@ -2212,6 +2223,571 @@ ${report}
     fi
 }
 
+
+# ══════════════════════════════════════════════════════════════
+#   TELEGRAM BOT — ИНТЕРАКТИВНОЕ УПРАВЛЕНИЕ
+# ══════════════════════════════════════════════════════════════
+
+# Проверка что пользователь является администратором
+tg_is_admin() {
+    local from_id="$1"
+    # Валидация: from_id должен быть числом
+    [[ ! "${from_id}" =~ ^[0-9]+$ ]] && return 1
+    # Основной admin
+    [[ "${from_id}" == "${TG_CHAT_ID}" ]] && return 0
+    # Дополнительные admins
+    if [[ -n "${TG_ADMINS:-}" ]]; then
+        local IFS=','
+        for admin_id in ${TG_ADMINS}; do
+            admin_id="${admin_id// /}"
+            [[ "${from_id}" == "${admin_id}" ]] && return 0
+        done
+    fi
+    return 1
+}
+
+# Отправка сообщения конкретному chat_id
+tg_reply() {
+    local chat_id="$1"
+    local message="$2"
+    [[ -z "${TG_TOKEN:-}" ]] && return
+    curl -s --max-time 10         -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage"         --data-urlencode "chat_id=${chat_id}"         --data-urlencode "parse_mode=HTML"         --data-urlencode "text=${message}"         >/dev/null 2>&1 || true
+}
+
+# Отправка фото (QR код)
+tg_send_photo() {
+    local chat_id="$1"
+    local photo_path="$2"
+    local caption="$3"
+    [[ -z "${TG_TOKEN:-}" || ! -f "${photo_path}" ]] && return
+    curl -s --max-time 30         -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendPhoto"         -F "chat_id=${chat_id}"         -F "photo=@${photo_path}"         --data-urlencode "caption=${caption}"         >/dev/null 2>&1 || true
+}
+
+# Обработка одной команды
+tg_handle_command() {
+    local chat_id="$1"
+    local from_id="$2"
+    local text="$3"
+
+    # Проверка прав
+    if ! tg_is_admin "${from_id}"; then
+        tg_reply "${chat_id}" "⛔ <b>Доступ запрещён</b>
+Ваш ID: <code>${from_id}</code>
+Обратитесь к администратору."
+        return
+    fi
+
+    load_config 2>/dev/null || true
+
+    # Лимит длины команды — защита от flood/injection
+    if [[ ${#text} -gt 256 ]]; then
+        tg_reply "${chat_id}" "❌ Команда слишком длинная"
+        return
+    fi
+
+    # Парсим команду и аргументы
+    local cmd args
+    cmd=$(echo "${text}" | awk '{print $1}' | tr '[:upper:]' '[:lower:]')
+    args=$(echo "${text}" | cut -d' ' -f2-)
+    # Убираем потенциально опасные символы из args
+    args=$(echo "${args}" | tr -d '`$(){};<>&|\\')
+
+    case "${cmd}" in
+
+        /start|/help)
+            tg_reply "${chat_id}" "🛡 <b>NaiveProxy Manager v${VERSION}</b>
+🖥 Сервер: <code>$(hostname)</code>
+
+<b>Доступные команды:</b>
+
+📊 <b>Информация</b>
+/status — статус сервера и сертификата
+/stats — статистика трафика и ресурсов
+/diagnose — полная диагностика системы
+/logs — последние 20 строк логов
+/users — список пользователей
+/cert — статус TLS сертификата
+
+👥 <b>Пользователи</b>
+/adduser логин пароль — добавить пользователя
+/deluser логин — удалить пользователя
+/qr логин — QR код для подключения
+
+⚙️ <b>Управление</b>
+/restart — перезапустить Caddy
+/update — обновить Caddy
+/selfupdate — обновить скрипт
+/admins — список администраторов
+/addadmin ID — добавить администратора
+/deladmin ID — удалить администратора"
+            ;;
+
+        /status)
+            local caddy_status="🔴 Остановлен"
+            systemctl is-active caddy &>/dev/null && caddy_status="🟢 Работает"
+
+            local cert_info=""
+            if [[ -n "${DOMAIN:-}" ]]; then
+                local not_after expire_ts now_ts cert_days
+                not_after=$(echo | timeout 5 openssl s_client                     -connect "${DOMAIN}:443" -servername "${DOMAIN}" 2>/dev/null                     | openssl x509 -noout -dates 2>/dev/null                     | grep "notAfter" | cut -d= -f2 || echo "")
+                if [[ -n "${not_after}" ]]; then
+                    expire_ts=$(date -d "${not_after}" +%s 2>/dev/null || echo 0)
+                    now_ts=$(date +%s)
+                    cert_days=$(( (expire_ts - now_ts) / 86400 ))
+                    cert_info="
+🔐 Сертификат: ${cert_days} дней"
+                fi
+            fi
+
+            tg_reply "${chat_id}" "📡 <b>Статус NaiveProxy</b>
+🖥 Сервер: <code>$(hostname)</code>
+${caddy_status}
+🌐 Домен: <code>${DOMAIN:-не настроен}</code>
+👥 Пользователей: $(get_users | wc -l)
+💾 RAM: $(free -h | awk '/Mem:/{print $3"/"$2}')
+💿 Диск: $(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')
+🕐 $(date '+%Y-%m-%d %H:%M:%S')${cert_info}"
+            ;;
+
+        /stats)
+            tg_send_stats_to "${chat_id}"
+            ;;
+
+        /diagnose)
+            tg_reply "${chat_id}" "🔍 Запускаю диагностику, подожди..."
+            local diag_result=""
+            local pass=0 warn=0 fail=0
+
+            # Caddy
+            if systemctl is-active caddy &>/dev/null; then
+                diag_result+="✅ Caddy запущен
+"
+                ((pass++))
+            else
+                diag_result+="❌ Caddy НЕ запущен
+"
+                ((fail++))
+            fi
+
+            # Padding
+            if command -v strings &>/dev/null && strings /usr/local/bin/caddy 2>/dev/null | grep -q "^Padding$"; then
+                diag_result+="✅ Naive padding OK
+"
+                ((pass++))
+            else
+                diag_result+="⚠️ Padding не проверен
+"
+                ((warn++))
+            fi
+
+            # Caddyfile
+            if grep -q "^:443," "${CADDYFILE:-/etc/caddy/Caddyfile}" 2>/dev/null; then
+                diag_result+="✅ Caddyfile формат OK
+"
+                ((pass++))
+            else
+                diag_result+="❌ Caddyfile неправильный формат
+"
+                ((fail++))
+            fi
+
+            # ALPN
+            if [[ -n "${DOMAIN:-}" ]]; then
+                local alpn
+                alpn=$(echo | timeout 5 openssl s_client                     -connect "${DOMAIN}:443" -alpn h2 2>/dev/null                     | grep "ALPN protocol" | awk '{print $3}' || echo "")
+                if [[ "${alpn}" == "h2" ]]; then
+                    diag_result+="✅ ALPN h2 OK
+"
+                    ((pass++))
+                else
+                    diag_result+="❌ ALPN не h2
+"
+                    ((fail++))
+                fi
+            fi
+
+            # UFW
+            if ufw status 2>/dev/null | grep -q "Status: active"; then
+                diag_result+="✅ UFW активен
+"
+                ((pass++))
+            else
+                diag_result+="⚠️ UFW неактивен
+"
+                ((warn++))
+            fi
+
+            # Fail2Ban
+            if systemctl is-active fail2ban &>/dev/null; then
+                diag_result+="✅ Fail2Ban активен
+"
+                ((pass++))
+            else
+                diag_result+="⚠️ Fail2Ban не запущен
+"
+                ((warn++))
+            fi
+
+            # RAM
+            local ram_pct
+            ram_pct=$(free | awk '/Mem:/{printf "%d", $3/$2*100}')
+            if [[ ${ram_pct} -lt 90 ]]; then
+                diag_result+="✅ RAM: ${ram_pct}%
+"
+                ((pass++))
+            else
+                diag_result+="❌ RAM критически: ${ram_pct}%
+"
+                ((fail++))
+            fi
+
+            tg_reply "${chat_id}" "🔍 <b>Диагностика NaiveProxy</b>
+
+${diag_result}
+✅ Пройдено: ${pass}  ⚠️ Внимание: ${warn}  ❌ Проблемы: ${fail}"
+            ;;
+
+        /logs)
+            local log_lines
+            log_lines=$(journalctl -u caddy -n 20 --no-pager 2>/dev/null                 | tail -20 | sed 's/</\&lt;/g; s/>/\&gt;/g' || echo "Логи недоступны")
+            tg_reply "${chat_id}" "📋 <b>Логи Caddy (последние 20):</b>
+<pre>${log_lines}</pre>"
+            ;;
+
+        /users)
+            local user_list
+            user_list=$(get_users | awk -F: '{print "• <code>"$1"</code>"}' | head -20 || echo "Нет пользователей")
+            tg_reply "${chat_id}" "👥 <b>Пользователи ($(get_users | wc -l)):</b>
+${user_list}"
+            ;;
+
+        /adduser)
+            local new_user new_pass
+            new_user=$(echo "${args}" | awk '{print $1}')
+            new_pass=$(echo "${args}" | awk '{print $2}')
+
+            if [[ -z "${new_user}" ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /adduser логин пароль"
+                return
+            fi
+
+            if [[ -z "${new_pass}" ]]; then
+                new_pass=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)
+            elif [[ "${new_pass}" == *":"* ]]; then
+                tg_reply "${chat_id}" "❌ Пароль не может содержать ':'"
+                return
+            elif [[ ${#new_pass} -lt 8 ]]; then
+                tg_reply "${chat_id}" "❌ Пароль слишком короткий (минимум 8 символов)"
+                return
+            fi
+
+            # Валидация
+            if ! [[ "${new_user}" =~ ^[a-zA-Z0-9_-]{2,32}$ ]]; then
+                tg_reply "${chat_id}" "❌ Неверный логин. Только буквы, цифры, _, -"
+                return
+            fi
+
+            if get_users | grep -q "^${new_user}:"; then
+                tg_reply "${chat_id}" "❌ Пользователь <code>${new_user}</code> уже существует"
+                return
+            fi
+
+            printf '%s:%s
+' "${new_user}" "${new_pass}" >> "${USERS_FILE}"
+            write_caddyfile
+            systemctl reload caddy 2>/dev/null || systemctl restart caddy
+
+            local uri="naive+https://${new_user}:${new_pass}@${DOMAIN}:443"
+            tg_reply "${chat_id}" "✅ <b>Пользователь добавлен</b>
+👤 Логин: <code>${new_user}</code>
+🔑 Пароль: <code>${new_pass}</code>
+🌐 URI: <code>${uri}</code>
+
+Используй /qr ${new_user} для QR кода"
+            ;;
+
+        /deluser)
+            local del_user="${args%% *}"
+            if [[ -z "${del_user}" ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /deluser логин"
+                return
+            fi
+
+            if ! get_users | grep -q "^${del_user}:"; then
+                tg_reply "${chat_id}" "❌ Пользователь <code>${del_user}</code> не найден"
+                return
+            fi
+
+            grep -vF "${del_user}:" "${USERS_FILE}" > "${USERS_FILE}.tmp"                 && mv "${USERS_FILE}.tmp" "${USERS_FILE}"
+            write_caddyfile
+            systemctl reload caddy 2>/dev/null || systemctl restart caddy
+
+            tg_reply "${chat_id}" "🗑 Пользователь <code>${del_user}</code> удалён"
+            ;;
+
+        /qr)
+            local qr_user="${args%% *}"
+            if [[ -z "${qr_user}" ]]; then
+                # QR для первого пользователя
+                qr_user=$(get_users | head -1 | cut -d: -f1)
+            fi
+
+            if [[ -z "${qr_user}" ]]; then
+                tg_reply "${chat_id}" "❌ Нет пользователей. Добавь: /adduser логин пароль"
+                return
+            fi
+
+            local qr_pass
+            qr_pass=$(get_users | grep "^${qr_user}:" | cut -d: -f2)
+
+            if [[ -z "${qr_pass}" ]]; then
+                tg_reply "${chat_id}" "❌ Пользователь <code>${qr_user}</code> не найден"
+                return
+            fi
+
+            local uri="naive+https://${qr_user}:${qr_pass}@${DOMAIN}:443"
+            local qr_file="/tmp/naiveproxy_qr_${qr_user}.png"
+
+            if command -v qrencode &>/dev/null; then
+                qrencode -o "${qr_file}" -s 8 "${uri}" 2>/dev/null
+                tg_send_photo "${chat_id}" "${qr_file}"                     "QR для ${qr_user}@${DOMAIN}"
+                rm -f "${qr_file}"
+            else
+                tg_reply "${chat_id}" "📱 <b>URI для ${qr_user}:</b>
+<code>${uri}</code>
+(установи qrencode для QR: apt install qrencode)"
+            fi
+            ;;
+
+        /cert)
+            if [[ -z "${DOMAIN:-}" ]]; then
+                tg_reply "${chat_id}" "❌ Домен не настроен"
+                return
+            fi
+            local cert_out
+            cert_out=$(echo | timeout 5 openssl s_client                 -connect "${DOMAIN}:443" -servername "${DOMAIN}" 2>/dev/null                 | openssl x509 -noout -dates -issuer 2>/dev/null || echo "")
+            if [[ -z "${cert_out}" ]]; then
+                tg_reply "${chat_id}" "❌ Не удалось получить сертификат для ${DOMAIN}"
+                return
+            fi
+            local not_after issuer cert_days
+            not_after=$(echo "${cert_out}" | grep "notAfter" | cut -d= -f2)
+            issuer=$(echo "${cert_out}" | grep "issuer" | grep -oP 'O=\K[^,]+' || echo "н/д")
+            expire_ts=$(date -d "${not_after}" +%s 2>/dev/null || echo 0)
+            cert_days=$(( ($(date +%s) - expire_ts) / -86400 ))
+            local cert_icon="🟢"
+            [[ ${cert_days} -lt 30 ]] && cert_icon="🟡"
+            [[ ${cert_days} -lt 7 ]] && cert_icon="🔴"
+            tg_reply "${chat_id}" "${cert_icon} <b>TLS Сертификат</b>
+🌐 Домен: <code>${DOMAIN}</code>
+📅 Истекает: ${not_after}
+⏳ Осталось: <b>${cert_days} дней</b>
+🏢 Выдан: ${issuer}"
+            ;;
+
+        /restart)
+            tg_reply "${chat_id}" "🔄 Перезапускаю Caddy..."
+            if systemctl restart caddy 2>/dev/null; then
+                sleep 2
+                tg_reply "${chat_id}" "✅ Caddy перезапущен"
+            else
+                tg_reply "${chat_id}" "❌ Ошибка перезапуска. Проверь: journalctl -u caddy -n 20"
+            fi
+            ;;
+
+        /update)
+            tg_reply "${chat_id}" "🔄 Обновляю Caddy, подожди 5-15 минут..."
+            local _script
+            _script="${SCRIPT_PATH:-/usr/local/bin/naiveproxy.sh}"
+            if [[ ! -f "${_script}" ]]; then
+                tg_reply "${chat_id}" "❌ Скрипт не найден: ${_script}"
+                return
+            fi
+            if bash "${_script}" update >/dev/null 2>&1; then
+                tg_reply "${chat_id}" "✅ Caddy обновлён"
+            else
+                tg_reply "${chat_id}" "❌ Ошибка обновления Caddy"
+            fi
+            ;;
+
+        /selfupdate)
+            tg_reply "${chat_id}" "⬆️ Проверяю обновления скрипта..."
+            local latest_ver
+            latest_ver=$(curl -s --max-time 8 "${GITHUB_RAW}" 2>/dev/null                 | grep '^VERSION=' | grep -oP '"\K[^"]+' || echo "")
+            if [[ -z "${latest_ver}" ]]; then
+                tg_reply "${chat_id}" "❌ Не удалось проверить обновления"
+            elif [[ "${latest_ver}" == "${VERSION}" ]]; then
+                tg_reply "${chat_id}" "✅ Скрипт актуален: v${VERSION}"
+            else
+                tg_reply "${chat_id}" "⬆️ Доступно обновление v${VERSION} → v${latest_ver}
+Запусти на сервере: sudo bash naiveproxy.sh self-update"
+            fi
+            ;;
+
+        /admins)
+            local admin_list="• Главный: <code>${TG_CHAT_ID}</code>"
+            if [[ -n "${TG_ADMINS:-}" ]]; then
+                local IFS=','
+                for aid in ${TG_ADMINS}; do
+                    aid="${aid// /}"
+                    admin_list+="
+• <code>${aid}</code>"
+                done
+            fi
+            tg_reply "${chat_id}" "👮 <b>Администраторы:</b>
+${admin_list}"
+            ;;
+
+        /addadmin)
+            local new_admin="${args%% *}"
+            # Защита: только числа, разумная длина
+            if [[ -z "${new_admin}" || ! "${new_admin}" =~ ^[0-9]{5,15}$ ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /addadmin 123456789"
+                return
+            fi
+            if [[ -z "${TG_ADMINS}" ]]; then
+                TG_ADMINS="${new_admin}"
+            else
+                TG_ADMINS="${TG_ADMINS},${new_admin}"
+            fi
+            save_config
+            tg_reply "${chat_id}" "✅ Администратор <code>${new_admin}</code> добавлен"
+            ;;
+
+        /deladmin)
+            local del_admin="${args%% *}"
+            if [[ -z "${del_admin}" ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /deladmin 123456789"
+                return
+            fi
+            TG_ADMINS=$(echo "${TG_ADMINS}" | tr ',' '
+'                 | grep -v "^${del_admin}$" | tr '
+' ',' | sed 's/,$//')
+            save_config
+            tg_reply "${chat_id}" "🗑 Администратор <code>${del_admin}</code> удалён"
+            ;;
+
+        *)
+            tg_reply "${chat_id}" "❓ Неизвестная команда. Используй /help"
+            ;;
+    esac
+}
+
+# Основной цикл бота (long polling)
+cmd_bot() {
+    [[ -z "${TG_TOKEN:-}" ]] && err "Telegram не настроен. Запусти: sudo bash naiveproxy.sh" && return 1
+
+    info "Запускаю Telegram бот..."
+    info "Бот работает. Напиши /help в Telegram."
+    info "Для остановки: Ctrl+C"
+    echo
+
+    local offset=0
+
+    while true; do
+        # Получаем обновления
+        local response
+        response=$(curl -s --max-time 35             "https://api.telegram.org/bot${TG_TOKEN}/getUpdates?offset=${offset}&timeout=30&allowed_updates=message"             2>/dev/null || echo "")
+
+        if [[ -z "${response}" ]]; then
+            sleep 5
+            continue
+        fi
+
+        # Парсим обновления через python3
+        local updates
+        updates=$(echo "${response}" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if not data.get('ok'): sys.exit(0)
+    for u in data.get('result', []):
+        uid = u.get('update_id', 0)
+        msg = u.get('message', {})
+        chat_id = msg.get('chat', {}).get('id', '')
+        from_id = msg.get('from', {}).get('id', '')
+        text = msg.get('text', '')
+        if text.startswith('/'):
+            print(f'{uid}|{chat_id}|{from_id}|{text}')
+except: pass
+" 2>/dev/null || echo "")
+
+        while IFS='|' read -r update_id chat_id from_id text; do
+            [[ -z "${update_id}" ]] && continue
+            # Защита от переполнения
+            if [[ "${update_id}" =~ ^[0-9]+$ ]] && [[ ${update_id} -lt 2147483647 ]]; then
+                offset=$(( update_id + 1 ))
+            fi
+            tg_handle_command "${chat_id}" "${from_id}" "${text}"
+        done <<< "${updates}"
+
+        sleep 1
+    done
+}
+
+# Запуск бота как systemd сервиса
+install_bot_service() {
+    local script_path="${SCRIPT_PATH:-/usr/local/bin/naiveproxy.sh}"
+
+    cat > /etc/systemd/system/naiveproxy-bot.service << EOF
+[Unit]
+Description=NaiveProxy Telegram Bot
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash ${script_path} bot
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable naiveproxy-bot --quiet
+    systemctl restart naiveproxy-bot
+    ok "Telegram бот установлен как системный сервис"
+    ok "Статус: systemctl status naiveproxy-bot"
+}
+
+# Обёртка tg_send_stats_to для отправки конкретному chat_id
+tg_send_stats_to() {
+    local target_chat="$1"
+    local caddy_ver
+    caddy_ver=$(/usr/local/bin/caddy version 2>/dev/null | head -1 | awk '{print $1}' || echo "н/д")
+
+    local caddy_status="🔴 Остановлен"
+    systemctl is-active caddy &>/dev/null && caddy_status="🟢 Работает"
+
+    local cert_days="н/д"
+    if [[ -n "${DOMAIN:-}" ]]; then
+        local not_after expire_ts
+        not_after=$(echo | timeout 5 openssl s_client             -connect "${DOMAIN}:443" -servername "${DOMAIN}" 2>/dev/null             | openssl x509 -noout -dates 2>/dev/null             | grep "notAfter" | cut -d= -f2 || echo "")
+        if [[ -n "${not_after}" ]]; then
+            expire_ts=$(date -d "${not_after}" +%s 2>/dev/null || echo 0)
+            cert_days=$(( (expire_ts - $(date +%s)) / 86400 ))
+        fi
+    fi
+
+    tg_reply "${target_chat}" "📊 <b>Статистика NaiveProxy</b>
+
+🌐 Домен: <code>${DOMAIN:-н/д}</code>
+📡 Статус: ${caddy_status}
+📦 Caddy: <code>${caddy_ver}</code>
+👥 Пользователей: $(get_users | wc -l)
+
+🖥 Сервер: <code>$(hostname)</code>
+💾 RAM: $(free -h | awk '/Mem:/{print $3"/"$2}')
+💿 Диск: $(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')
+⚡ CPU: $(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | tr -d ',')
+
+🔐 Сертификат: ${cert_days} дней
+🕐 $(date '+%Y-%m-%d %H:%M:%S')"
+}
+
 # ─── СТАТУС ──────────────────────────────────────────────────
 cmd_status() {
     hr
@@ -2330,7 +2906,7 @@ show_menu() {
     echo -e "   ${BOLD}4)${RESET}  Управление пользователями"
     echo -e "   ${BOLD}5)${RESET}  🌐 Управление доменами"
     echo -e "   ${BOLD}6)${RESET}  Мониторинг и статистика"
-    echo -e "   ${BOLD}7)${RESET}  Настройка Telegram"
+    echo -e "   ${BOLD}7)${RESET}  Настройка Telegram + Бот"
     echo -e "   ${BOLD}8)${RESET}  Перезапустить Caddy"
     echo -e "   ${BOLD}9)${RESET}  Обновить Caddy"
     echo -e "   ${BOLD}10)${RESET} Логи"
@@ -2371,6 +2947,8 @@ main() {
             qr)          load_config; print_client_config ;;
             ssh-key)     cat "${CONFIG_DIR}/ssh_private_key" 2>/dev/null || err "Ключ не найден: ${CONFIG_DIR}/ssh_private_key" ;;
             diagnose)    cmd_diagnose ;;
+            bot)         load_config; cmd_bot ;;
+            bot-install) load_config; install_bot_service ;;
             self-update)  load_config; cmd_self_update ;;
             camouflage)   install_camouflage_page ;;
             version)     echo "NaiveProxy Manager v${VERSION}" ;;
