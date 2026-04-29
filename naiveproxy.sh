@@ -9,6 +9,7 @@
 set -euo pipefail
 
 VERSION="3.8.0"
+LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivanstudiya-cpu/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivanstudiya-cpu/naiveproxy/releases/latest"
 SCRIPT_PATH="/usr/local/bin/naiveproxy.sh"
@@ -436,6 +437,20 @@ EOF
 🛡 Fail2Ban: включён
 🕐 $(date '+%Y-%m-%d %H:%M:%S')"
 }
+
+
+# ─── МУЛЬТИЯЗЫЧНОСТЬ ──────────────────────────────────────────
+# Использование: t "Текст на русском" "English text"
+t() {
+    if [[ "${LANG_UI}" == "en" ]]; then
+        echo "$2"
+    else
+        echo "$1"
+    fi
+}
+
+# Установить язык: export NAIVEPROXY_LANG=en
+# Set language:   export NAIVEPROXY_LANG=en
 
 # ─── Проверки ────────────────────────────────────────────────
 check_root() {
@@ -1937,7 +1952,7 @@ show_menu() {
     [[ -n "${TG_TOKEN:-}" ]] && tg_str="${GREEN}подключён${RESET}"
 
     hr
-    echo -e "${BOLD}${CYAN}   NaiveProxy Manager v${VERSION}${RESET}"
+    echo -e "${BOLD}${CYAN}   NaiveProxy Manager v${VERSION}${RESET}  ${DIM}[$(t "РУС" "ENG")]${RESET}"
     echo -e "   Статус: ${status_str}  |  Домен: ${CYAN}${DOMAIN:-не задан}${RESET}"
     local ssh_str="${YELLOW}не настроен${RESET}"
     [[ -f "$SSH_HARDENING_DONE" ]] && ssh_str="${GREEN}$(grep SSH_PORT "$SSH_HARDENING_DONE" 2>/dev/null | cut -d= -f2)${RESET}"
