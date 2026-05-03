@@ -1897,10 +1897,10 @@ cmd_diagnose() {
     local pass=0 warn=0 fail=0
     local report=""
 
-    # Хелперы вывода
-    _ok()   { echo -e "  ${GREEN}✅ $1${RESET}";   report+="✅ $1\n"; ((pass++)); }
-    _warn() { echo -e "  ${YELLOW}⚠️  $1${RESET}"; report+="⚠️  $1\n"; ((warn++)); }
-    _fail() { echo -e "  ${RED}❌ $1${RESET}";    report+="❌ $1\n"; ((fail++)); }
+    # Хелперы вывода — используем pass+=1 вместо pass=$((pass+1)) из-за set -e
+    _ok()   { echo -e "  ${GREEN}✅ $1${RESET}";   report+="✅ $1\n"; pass=$((pass+1)); }
+    _warn() { echo -e "  ${YELLOW}⚠️  $1${RESET}"; report+="⚠️  $1\n"; warn=$((warn+1)); }
+    _fail() { echo -e "  ${RED}❌ $1${RESET}";    report+="❌ $1\n"; fail=$((fail+1)); }
     _info() { echo -e "  ${CYAN}ℹ️  $1${RESET}"; }
     _sep()  { echo -e "  ${DIM}──────────────────────────────────────${RESET}"; }
 
@@ -2394,33 +2394,33 @@ ${caddy_status}
             if systemctl is-active caddy &>/dev/null; then
                 diag_result+="✅ Caddy запущен
 "
-                ((pass++))
+                pass=$((pass+1))
             else
                 diag_result+="❌ Caddy НЕ запущен
 "
-                ((fail++))
+                fail=$((fail+1))
             fi
 
             # Padding
             if command -v strings &>/dev/null && strings /usr/local/bin/caddy 2>/dev/null | grep -q "^Padding$"; then
                 diag_result+="✅ Naive padding OK
 "
-                ((pass++))
+                pass=$((pass+1))
             else
                 diag_result+="⚠️ Padding не проверен
 "
-                ((warn++))
+                warn=$((warn+1))
             fi
 
             # Caddyfile
             if grep -q "^:443," "${CADDYFILE:-/etc/caddy/Caddyfile}" 2>/dev/null; then
                 diag_result+="✅ Caddyfile формат OK
 "
-                ((pass++))
+                pass=$((pass+1))
             else
                 diag_result+="❌ Caddyfile неправильный формат
 "
-                ((fail++))
+                fail=$((fail+1))
             fi
 
             # ALPN
@@ -2430,11 +2430,11 @@ ${caddy_status}
                 if [[ "${alpn}" == "h2" ]]; then
                     diag_result+="✅ ALPN h2 OK
 "
-                    ((pass++))
+                    pass=$((pass+1))
                 else
                     diag_result+="❌ ALPN не h2
 "
-                    ((fail++))
+                    fail=$((fail+1))
                 fi
             fi
 
@@ -2442,22 +2442,22 @@ ${caddy_status}
             if ufw status 2>/dev/null | grep -q "Status: active"; then
                 diag_result+="✅ UFW активен
 "
-                ((pass++))
+                pass=$((pass+1))
             else
                 diag_result+="⚠️ UFW неактивен
 "
-                ((warn++))
+                warn=$((warn+1))
             fi
 
             # Fail2Ban
             if systemctl is-active fail2ban &>/dev/null; then
                 diag_result+="✅ Fail2Ban активен
 "
-                ((pass++))
+                pass=$((pass+1))
             else
                 diag_result+="⚠️ Fail2Ban не запущен
 "
-                ((warn++))
+                warn=$((warn+1))
             fi
 
             # RAM
@@ -2466,11 +2466,11 @@ ${caddy_status}
             if [[ ${ram_pct} -lt 90 ]]; then
                 diag_result+="✅ RAM: ${ram_pct}%
 "
-                ((pass++))
+                pass=$((pass+1))
             else
                 diag_result+="❌ RAM критически: ${ram_pct}%
 "
-                ((fail++))
+                fail=$((fail+1))
             fi
 
             tg_reply "${chat_id}" "🔍 <b>Диагностика NaiveProxy</b>
