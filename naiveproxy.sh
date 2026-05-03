@@ -896,6 +896,9 @@ write_caddyfile_multi() {
     cat > "$CADDYFILE" <<EOF
 {
   order forward_proxy before file_server
+  servers :443 {
+      protocols h1 h2 h3
+  }
   log {
     output file ${LOG_DIR}/access.log {
       roll_size 50mb
@@ -1180,6 +1183,9 @@ write_caddyfile() {
     cat > "$CADDYFILE" <<EOF
 {
     order forward_proxy before file_server
+    servers :443 {
+        protocols h1 h2 h3
+    }
     log {
         output file ${LOG_DIR}/access.log {
             roll_size 50mb
