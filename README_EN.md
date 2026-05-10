@@ -48,6 +48,41 @@ Caddy 2 · NaiveProxy · Telegram Bot · DNS Ad Blocking · Diagnostics · SSH H
 
 ---
 
+<div align="center">
+
+## 🎉 What's new in v4.2.3
+
+**Complete security audit + working Telegram bot + ad blocker**
+
+</div>
+
+| Block | What was added |
+|-------|----------------|
+| 🤖 **Telegram bot** | 16 commands, multi-admin, QR code as image, auto-install dependencies |
+| 🚫 **DNS blocking** | unbound + 1.5M ad domains, DNS-over-TLS, whitelist |
+| 🔍 **Diagnostics** | 7 blocks, 18+ checks, Telegram report |
+| 🔒 **SSH Hardening** | ED25519, `sshd_config.d/` support, `ssh.socket` disable |
+| 🛡️ **Protection** | Fail2Ban 3 levels (`iptables-multiport`), UFW, last domain protection |
+| ♻️ **Auto-recovery** | `Restart=on-failure` for Caddy and bot |
+| 🎨 **Branding** | ASCII banner, Telegram channel, ivan-it.net |
+
+### 🐛 Bugs fixed in this version:
+
+- ✅ `/qr` command — fixed curl `-F` + `--data-urlencode` conflict
+- ✅ `/adduser` — proper login and password validation
+- ✅ Bot commands stripped of `\r\n` (Telegram added invisible characters)
+- ✅ `set +e` in handler — error no longer breaks bot
+- ✅ Diagnostics — `pass=$((pass+1))` counters instead of `((pass++))`
+- ✅ ALPN check — added `-servername` for SNI and `-a` flag for binary output
+- ✅ SSH port change works on Ubuntu 22.04+ (via `sshd_config.d/`)
+- ✅ Protection against deleting the last domain
+- ✅ `apt update` before Fail2Ban install
+- ✅ Caddy and bot now auto-restart on failure
+
+[👉 Full Changelog below](#-changelog)
+
+---
+
 ## 🤔 What is this
 
 **NaiveProxy** disguises traffic as Chrome browser using the real Chromium network stack. DPI systems and censors see legitimate HTTPS/2 — and let it through.
