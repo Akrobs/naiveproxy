@@ -1,9 +1,17 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v4.2.1 — by ivanstudiya-cpu
+#   NaiveProxy Manager v4.2.4 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
-#   GitHub: https://github.com/ivanstudiya-cpu/naiveproxy
+#
+#   Copyright (C) 2026 Иван Юрьевич (Ivan Yurievich)
+#   License: GPL-3.0 — see LICENSE file
+#   Commercial use without author permission is prohibited.
+#
+#   Telegram: https://t.me/+XVSkY6blCTY0ZDU6
+#   Сайт:     https://ivan-it.net
+#   GitHub:   https://github.com/ivanstudiya-cpu/naiveproxy
+#   Донат:    https://www.donationalerts.com/r/ivan_yurievich
 # ============================================================
 
 set -euo pipefail

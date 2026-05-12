@@ -1,0 +1,134 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2026 Иван Юрьевич (Ivan Yurievich)
+ Telegram: https://t.me/+XVSkY6blCTY0ZDU6
+ Website:  https://ivan-it.net
+ GitHub:   https://github.com/ivanstudiya-cpu
+
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+═══════════════════════════════════════════════════════════════════
+                    ДОПОЛНИТЕЛЬНЫЕ УСЛОВИЯ (RU)
+═══════════════════════════════════════════════════════════════════
+
+NaiveProxy Manager создан и поддерживается Иваном Юрьевичем.
+Этот проект распространяется под лицензией GPL-3.0 со следующими
+дополнительными условиями:
+
+✅ РАЗРЕШЕНО:
+  • Использовать программу в личных целях бесплатно
+  • Изучать исходный код
+  • Создавать модификации для личного использования
+  • Распространять программу при условии сохранения этой лицензии
+    и копирайта автора
+
+❌ ЗАПРЕЩЕНО БЕЗ ПИСЬМЕННОГО РАЗРЕШЕНИЯ АВТОРА:
+  • Коммерческое использование (продажа, платные подписки на сервис
+    созданный на основе этого ПО)
+  • Удаление или изменение информации об авторе (имени, ссылок,
+    Telegram канала, сайта)
+  • Удаление ссылки на донат (DonationAlerts)
+  • Создание производных проектов под другим именем без указания
+    оригинального автора (Ивана Юрьевича) и ссылки на оригинальный
+    репозиторий
+
+📞 КОНТАКТЫ ДЛЯ КОММЕРЧЕСКОГО ЛИЦЕНЗИРОВАНИЯ:
+  Telegram: https://t.me/+XVSkY6blCTY0ZDU6
+  Сайт:     https://ivan-it.net
+
+  Для коммерческого использования (платные VPN сервисы, продажа
+  модифицированных версий, использование в корпоративных продуктах)
+  необходимо получить отдельное разрешение от автора.
+
+═══════════════════════════════════════════════════════════════════
+                  ADDITIONAL TERMS (EN)
+═══════════════════════════════════════════════════════════════════
+
+NaiveProxy Manager is created and maintained by Ivan Yurievich.
+This project is distributed under the GPL-3.0 license with the
+following additional terms:
+
+✅ ALLOWED:
+  • Use the program for personal purposes free of charge
+  • Study the source code
+  • Create modifications for personal use
+  • Distribute the program while preserving this license and
+    the author's copyright
+
+❌ PROHIBITED WITHOUT WRITTEN PERMISSION FROM THE AUTHOR:
+  • Commercial use (selling, paid subscriptions to services
+    created based on this software)
+  • Removing or modifying author information (name, links,
+    Telegram channel, website)
+  • Removing the donation link (DonationAlerts)
+  • Creating derivative projects under a different name without
+    crediting the original author (Ivan Yurievich) and linking
+    to the original repository
+
+📞 CONTACT FOR COMMERCIAL LICENSING:
+  Telegram: https://t.me/+XVSkY6blCTY0ZDU6
+  Website:  https://ivan-it.net
+
+  Commercial use (paid VPN services, selling modified versions,
+  use in corporate products) requires obtaining a separate
+  permission from the author.
+
+═══════════════════════════════════════════════════════════════════
+                    GPL-3.0 LICENSE
+═══════════════════════════════════════════════════════════════════
+
+Полный текст лицензии GPL-3.0 доступен по ссылке:
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+The full GPL-3.0 license text is available at:
+https://www.gnu.org/licenses/gpl-3.0.txt
+
+Основные пункты GPL-3.0 / Key GPL-3.0 terms:
+
+1. Свобода запуска программы для любых целей.
+   Freedom to run the program for any purpose.
+
+2. Свобода изучения исходного кода и его модификации.
+   Freedom to study the source code and modify it.
+
+3. Свобода распространения копий программы.
+   Freedom to distribute copies of the program.
+
+4. Свобода распространения модифицированных версий.
+   Freedom to distribute modified versions.
+
+КОПИРАЙТ-ЛЕВО (COPYLEFT):
+Если вы распространяете модифицированную версию этого ПО, ВЫ ОБЯЗАНЫ:
+  • Опубликовать исходный код модификаций
+  • Распространять под той же лицензией GPL-3.0
+  • Сохранить копирайт оригинального автора (Иван Юрьевич)
+  • Указать какие изменения были внесены
+
+If you distribute a modified version of this software, YOU MUST:
+  • Publish the source code of modifications
+  • Distribute under the same GPL-3.0 license
+  • Preserve the original author's copyright (Ivan Yurievich)
+  • Indicate what changes were made
+
+═══════════════════════════════════════════════════════════════════
+                    ОТКАЗ ОТ ГАРАНТИЙ / DISCLAIMER
+═══════════════════════════════════════════════════════════════════
+
+ПРОГРАММА ПРЕДОСТАВЛЯЕТСЯ "КАК ЕСТЬ", БЕЗ КАКИХ-ЛИБО ГАРАНТИЙ,
+ЯВНЫХ ИЛИ ПОДРАЗУМЕВАЕМЫХ. АВТОР НЕ НЕСЁТ ОТВЕТСТВЕННОСТИ ЗА
+ЛЮБОЙ УЩЕРБ, ВОЗНИКШИЙ В РЕЗУЛЬТАТЕ ИСПОЛЬЗОВАНИЯ ИЛИ НЕВОЗМОЖНОСТИ
+ИСПОЛЬЗОВАНИЯ ЭТОЙ ПРОГРАММЫ.
+
+THIS PROGRAM IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED. THE AUTHOR SHALL NOT BE LIABLE FOR ANY DAMAGE
+ARISING FROM THE USE OR INABILITY TO USE THIS PROGRAM.
+
+═══════════════════════════════════════════════════════════════════
+
+Copyright © 2026 Иван Юрьевич (Ivan Yurievich)
+All rights reserved.
+
+NaiveProxy Manager
+https://github.com/ivanstudiya-cpu/naiveproxy

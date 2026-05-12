@@ -28,7 +28,7 @@ Caddy 2 · NaiveProxy · Telegram Bot · DNS Ad Blocking · Diagnostics · SSH H
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
-[![License](https://img.shields.io/badge/License-MIT-58A6FF?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL--3.0-58A6FF?style=for-the-badge)](LICENSE)
 
 ---
 
@@ -432,7 +432,9 @@ systemctl restart naiveproxy-bot
 
 ## 📄 License
 
-MIT © [ivanstudiya-cpu](https://github.com/ivanstudiya-cpu)
+GPL-3.0 © **Ivan Yurievich (Иван Юрьевич)**  
+Commercial use without author permission is prohibited.  
+📞 Contact: [Telegram](https://t.me/+XVSkY6blCTY0ZDU6) · [ivan-it.net](https://ivan-it.net)
 
 ---
 
