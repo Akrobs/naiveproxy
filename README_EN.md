@@ -24,7 +24,7 @@ Caddy 2 · NaiveProxy · Telegram Bot · DNS Ad Blocking · Diagnostics · SSH H
 
 ---
 
-[![Version](https://img.shields.io/badge/version-4.2.3-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivanstudiya-cpu/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-4.2.4-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -52,7 +52,7 @@ Caddy 2 · NaiveProxy · Telegram Bot · DNS Ad Blocking · Diagnostics · SSH H
 
 ---
 
-## 🎉 What's new in v4.2.3
+## 🎉 What's new in v4.2.4
 
 <table>
 <tr>
@@ -60,23 +60,22 @@ Caddy 2 · NaiveProxy · Telegram Bot · DNS Ad Blocking · Diagnostics · SSH H
 
 ### 🐛 Bug fixes
 
-✅ `/qr` command — curl conflict fix
-✅ `/adduser` — login and password validation
-✅ Bot commands — `\r\n` cleanup
-✅ `set +e` — error doesn't break the bot
-✅ Diagnostics — `pass=$((pass+1))` counters
-✅ ALPN — `-servername` + `-a` for binary output
-✅ SSH port on Ubuntu 22.04+ via `sshd_config.d/`
-✅ Protection against deleting last domain
-✅ `apt update` before Fail2Ban
-✅ Auto-restart Caddy and bot on failure
+✅ New GitHub address `ivan-yurich/naiveproxy`
+✅ `/reload` — apply Caddyfile without restarting Caddy
+✅ Login, password and domain validation
+✅ Safe `basic_auth` generation in Caddyfile
+✅ Fixed-string user lookup in CLI and Telegram
+✅ Safer DNS whitelist and blocklist parsing
+✅ Caddy update builds the binary before the short restart
+✅ `files/naiveproxy.sh` synced with the main script
+✅ Syntax check for both script copies
 
 </td>
 <td width="50%" valign="top">
 
 ### ⚡ New features
 
-🤖 **16 bot commands** + multi-admin
+🤖 **17 bot commands** + multi-admin
 🚫 **DNS blocking** ~1.5M domains + DoT
 🔍 **Diagnostics** — 7 blocks, 18+ checks
 🔒 **SSH Hardening** — ED25519, `ssh.socket` fix
@@ -114,7 +113,7 @@ Caddy 2 · NaiveProxy · Telegram Bot · DNS Ad Blocking · Diagnostics · SSH H
 ## ⚡ Quick Start
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ivanstudiya-cpu/naiveproxy/main/naiveproxy.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh)
 ```
 
 ---
@@ -194,7 +193,7 @@ sudo bash naiveproxy.sh bot-install    # Auto-start
 | `/help` `/status` `/stats` | Information |
 | `/diagnose` `/cert` `/logs` | Diagnostics |
 | `/users` `/adduser` `/deluser` `/qr` | Users |
-| `/restart` `/update` `/selfupdate` | Management |
+| `/reload` `/restart` `/update` `/selfupdate` | Management |
 | `/admins` `/addadmin` `/deladmin` | Administration |
 
 ---
@@ -341,7 +340,7 @@ sudo bash /usr/local/bin/naiveproxy.sh
 # → Option 14) Update script
 
 # Method 2 — one command
-curl -fsSL https://raw.githubusercontent.com/ivanstudiya-cpu/naiveproxy/main/naiveproxy.sh \
+curl -fsSL https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh \
   -o /usr/local/bin/naiveproxy.sh && chmod +x /usr/local/bin/naiveproxy.sh
 ```
 
@@ -899,7 +898,7 @@ Thanks for your support! 🙏
 | Way | Link |
 |-----|------|
 | 💛 **Donate** | [donationalerts.com/r/ivan_yurievich](https://www.donationalerts.com/r/ivan_yurievich) |
-| ⭐ **GitHub Star** | [Give a star](https://github.com/ivanstudiya-cpu/naiveproxy) |
+| ⭐ **GitHub Star** | [Give a star](https://github.com/ivan-yurich/naiveproxy) |
 | 📱 **Telegram channel** | [t.me/ivan_it_net](https://t.me/ivan_it_net) |
 | 🌐 **Website** | [ivan-it.net](https://ivan-it.net) |
 | 📢 **Share** | Tell your friends |
@@ -911,7 +910,19 @@ Thanks for your support! 🙏
 ## 📜 Changelog
 
 <details>
-<summary><b>v4.2.3</b> — ALPN Fix ← CURRENT</summary>
+<summary><b>v4.2.4</b> — Security Audit & Reload ← CURRENT</summary>
+
+- 🔗 New GitHub address: `ivan-yurich/naiveproxy`
+- ♻️ `reload` command and Telegram `/reload` without restarting Caddy
+- 🔒 Login, password, domain and DNS whitelist validation
+- 🔧 Safer Caddyfile `basic_auth` generation
+- ⚡ Caddy update no longer stops service during the 5-15 minute build
+- 📦 `files/naiveproxy.sh` synced with the main script
+
+</details>
+
+<details>
+<summary><b>v4.2.3</b> — ALPN Fix</summary>
 
 - 🐛 Fixed `grep: binary file matches` — added `-a` flag
 - ✅ Diagnostics correctly shows `ALPN: h2` on all servers
@@ -1013,9 +1024,9 @@ Commercial use without author permission is prohibited.
 ### 💛 Liked it? Support the project!
 
 [![Donate](https://img.shields.io/badge/💛_Support-DonationAlerts-FF5E3A?style=for-the-badge)](https://www.donationalerts.com/r/ivan_yurievich)
-[![Star](https://img.shields.io/github/stars/ivanstudiya-cpu/naiveproxy?style=for-the-badge&color=D4A017)](https://github.com/ivanstudiya-cpu/naiveproxy/stargazers)
+[![Star](https://img.shields.io/github/stars/ivan-yurich/naiveproxy?style=for-the-badge&color=D4A017)](https://github.com/ivan-yurich/naiveproxy/stargazers)
 
-📱 [Telegram](https://t.me/ivan_it_net) · 🌐 [ivan-it.net](https://ivan-it.net) · 💻 [GitHub](https://github.com/ivanstudiya-cpu/naiveproxy)
+📱 [Telegram](https://t.me/ivan_it_net) · 🌐 [ivan-it.net](https://ivan-it.net) · 💻 [GitHub](https://github.com/ivan-yurich/naiveproxy)
 
 *NaiveProxy Manager · by Ivan Yurievich · Updates once a month*
 
