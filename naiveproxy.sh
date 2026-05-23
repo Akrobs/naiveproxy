@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v4.2.5 — by Иван Юрьевич
+#   NaiveProxy Manager v4.2.7 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="4.2.5"
+VERSION="4.2.7"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -1434,6 +1434,16 @@ setup_firewall() {
     command -v ufw &>/dev/null || apt-get install -y -q ufw
     info "Настраиваю UFW..."
 
+    local ssh_port
+    ssh_port=$(current_ssh_port)
+    if [[ ! "$ssh_port" =~ ^[0-9]+$ ]]; then
+        ssh_port="22"
+    fi
+
+    # SSH открываем ДО включения default deny. Иначе новая SSH-сессия может не зайти,
+    # даже если SSH Hardening был пропущен.
+    ufw allow "${ssh_port}/tcp" comment "SSH access" >/dev/null 2>&1 || true
+
     # Включаем UFW если не активен
     if ! ufw status | grep -q "Status: active"; then
         # Дефолтная политика: блокируем всё входящее
@@ -1456,6 +1466,7 @@ setup_firewall() {
         ufw deny "${port}/tcp" comment "Block scanners" >/dev/null 2>&1 || true
     done
 
+    ok "UFW: открыт SSH порт ${ssh_port}/tcp"
     ok "UFW: открыты 80, 443/tcp, 443/udp"
     ok "UFW: заблокированы порты БД и типичные цели сканеров"
     ok "UFW: лимит на 80/tcp для защиты от DDoS"
@@ -1504,7 +1515,15 @@ print_client_config() {
         return
     fi
 
-    echo -e "${CYAN}  URI:${RESET}"
+    echo -e "${CYAN}  Стек сервера:${RESET}"
+    echo -e "  Caddy 2 + klzgrad/forwardproxy@naive"
+    echo
+    echo -e "${YELLOW}  Важно для приложений:${RESET}"
+    echo -e "  Выбирай тип ${BOLD}NaiveProxy / naive${RESET}, а не VLESS/Trojan/Shadowsocks."
+    echo -e "  Если в приложении нет NaiveProxy, используй HTTPS proxy fallback ниже."
+    echo -e "  Для телефона включай VPN/TUN mode, иначе не весь трафик пойдёт через прокси."
+    echo
+    echo -e "${CYAN}  URI (NaiveProxy):${RESET}"
     echo -e "  naive+https://${first_user}:${first_pass}@${DOMAIN}:443"
     echo
     echo -e "${CYAN}  JSON (naive-client):${RESET}"
@@ -1515,11 +1534,52 @@ print_client_config() {
   }
 EOF
     echo
-    echo -e "${CYAN}  JSON (sing-box outbound):${RESET}"
+    echo -e "${CYAN}  JSON (sing-box outbound, native NaiveProxy):${RESET}"
+    cat <<EOF
+  {
+    "type": "naive",
+    "tag": "naiveproxy-out",
+    "server": "${DOMAIN}",
+    "server_port": 443,
+    "username": "${first_user}",
+    "password": "${first_pass}",
+    "tls": { "enabled": true, "server_name": "${DOMAIN}" }
+  }
+EOF
+    echo
+    echo -e "${CYAN}  JSON (sing-box полный пример, Android VPN/TUN):${RESET}"
+    cat <<EOF
+  {
+    "inbounds": [
+      {
+        "type": "tun",
+        "tag": "tun-in",
+        "address": "172.19.0.1/30",
+        "auto_route": true,
+        "strict_route": true
+      }
+    ],
+    "outbounds": [
+      {
+        "type": "naive",
+        "tag": "naiveproxy-out",
+        "server": "${DOMAIN}",
+        "server_port": 443,
+        "username": "${first_user}",
+        "password": "${first_pass}",
+        "tls": { "enabled": true, "server_name": "${DOMAIN}" }
+      },
+      { "type": "direct", "tag": "direct" }
+    ],
+    "route": { "final": "naiveproxy-out" }
+  }
+EOF
+    echo
+    echo -e "${CYAN}  Fallback HTTPS proxy (если приложение не умеет native NaiveProxy):${RESET}"
     cat <<EOF
   {
     "type": "http",
-    "tag": "naiveproxy-out",
+    "tag": "https-connect-fallback",
     "server": "${DOMAIN}",
     "server_port": 443,
     "username": "${first_user}",

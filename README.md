@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-4.2.5-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-4.2.7-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -97,7 +97,7 @@ NaiveProxy маскирует трафик под обычный Chrome — не
 
 ---
 
-## 🎉 Что нового в v4.2.5
+## 🎉 Что нового в v4.2.7
 
 <table>
 <tr>
@@ -309,7 +309,7 @@ IT-блог DevStack — для случайных посетителей
 
 ```
 ──────────────────────────────────────────────────────
-   NaiveProxy Manager v4.2.5  [РУС]
+   NaiveProxy Manager v4.2.7  [РУС]
    Статус: ● работает  │  Домен: proxy.example.com
    Telegram: подключён  │  Юзеров: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
@@ -502,7 +502,7 @@ sudo bash naiveproxy.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Диагностика NaiveProxy Manager v4.2.5               │
+│  🔍 Диагностика NaiveProxy Manager v4.2.7               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -542,7 +542,7 @@ sudo bash naiveproxy.sh diagnose
   ✅ journald: нет критических ошибок
 
 [7/7] Версия и обновления
-  ✅ Скрипт актуален: v4.2.5
+  ✅ Скрипт актуален: v4.2.7
   ✅ SSH Hardening выполнен
 
 ══════════════════════════════════════════════════════════
@@ -1180,7 +1180,28 @@ rm -rf /etc/caddy /etc/naiveproxy /etc/unbound
 ## 📜 Changelog
 
 <details>
-<summary><b>v4.2.5</b> — SSH/Caddy Safety ← ТЕКУЩАЯ</summary>
+<summary><b>v4.2.7</b> — Client Config Fix ← ТЕКУЩАЯ</summary>
+
+**📱 Исправлена выдача клиентских конфигов:**
+- В конфиге явно указан стек: `Caddy 2 + klzgrad/forwardproxy@naive`
+- Для sing-box теперь основной outbound — `type: naive`
+- Добавлен полный пример sing-box Android VPN/TUN
+- HTTPS proxy оставлен как fallback для клиентов без native NaiveProxy
+
+</details>
+
+<details>
+<summary><b>v4.2.6</b> — SSH Firewall Fix</summary>
+
+**🔴 Критический фикс SSH:**
+- UFW теперь открывает текущий SSH-порт до включения `default deny incoming`
+- SSH остаётся доступен даже если SSH Hardening пропущен при установке
+- В установке явно показывается открытый SSH-порт
+
+</details>
+
+<details>
+<summary><b>v4.2.5</b> — SSH/Caddy Safety</summary>
 
 **🛡️ Безопасная установка и Caddy:**
 - SSH Hardening больше не запускается по умолчанию при установке
