@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v5.0.0 — by Иван Юрьевич
-#   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2
+#   NaiveProxy Manager v5.5.0 — by Иван Юрьевич
+#   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
 #   Copyright (C) 2026 Иван Юрьевич (Ivan Yurievich)
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.0.0"
+VERSION="5.5.0"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -77,15 +77,34 @@ CADDY_DIR="/etc/caddy"
 HYSTERIA_BIN="/usr/local/bin/hysteria"
 HYSTERIA_SERVICE="/etc/systemd/system/hysteria.service"
 HYSTERIA_CONFIG="/etc/naiveproxy/hysteria.yaml"
+XRAY_BIN="/usr/local/bin/xray"
+XRAY_SERVICE="/etc/systemd/system/xray.service"
+XRAY_CONFIG_DIR="/etc/xray"
+XRAY_CONFIG="/etc/xray/config.json"
+WARP_PROXY_PORT_DEFAULT="40000"
 WEBROOT="/var/www/html"
 CONFIG_FILE="/etc/naiveproxy/naive.conf"
 CONFIG_DIR="/etc/naiveproxy"
 USERS_FILE="/etc/naiveproxy/users.conf"
+DISABLED_USERS_FILE="/etc/naiveproxy/users.disabled"
+XRAY_USERS_FILE="/etc/naiveproxy/xray-users.conf"
+XRAY_DISABLED_USERS_FILE="/etc/naiveproxy/xray-users.disabled"
+SUBS_DIR="/etc/naiveproxy/subscriptions"
+SUBS_WEB_DIR="${WEBROOT}/s"
+PRIVATE_PAGE_TOKEN_FILE="/etc/naiveproxy/private_page.token"
+PRIVATE_WEB_DIR="${WEBROOT}/p"
 LOG_DIR="/var/log/caddy"
 BACKUP_DIR="/etc/naiveproxy/backups"
 MONITOR_SCRIPT="/etc/naiveproxy/monitor.sh"
 SSH_HARDENING_DONE="/etc/naiveproxy/.ssh_hardened"
 SYSUPDATE_DONE="/etc/naiveproxy/.sysupdate_done"
+DEVICE_LIMIT_DEFAULT="5"
+DEVICE_WINDOW_HOURS_DEFAULT="24"
+DEVICE_CRON="/etc/cron.d/naiveproxy-device-limit"
+XRAY_REALITY_PORT_DEFAULT="8444"
+XRAY_MKCP_PORT_DEFAULT="8446"
+XRAY_GRPC_PORT_DEFAULT="8447"
+XRAY_CADDY_FALLBACK_PORT_DEFAULT="7443"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -660,6 +679,14 @@ is_valid_port() {
     [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "$1" -ge 1 ]] && [[ "$1" -le 65535 ]]
 }
 
+is_valid_local_proxy_port() {
+    [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "$1" -ge 1024 ]] && [[ "$1" -le 65535 ]]
+}
+
+warp_cli() {
+    warp-cli --accept-tos "$@" 2>/dev/null || warp-cli "$@"
+}
+
 # ─── Конфиг ──────────────────────────────────────────────────
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -687,18 +714,37 @@ load_config() {
 
 save_config() {
     mkdir -p "$CONFIG_DIR"
-    cat > "$CONFIG_FILE" <<EOF
-DOMAIN="${DOMAIN:-}"
-DOMAINS="${DOMAINS:-${DOMAIN:-}}"
-EMAIL="${EMAIL:-}"
-TG_TOKEN="${TG_TOKEN:-}"
-TG_CHAT_ID="${TG_CHAT_ID:-}"
-TG_ADMINS="${TG_ADMINS:-}"  # Доп. администраторы через запятую: id1,id2,id3
-HYSTERIA_PORT="${HYSTERIA_PORT:-8443}"
-HYSTERIA_PASSWORD="${HYSTERIA_PASSWORD:-}"
-HYSTERIA_OBFS_PASSWORD="${HYSTERIA_OBFS_PASSWORD:-}"
-INSTALLED_AT="$(date '+%Y-%m-%d %H:%M:%S')"
-EOF
+    {
+        printf 'DOMAIN=%q\n' "${DOMAIN:-}"
+        printf 'DOMAINS=%q\n' "${DOMAINS:-${DOMAIN:-}}"
+        printf 'EMAIL=%q\n' "${EMAIL:-}"
+        printf 'TG_TOKEN=%q\n' "${TG_TOKEN:-}"
+        printf 'TG_CHAT_ID=%q\n' "${TG_CHAT_ID:-}"
+        printf '# Доп. администраторы через запятую: id1,id2,id3\n'
+        printf 'TG_ADMINS=%q\n' "${TG_ADMINS:-}"
+        printf 'HYSTERIA_PORT=%q\n' "${HYSTERIA_PORT:-8443}"
+        printf 'HYSTERIA_PASSWORD=%q\n' "${HYSTERIA_PASSWORD:-}"
+        printf 'HYSTERIA_OBFS_PASSWORD=%q\n' "${HYSTERIA_OBFS_PASSWORD:-}"
+        printf 'WARP_PROXY_PORT=%q\n' "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+        printf 'WARP_PROXY_ENABLED=%q\n' "${WARP_PROXY_ENABLED:-0}"
+        printf 'DEVICE_LIMIT_ENABLED=%q\n' "${DEVICE_LIMIT_ENABLED:-0}"
+        printf 'DEVICE_LIMIT=%q\n' "${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}"
+        printf 'DEVICE_WINDOW_HOURS=%q\n' "${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}"
+        printf 'DEVICE_LIMIT_MODE=%q\n' "${DEVICE_LIMIT_MODE:-alert}"
+        printf 'XRAY_ENABLED=%q\n' "${XRAY_ENABLED:-0}"
+        printf 'XRAY_FALLBACK_ENABLED=%q\n' "${XRAY_FALLBACK_ENABLED:-0}"
+        printf 'XRAY_REALITY_PORT=%q\n' "${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
+        printf 'XRAY_MKCP_PORT=%q\n' "${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}"
+        printf 'XRAY_GRPC_PORT=%q\n' "${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}"
+        printf 'XRAY_CADDY_FALLBACK_PORT=%q\n' "${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
+        printf 'XRAY_REALITY_TARGET=%q\n' "${XRAY_REALITY_TARGET:-www.microsoft.com:443}"
+        printf 'XRAY_REALITY_SERVER_NAME=%q\n' "${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}"
+        printf 'XRAY_REALITY_PRIVATE_KEY=%q\n' "${XRAY_REALITY_PRIVATE_KEY:-}"
+        printf 'XRAY_REALITY_PUBLIC_KEY=%q\n' "${XRAY_REALITY_PUBLIC_KEY:-}"
+        printf 'XRAY_REALITY_SHORT_ID=%q\n' "${XRAY_REALITY_SHORT_ID:-}"
+        printf 'XRAY_TROJAN_PASSWORD=%q\n' "${XRAY_TROJAN_PASSWORD:-}"
+        printf 'INSTALLED_AT=%q\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    } > "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 }
 
@@ -721,6 +767,10 @@ get_user_pass() {
         [[ "$user" == "$lookup_user" ]] && { printf '%s\n' "$pass"; return 0; }
     done < <(get_users)
     return 1
+}
+
+active_user_count() {
+    get_users | wc -l
 }
 
 # ─── Telegram ────────────────────────────────────────────────
@@ -871,7 +921,8 @@ install_monitor() {
 CONFIG_FILE="/etc/naiveproxy/naive.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     _owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || echo "unknown")
-    [[ "$_owner" == "root" ]] && source "$CONFIG_FILE"
+    _perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null || echo "000")
+    [[ "$_owner" == "root" && "$_perms" == "600" ]] && source "$CONFIG_FILE"
 fi
 
 tg_send() {
@@ -1055,10 +1106,17 @@ build_caddy() {
 write_caddyfile_multi() {
     mkdir -p "$CADDY_DIR" "$WEBROOT" "$LOG_DIR"
 
+    if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+        warn "Xray fallback hub включён: мультидомен Caddy отключён, Caddy будет локальным fallback."
+        write_caddyfile
+        return $?
+    fi
+
     install_camouflage_page
 
     # Собираем auth блоки
     local auth_blocks=""
+    local auth_count=0
     while IFS=: read -r u p; do
         [[ -z "$u" ]] && continue
         if ! is_valid_proxy_user "$u" || ! is_valid_proxy_pass "$p"; then
@@ -1067,7 +1125,12 @@ write_caddyfile_multi() {
             return 1
         fi
         auth_blocks+="        basic_auth ${u} ${p}"$'\n'
+        auth_count=$((auth_count+1))
     done < <(get_users)
+    if [[ "$auth_count" -lt 1 ]]; then
+        err "Нет активных пользователей. Caddyfile не обновляю, чтобы не открыть прокси без auth."
+        return 1
+    fi
 
     # Глобальный блок
     cat > "$CADDYFILE" <<EOF
@@ -1105,6 +1168,16 @@ ${dom}:443 {
 ${auth_blocks}    hide_ip
     hide_via
     probe_resistance
+  }
+
+  header /s/* {
+    X-Robots-Tag "noindex, nofollow, noarchive"
+    Cache-Control "no-store"
+  }
+
+  header /p/* {
+    X-Robots-Tag "noindex, nofollow, noarchive"
+    Cache-Control "no-store"
   }
 
   file_server {
@@ -1368,6 +1441,7 @@ write_caddyfile() {
 
     # Собираем блоки basic_auth
     local auth_blocks=""
+    local auth_count=0
     while IFS=: read -r u p; do
         [[ -z "$u" ]] && continue
         if ! is_valid_proxy_user "$u" || ! is_valid_proxy_pass "$p"; then
@@ -1376,7 +1450,20 @@ write_caddyfile() {
             return 1
         fi
         auth_blocks+="        basic_auth ${u} ${p}"$'\n'
+        auth_count=$((auth_count+1))
     done < <(get_users)
+    if [[ "$auth_count" -lt 1 ]]; then
+        err "Нет активных пользователей. Caddyfile не обновляю, чтобы не открыть прокси без auth."
+        return 1
+    fi
+
+    local site_label=":443, ${DOMAIN}"
+    local tls_line="  tls ${EMAIL}"
+    if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+        site_label="http://127.0.0.1:${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
+        tls_line=""
+        info "Caddy переключён в Xray fallback mode: ${site_label}"
+    fi
 
     cat > "$CADDYFILE" <<EOF
 {
@@ -1392,13 +1479,23 @@ write_caddyfile() {
     }
 }
 
-:443, ${DOMAIN} {
-  tls ${EMAIL}
+${site_label} {
+${tls_line}
 
     forward_proxy {
 ${auth_blocks}        hide_ip
         hide_via
         probe_resistance
+    }
+
+    header /s/* {
+        X-Robots-Tag "noindex, nofollow, noarchive"
+        Cache-Control "no-store"
+    }
+
+    header /p/* {
+        X-Robots-Tag "noindex, nofollow, noarchive"
+        Cache-Control "no-store"
     }
 
     file_server {
@@ -1424,6 +1521,14 @@ EOF
         }
     fi
     ok "Caddyfile обновлён (пользователей: $(get_users | wc -l))"
+}
+
+rewrite_caddyfile_current() {
+    if [[ "${DOMAINS:-}" == *,* ]]; then
+        write_caddyfile_multi
+    else
+        write_caddyfile
+    fi
 }
 
 # ─── systemd ─────────────────────────────────────────────────
@@ -1540,9 +1645,19 @@ print_client_config() {
     echo -e "${BOLD}${GREEN}  Клиентский конфиг NaiveProxy${RESET}"
     hr
 
-    local first_user first_pass
-    first_user=$(get_users | head -1 | cut -d: -f1)
-    first_pass=$(get_users | head -1 | cut -d: -f2)
+    local first_user first_pass selected_user
+    selected_user="${1:-}"
+    if [[ -n "$selected_user" ]]; then
+        if ! is_valid_proxy_user "$selected_user" || ! get_user_pass "$selected_user" >/dev/null; then
+            err "Пользователь $selected_user не найден"
+            return 1
+        fi
+        first_user="$selected_user"
+        first_pass=$(get_user_pass "$selected_user")
+    else
+        first_user=$(get_users | head -1 | cut -d: -f1)
+        first_pass=$(get_users | head -1 | cut -d: -f2)
+    fi
 
     if [[ -z "${first_user:-}" ]]; then
         warn "Нет пользователей. Добавь через меню → Пользователи."
@@ -1623,7 +1738,7 @@ EOF
 EOF
 
     local count; count=$(get_users | wc -l)
-    if [[ $count -gt 1 ]]; then
+    if [[ -z "$selected_user" && $count -gt 1 ]]; then
         echo
         info "Все пользователи ($count):"
         while IFS=: read -r u p; do
@@ -1917,6 +2032,1059 @@ cmd_hysteria_menu() {
     done
 }
 
+# ─── XRAY MODERN: VLESS / TROJAN / REALITY / FALLBACK ─────────
+detect_xray_arch() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64|amd64) echo "64" ;;
+        aarch64|arm64) echo "arm64-v8a" ;;
+        armv7l|armv7*) echo "arm32-v7a" ;;
+        i386|i686) echo "32" ;;
+        *) err "Архитектура $arch не поддерживается Xray автоустановкой"; return 1 ;;
+    esac
+}
+
+install_xray_bin() {
+    if [[ -x "$XRAY_BIN" ]]; then
+        ok "Xray уже установлен: $("$XRAY_BIN" version 2>/dev/null | head -1 || echo "$XRAY_BIN")"
+        return 0
+    fi
+
+    local arch url tmp zip_dir
+    arch=$(detect_xray_arch) || return 1
+    url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
+    tmp=$(mktemp /tmp/xray_XXXXXX.zip)
+    zip_dir=$(mktemp -d /tmp/xray_unzip_XXXXXX)
+    trap 'rm -f "${tmp:-}" 2>/dev/null; rm -rf "${zip_dir:-}" 2>/dev/null; trap - RETURN' RETURN
+
+    info "Скачиваю Xray-core (${arch})..."
+    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 "$url" -o "$tmp"; then
+        err "Не удалось скачать Xray: $url"
+        return 1
+    fi
+
+    command -v unzip &>/dev/null || apt-get install -y -q unzip
+    unzip -q "$tmp" -d "$zip_dir"
+    install -m 755 "$zip_dir/xray" "$XRAY_BIN"
+    mkdir -p /usr/local/share/xray
+    [[ -f "$zip_dir/geoip.dat" ]] && install -m 644 "$zip_dir/geoip.dat" /usr/local/share/xray/geoip.dat
+    [[ -f "$zip_dir/geosite.dat" ]] && install -m 644 "$zip_dir/geosite.dat" /usr/local/share/xray/geosite.dat
+    ok "Xray установлен: $("$XRAY_BIN" version 2>/dev/null | head -1 || echo "$XRAY_BIN")"
+}
+
+load_xray_users() {
+    mkdir -p "$CONFIG_DIR"
+    if [[ ! -s "$XRAY_USERS_FILE" ]]; then
+        local default_user uuid
+        default_user="${1:-xray}"
+        uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || "$XRAY_BIN" uuid)
+        printf '%s:%s\n' "$default_user" "$uuid" > "$XRAY_USERS_FILE"
+        chmod 600 "$XRAY_USERS_FILE"
+    fi
+}
+
+get_xray_user_uuid() {
+    local lookup_user="$1"
+    [[ -f "$XRAY_USERS_FILE" ]] || return 1
+    awk -F: -v user="$lookup_user" '$1 == user {print $2; exit}' "$XRAY_USERS_FILE"
+}
+
+xray_active_user_count() {
+    grep -v '^#\|^[[:space:]]*$' "$XRAY_USERS_FILE" 2>/dev/null | wc -l
+}
+
+xray_clients_json() {
+    local first=1 user uuid
+    while IFS=: read -r user uuid; do
+        [[ -z "$user" || -z "$uuid" ]] && continue
+        if [[ "$first" -eq 0 ]]; then printf ',\n'; fi
+        first=0
+        printf '          { "id": "%s", "email": "%s", "flow": "xtls-rprx-vision" }' "$uuid" "$user"
+    done < "$XRAY_USERS_FILE"
+}
+
+xray_clients_json_no_flow() {
+    local first=1 user uuid
+    while IFS=: read -r user uuid; do
+        [[ -z "$user" || -z "$uuid" ]] && continue
+        if [[ "$first" -eq 0 ]]; then printf ',\n'; fi
+        first=0
+        printf '          { "id": "%s", "email": "%s" }' "$uuid" "$user"
+    done < "$XRAY_USERS_FILE"
+}
+
+ensure_xray_reality_keys() {
+    XRAY_REALITY_SHORT_ID="${XRAY_REALITY_SHORT_ID:-$(openssl rand -hex 8)}"
+    if [[ -z "${XRAY_REALITY_PRIVATE_KEY:-}" || -z "${XRAY_REALITY_PUBLIC_KEY:-}" ]]; then
+        local key_out
+        key_out=$("$XRAY_BIN" x25519 2>/dev/null || true)
+        XRAY_REALITY_PRIVATE_KEY=$(echo "$key_out" | awk -F': ' '/Private key/{print $2; exit}')
+        XRAY_REALITY_PUBLIC_KEY=$(echo "$key_out" | awk -F': ' '/Public key/{print $2; exit}')
+    fi
+    if [[ -z "${XRAY_REALITY_PRIVATE_KEY:-}" || -z "${XRAY_REALITY_PUBLIC_KEY:-}" ]]; then
+        err "Не смог сгенерировать REALITY ключи: xray x25519"
+        return 1
+    fi
+}
+
+write_xray_service() {
+    cat > "$XRAY_SERVICE" <<EOF
+[Unit]
+Description=Xray Modern Proxy
+Documentation=https://xtls.github.io/
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+User=root
+ExecStart=${XRAY_BIN} run -config ${XRAY_CONFIG}
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable xray --quiet
+}
+
+write_xray_config() {
+    load_config
+    load_xray_users "${1:-xray}"
+    ensure_xray_reality_keys || return 1
+
+    local cert key fallback_enabled fallback_port reality_port mkcp_port grpc_port trojan_pass reality_target reality_sni
+    fallback_enabled="${XRAY_FALLBACK_ENABLED:-0}"
+    fallback_port="${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
+    reality_port="${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
+    mkcp_port="${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}"
+    grpc_port="${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}"
+    trojan_pass="${XRAY_TROJAN_PASSWORD:-$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9_-' | head -c 24)}"
+    XRAY_TROJAN_PASSWORD="$trojan_pass"
+    reality_target="${XRAY_REALITY_TARGET:-www.microsoft.com:443}"
+    reality_sni="${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}"
+
+    cert=$(find_caddy_cert "${DOMAIN:-}") || true
+    key=$(find_caddy_key "${DOMAIN:-}") || true
+    if [[ -z "$cert" || -z "$key" ]]; then
+        err "Для Xray TLS/gRPC/fallback нужен TLS сертификат Caddy. Сначала запусти NaiveProxy и дождись сертификата."
+        return 1
+    fi
+
+    mkdir -p "$XRAY_CONFIG_DIR" /var/log/xray
+    cat > "$XRAY_CONFIG" <<EOF
+{
+  "log": {
+    "access": "/var/log/xray/access.log",
+    "error": "/var/log/xray/error.log",
+    "loglevel": "warning"
+  },
+  "inbounds": [
+EOF
+
+    if [[ "$fallback_enabled" == "1" ]]; then
+        cat >> "$XRAY_CONFIG" <<EOF
+    {
+      "tag": "vless-tls-fallback-443",
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+$(xray_clients_json)
+        ],
+        "decryption": "none",
+        "fallbacks": [
+          { "path": "/vless-ws", "dest": "127.0.0.1:10001" },
+          { "path": "/vless-hu", "dest": "127.0.0.1:10002" },
+          { "path": "/vless-xhttp", "dest": "127.0.0.1:10003" },
+          { "path": "/trojan-ws", "dest": "127.0.0.1:10004" },
+          { "dest": "127.0.0.1:${fallback_port}" }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${DOMAIN}",
+          "alpn": ["http/1.1"],
+          "certificates": [
+            { "certificateFile": "${cert}", "keyFile": "${key}" }
+          ]
+        }
+      }
+    },
+    {
+      "tag": "vless-ws-local",
+      "listen": "127.0.0.1",
+      "port": 10001,
+      "protocol": "vless",
+      "settings": { "clients": [$(xray_clients_json_no_flow)], "decryption": "none" },
+      "streamSettings": { "network": "ws", "security": "none", "wsSettings": { "path": "/vless-ws" } }
+    },
+    {
+      "tag": "vless-httpupgrade-local",
+      "listen": "127.0.0.1",
+      "port": 10002,
+      "protocol": "vless",
+      "settings": { "clients": [$(xray_clients_json_no_flow)], "decryption": "none" },
+      "streamSettings": { "network": "httpupgrade", "security": "none", "httpupgradeSettings": { "path": "/vless-hu" } }
+    },
+    {
+      "tag": "vless-xhttp-local",
+      "listen": "127.0.0.1",
+      "port": 10003,
+      "protocol": "vless",
+      "settings": { "clients": [$(xray_clients_json_no_flow)], "decryption": "none" },
+      "streamSettings": { "network": "xhttp", "security": "none", "xhttpSettings": { "path": "/vless-xhttp" } }
+    },
+    {
+      "tag": "trojan-ws-local",
+      "listen": "127.0.0.1",
+      "port": 10004,
+      "protocol": "trojan",
+      "settings": { "clients": [{ "password": "${trojan_pass}", "email": "trojan-ws" }] },
+      "streamSettings": { "network": "ws", "security": "none", "wsSettings": { "path": "/trojan-ws" } }
+    },
+EOF
+    fi
+
+    cat >> "$XRAY_CONFIG" <<EOF
+    {
+      "tag": "vless-reality",
+      "listen": "0.0.0.0",
+      "port": ${reality_port},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+$(xray_clients_json)
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "${reality_target}",
+          "serverNames": ["${reality_sni}"],
+          "privateKey": "${XRAY_REALITY_PRIVATE_KEY}",
+          "shortIds": ["${XRAY_REALITY_SHORT_ID}"]
+        }
+      }
+    },
+    {
+      "tag": "vless-mkcp",
+      "listen": "0.0.0.0",
+      "port": ${mkcp_port},
+      "protocol": "vless",
+      "settings": { "clients": [$(xray_clients_json_no_flow)], "decryption": "none" },
+      "streamSettings": { "network": "kcp", "security": "none", "kcpSettings": { "header": { "type": "wechat-video" } } }
+    },
+    {
+      "tag": "vless-grpc-tls",
+      "listen": "0.0.0.0",
+      "port": ${grpc_port},
+      "protocol": "vless",
+      "settings": { "clients": [$(xray_clients_json_no_flow)], "decryption": "none" },
+      "streamSettings": {
+        "network": "grpc",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "${DOMAIN}",
+          "alpn": ["h2"],
+          "certificates": [
+            { "certificateFile": "${cert:-}", "keyFile": "${key:-}" }
+          ]
+        },
+        "grpcSettings": { "serviceName": "vless-grpc" }
+      }
+    }
+  ],
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ]
+}
+EOF
+
+    chmod 600 "$XRAY_CONFIG"
+    if ! "$XRAY_BIN" run -test -config "$XRAY_CONFIG" >/dev/null 2>&1; then
+        err "Xray config не прошёл проверку"
+        "$XRAY_BIN" run -test -config "$XRAY_CONFIG" || true
+        return 1
+    fi
+    save_config
+    ok "Xray config создан: $XRAY_CONFIG"
+}
+
+print_xray_client_config() {
+    load_config
+    load_xray_users
+    local user="${1:-}"
+    local uuid
+    if [[ -z "$user" ]]; then
+        user=$(head -1 "$XRAY_USERS_FILE" | cut -d: -f1)
+    fi
+    uuid=$(awk -F: -v u="$user" '$1 == u {print $2; exit}' "$XRAY_USERS_FILE")
+    [[ -z "$uuid" ]] && { err "Xray пользователь $user не найден"; return 1; }
+
+    hr
+    echo -e "${BOLD}${GREEN}  Xray Modern client config${RESET}"
+    hr
+    echo -e "  User: ${BOLD}${user}${RESET}"
+    echo
+    echo -e "${CYAN}  VLESS REALITY TCP:${RESET}"
+    echo "  vless://${uuid}@${DOMAIN}:${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}?security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}#${user}-reality"
+    echo
+    if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+        echo -e "${CYAN}  VLESS TCP TLS XTLS Vision (443 fallback hub):${RESET}"
+        echo "  vless://${uuid}@${DOMAIN}:443?security=tls&type=tcp&flow=xtls-rprx-vision&sni=${DOMAIN}&fp=chrome#${user}-vless-vision"
+        echo
+        echo -e "${CYAN}  VLESS WebSocket TLS:${RESET}"
+        echo "  vless://${uuid}@${DOMAIN}:443?security=tls&type=ws&host=${DOMAIN}&path=%2Fvless-ws&sni=${DOMAIN}&fp=chrome#${user}-vless-ws"
+        echo
+        echo -e "${CYAN}  VLESS HTTPUpgrade TLS:${RESET}"
+        echo "  vless://${uuid}@${DOMAIN}:443?security=tls&type=httpupgrade&host=${DOMAIN}&path=%2Fvless-hu&sni=${DOMAIN}&fp=chrome#${user}-vless-httpupgrade"
+        echo
+        echo -e "${CYAN}  VLESS XHTTP TLS:${RESET}"
+        echo "  vless://${uuid}@${DOMAIN}:443?security=tls&type=xhttp&host=${DOMAIN}&path=%2Fvless-xhttp&sni=${DOMAIN}&fp=chrome#${user}-vless-xhttp"
+        echo
+        echo -e "${CYAN}  Trojan WebSocket TLS:${RESET}"
+        echo "  trojan://${XRAY_TROJAN_PASSWORD:-PASSWORD}@${DOMAIN}:443?security=tls&type=ws&host=${DOMAIN}&path=%2Ftrojan-ws&sni=${DOMAIN}&fp=chrome#trojan-ws"
+    fi
+    echo
+    echo -e "${CYAN}  VLESS mKCP:${RESET}"
+    echo "  vless://${uuid}@${DOMAIN}:${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}?security=none&type=kcp&headerType=wechat-video#${user}-mkcp"
+    echo
+    echo -e "${CYAN}  VLESS gRPC TLS:${RESET}"
+    echo "  vless://${uuid}@${DOMAIN}:${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}?security=tls&type=grpc&serviceName=vless-grpc&sni=${DOMAIN}&fp=chrome#${user}-grpc"
+    hr
+}
+
+# ─── ПОДПИСКИ И ПЕРСОНАЛЬНЫЕ WEB-СТРАНИЦЫ ─────────────────────
+html_escape_text() {
+    printf '%s' "${1:-}" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
+ensure_web_privacy_files() {
+    mkdir -p "$WEBROOT" "$SUBS_WEB_DIR" "$PRIVATE_WEB_DIR"
+    cat > "${WEBROOT}/robots.txt" <<'EOF'
+User-agent: *
+Disallow: /s/
+Disallow: /p/
+EOF
+    chmod 644 "${WEBROOT}/robots.txt"
+
+    cat > "${SUBS_WEB_DIR}/index.html" <<'EOF'
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>404</title></head><body>404</body></html>
+EOF
+    cat > "${PRIVATE_WEB_DIR}/index.html" <<'EOF'
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><title>404</title></head><body>404</body></html>
+EOF
+    chmod 644 "${SUBS_WEB_DIR}/index.html" "${PRIVATE_WEB_DIR}/index.html"
+}
+
+get_or_create_token_file() {
+    local token_file="$1"
+    local token=""
+    mkdir -p "$(dirname "$token_file")"
+    chmod 700 "$(dirname "$token_file")" 2>/dev/null || true
+    if [[ -s "$token_file" ]]; then
+        token=$(tr -dc 'a-fA-F0-9' < "$token_file" | head -c 48)
+    fi
+    if [[ ! "$token" =~ ^[a-fA-F0-9]{32,64}$ ]]; then
+        token=$(openssl rand -hex 24)
+        printf '%s\n' "$token" > "$token_file"
+        chmod 600 "$token_file"
+    fi
+    printf '%s\n' "$token"
+}
+
+reset_token_file() {
+    local token_file="$1"
+    mkdir -p "$(dirname "$token_file")"
+    chmod 700 "$(dirname "$token_file")" 2>/dev/null || true
+    openssl rand -hex 24 > "$token_file"
+    chmod 600 "$token_file"
+}
+
+remove_web_token_dir() {
+    local base_dir="$1"
+    local token="$2"
+    if [[ ! "$token" =~ ^[a-fA-F0-9]{32,64}$ ]]; then
+        return 0
+    fi
+    case "$base_dir" in
+        "$SUBS_WEB_DIR"|"$PRIVATE_WEB_DIR") ;;
+        *)
+            warn "Отказываюсь удалять неожиданный web path: ${base_dir}"
+            return 1
+            ;;
+    esac
+    if [[ -z "${WEBROOT:-}" || "$base_dir" != "${WEBROOT}/"* ]]; then
+        warn "Отказываюсь удалять path вне WEBROOT: ${base_dir}"
+        return 1
+    fi
+    rm -rf -- "${base_dir}/${token}" 2>/dev/null || true
+}
+
+subscription_user_exists() {
+    local user="$1"
+    get_user_pass "$user" >/dev/null 2>&1 && return 0
+    [[ -n "$(get_xray_user_uuid "$user" 2>/dev/null || true)" ]] && return 0
+    return 1
+}
+
+generate_subscription_page() {
+    load_config
+    load_users
+
+    local user="$1"
+    if ! is_valid_proxy_user "$user"; then
+        err "Некорректный логин"
+        return 1
+    fi
+    if ! subscription_user_exists "$user"; then
+        err "Пользователь $user не найден в Naive/Xray"
+        return 1
+    fi
+    if ! is_valid_domain "${DOMAIN:-}"; then
+        err "Домен не настроен или некорректен"
+        return 1
+    fi
+
+    ensure_web_privacy_files
+
+    local token token_file page_dir links_file naive_pass naive_uri naive_json
+    token_file="${SUBS_DIR}/${user}.token"
+    token=$(get_or_create_token_file "$token_file")
+    page_dir="${SUBS_WEB_DIR}/${token}"
+    links_file="${page_dir}/links.txt"
+    mkdir -p "$page_dir"
+    chmod 755 "$page_dir"
+
+    naive_pass=$(get_user_pass "$user" 2>/dev/null || true)
+    naive_uri=""
+    naive_json=""
+    if [[ -n "$naive_pass" ]]; then
+        naive_uri="naive+https://${user}:${naive_pass}@${DOMAIN}:443"
+        naive_json=$(cat <<EOF
+{
+  "listen": "socks://127.0.0.1:1080",
+  "proxy": "https://${user}:${naive_pass}@${DOMAIN}:443"
+}
+EOF
+)
+    fi
+
+    local uuid reality_link vision_link ws_link hu_link xhttp_link trojan_link mkcp_link grpc_link
+    uuid=$(get_xray_user_uuid "$user" 2>/dev/null || true)
+    reality_link=""
+    vision_link=""
+    ws_link=""
+    hu_link=""
+    xhttp_link=""
+    trojan_link=""
+    mkcp_link=""
+    grpc_link=""
+    if [[ -n "$uuid" ]]; then
+        reality_link="vless://${uuid}@${DOMAIN}:${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}?security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}#${user}-reality"
+        mkcp_link="vless://${uuid}@${DOMAIN}:${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}?security=none&type=kcp&headerType=wechat-video#${user}-mkcp"
+        grpc_link="vless://${uuid}@${DOMAIN}:${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}?security=tls&type=grpc&serviceName=vless-grpc&sni=${DOMAIN}&fp=chrome#${user}-grpc"
+        if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+            vision_link="vless://${uuid}@${DOMAIN}:443?security=tls&type=tcp&flow=xtls-rprx-vision&sni=${DOMAIN}&fp=chrome#${user}-vless-vision"
+            ws_link="vless://${uuid}@${DOMAIN}:443?security=tls&type=ws&host=${DOMAIN}&path=%2Fvless-ws&sni=${DOMAIN}&fp=chrome#${user}-vless-ws"
+            hu_link="vless://${uuid}@${DOMAIN}:443?security=tls&type=httpupgrade&host=${DOMAIN}&path=%2Fvless-hu&sni=${DOMAIN}&fp=chrome#${user}-vless-httpupgrade"
+            xhttp_link="vless://${uuid}@${DOMAIN}:443?security=tls&type=xhttp&host=${DOMAIN}&path=%2Fvless-xhttp&sni=${DOMAIN}&fp=chrome#${user}-vless-xhttp"
+            trojan_link="trojan://${XRAY_TROJAN_PASSWORD:-PASSWORD}@${DOMAIN}:443?security=tls&type=ws&host=${DOMAIN}&path=%2Ftrojan-ws&sni=${DOMAIN}&fp=chrome#trojan-ws"
+        fi
+    fi
+
+    {
+        [[ -n "$naive_uri" ]] && printf '%s\n' "$naive_uri"
+        [[ -n "$reality_link" ]] && printf '%s\n' "$reality_link"
+        [[ -n "$vision_link" ]] && printf '%s\n' "$vision_link"
+        [[ -n "$ws_link" ]] && printf '%s\n' "$ws_link"
+        [[ -n "$hu_link" ]] && printf '%s\n' "$hu_link"
+        [[ -n "$xhttp_link" ]] && printf '%s\n' "$xhttp_link"
+        [[ -n "$trojan_link" ]] && printf '%s\n' "$trojan_link"
+        [[ -n "$mkcp_link" ]] && printf '%s\n' "$mkcp_link"
+        [[ -n "$grpc_link" ]] && printf '%s\n' "$grpc_link"
+    } > "$links_file"
+    chmod 644 "$links_file"
+
+    local sub_url links_url title safe_user safe_domain safe_naive_uri safe_naive_json
+    sub_url="https://${DOMAIN}/s/${token}/"
+    links_url="${sub_url}links.txt"
+    title="Subscription for ${user}"
+    safe_user=$(html_escape_text "$user")
+    safe_domain=$(html_escape_text "$DOMAIN")
+    safe_naive_uri=$(html_escape_text "$naive_uri")
+    safe_naive_json=$(html_escape_text "$naive_json")
+
+    local safe_reality safe_vision safe_ws safe_hu safe_xhttp safe_trojan safe_mkcp safe_grpc safe_links_url
+    safe_reality=$(html_escape_text "$reality_link")
+    safe_vision=$(html_escape_text "$vision_link")
+    safe_ws=$(html_escape_text "$ws_link")
+    safe_hu=$(html_escape_text "$hu_link")
+    safe_xhttp=$(html_escape_text "$xhttp_link")
+    safe_trojan=$(html_escape_text "$trojan_link")
+    safe_mkcp=$(html_escape_text "$mkcp_link")
+    safe_grpc=$(html_escape_text "$grpc_link")
+    safe_links_url=$(html_escape_text "$links_url")
+
+    cat > "${page_dir}/index.html" <<EOF
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>${title}</title>
+<style>
+:root{--bg:#0b0f14;--panel:#121922;--panel2:#17202b;--line:#263241;--text:#e8eef5;--muted:#9aa8b7;--accent:#4fd1c5;--blue:#60a5fa;--ok:#7ddc83;--warn:#f6c86f}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}.wrap{max-width:1040px;margin:0 auto;padding:28px 18px 48px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:18px}.brand{font-size:13px;color:var(--accent);letter-spacing:.08em;text-transform:uppercase}.h1{font-size:30px;font-weight:800;margin:6px 0}.muted{color:var(--muted)}.pill{border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--muted);white-space:nowrap}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:20px}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px}.card h2{font-size:16px;margin:0 0 10px}.card h3{font-size:14px;margin:16px 0 8px;color:var(--accent)}pre{white-space:pre-wrap;word-break:break-all;background:#080b10;border:1px solid var(--line);border-radius:7px;padding:12px;color:#d8dee9;overflow:auto}.btn{display:inline-flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:9px 12px;text-decoration:none;font-weight:700;margin:4px 6px 4px 0}.btn:hover{border-color:var(--accent)}.copy{cursor:pointer}.ok{color:var(--ok)}.warn{color:var(--warn)}.os{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}.os div{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px}.foot{margin-top:22px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:13px}@media(max-width:760px){.top{display:block}.grid,.os{grid-template-columns:1fr}.pill{display:inline-block;margin-top:10px}.h1{font-size:24px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <section class="top">
+    <div>
+      <div class="brand">NaiveProxy Manager</div>
+      <div class="h1">Подписка пользователя ${safe_user}</div>
+      <div class="muted">Домен: <b>${safe_domain}</b>. Страница скрыта от индексации, но доступна всем, у кого есть этот секретный URL.</div>
+    </div>
+    <div class="pill">Обновлено: $(date '+%Y-%m-%d %H:%M')</div>
+  </section>
+
+  <section class="card">
+    <h2>Быстрый импорт</h2>
+    <a class="btn" href="${safe_links_url}">links.txt</a>
+    <button class="btn copy" data-copy="${safe_links_url}">Скопировать URL подписки</button>
+    <p class="muted">Импортируй ссылку подписки в Hiddify, NekoBox, v2rayN, Streisand или другой клиент с поддержкой URI.</p>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>NaiveProxy</h2>
+      <p class="muted">Подходит для официального naive-client и клиентов с поддержкой naive URI.</p>
+      <pre>${safe_naive_uri:-Naive пользователь не найден}</pre>
+      <h3>naive-client JSON</h3>
+      <pre>${safe_naive_json:-Naive конфиг недоступен}</pre>
+    </div>
+    <div class="card">
+      <h2>Xray Modern</h2>
+      <p class="muted">VLESS/Trojan ссылки, если Xray установлен и пользователь создан.</p>
+      <pre>${safe_reality:-Xray пользователь не найден}</pre>
+      <pre>${safe_vision:-Fallback 443 выключен или недоступен}</pre>
+      <pre>${safe_ws:-WebSocket недоступен без fallback hub}</pre>
+      <pre>${safe_hu:-HTTPUpgrade недоступен без fallback hub}</pre>
+      <pre>${safe_xhttp:-XHTTP недоступен без fallback hub}</pre>
+      <pre>${safe_trojan:-Trojan WS недоступен без fallback hub}</pre>
+      <pre>${safe_mkcp:-mKCP недоступен}</pre>
+      <pre>${safe_grpc:-gRPC недоступен}</pre>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Настройки под системы</h2>
+    <div class="os">
+      <div><b>Windows</b><br><span class="muted">v2rayN, NekoRay или Hiddify. Импортируй links.txt или вставь нужную URI.</span></div>
+      <div><b>Android</b><br><span class="muted">Hiddify, NekoBox, v2rayNG. Для Naive лучше Hiddify/NekoBox с поддержкой naive.</span></div>
+      <div><b>iOS/macOS</b><br><span class="muted">Streisand, FoXray, Shadowrocket. Импортируй подписку или отдельную ссылку.</span></div>
+      <div><b>Linux</b><br><span class="muted">naive-client JSON для SOCKS 127.0.0.1:1080 или sing-box/v2rayN GUI.</span></div>
+    </div>
+  </section>
+
+  <div class="foot">Если этот URL утёк, перевыпусти токен: <code>sudo bash naiveproxy.sh subscription-reset ${safe_user}</code>.</div>
+</main>
+<script>
+document.querySelectorAll('.copy').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    navigator.clipboard.writeText(btn.getAttribute('data-copy') || '');
+    btn.textContent='Скопировано';
+    setTimeout(function(){btn.textContent='Скопировать URL подписки'}, 1600);
+  });
+});
+</script>
+</body>
+</html>
+EOF
+    chmod 644 "${page_dir}/index.html"
+    printf '%s\n' "$sub_url"
+}
+
+cmd_subscription_user() {
+    local user="${1:-}"
+    if [[ -z "$user" ]]; then
+        echo -ne "${CYAN}Пользователь: ${RESET}"
+        read -r user
+    fi
+    local url
+    url=$(generate_subscription_page "$user") || return 1
+    ok "Страница подписки создана:"
+    echo "  ${url}"
+    echo "  links.txt: ${url}links.txt"
+}
+
+cmd_subscription_reset() {
+    load_config
+    local user="${1:-}"
+    if [[ -z "$user" ]]; then
+        echo -ne "${CYAN}Пользователь: ${RESET}"
+        read -r user
+    fi
+    if ! is_valid_proxy_user "$user"; then
+        err "Некорректный логин"
+        return 1
+    fi
+    local old_token=""
+    if [[ -s "${SUBS_DIR}/${user}.token" ]]; then
+        old_token=$(tr -dc 'a-fA-F0-9' < "${SUBS_DIR}/${user}.token" | head -c 48)
+    fi
+    reset_token_file "${SUBS_DIR}/${user}.token"
+    if [[ "$old_token" =~ ^[a-fA-F0-9]{32,64}$ ]]; then
+        remove_web_token_dir "$SUBS_WEB_DIR" "$old_token"
+    fi
+    cmd_subscription_user "$user"
+}
+
+install_private_camouflage_page() {
+    load_config
+    if ! is_valid_domain "${DOMAIN:-}"; then
+        err "Домен не настроен или некорректен"
+        return 1
+    fi
+    ensure_web_privacy_files
+    local mode="${1:-}"
+    local old_token=""
+    if [[ "$mode" == "reset" && -s "$PRIVATE_PAGE_TOKEN_FILE" ]]; then
+        old_token=$(tr -dc 'a-fA-F0-9' < "$PRIVATE_PAGE_TOKEN_FILE" | head -c 48)
+    fi
+    [[ "$mode" == "reset" ]] && reset_token_file "$PRIVATE_PAGE_TOKEN_FILE"
+    if [[ "$old_token" =~ ^[a-fA-F0-9]{32,64}$ ]]; then
+        remove_web_token_dir "$PRIVATE_WEB_DIR" "$old_token"
+    fi
+    local token page_dir url
+    token=$(get_or_create_token_file "$PRIVATE_PAGE_TOKEN_FILE")
+    page_dir="${PRIVATE_WEB_DIR}/${token}"
+    url="https://${DOMAIN}/p/${token}/"
+    mkdir -p "$page_dir"
+    chmod 755 "$page_dir"
+    cat > "${page_dir}/index.html" <<EOF
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>Ivan IT Lab</title>
+<style>
+:root{--bg:#0a0e13;--panel:#111923;--line:#263241;--text:#edf2f7;--muted:#9ca9b7;--accent:#d4a017;--blue:#58a6ff;--green:#4ade80}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif}.wrap{max-width:980px;margin:0 auto;padding:34px 18px}.top{border-bottom:1px solid var(--line);padding-bottom:22px}.eyebrow{color:var(--accent);font-size:12px;text-transform:uppercase;letter-spacing:.12em}.h1{font-size:36px;font-weight:850;margin:8px 0}.muted{color:var(--muted);line-height:1.65}.grid{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:20px}.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px}.row{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding:10px 0}.row:last-child{border-bottom:0}.ok{color:var(--green)}code{color:var(--blue)}@media(max-width:760px){.grid{grid-template-columns:1fr}.h1{font-size:28px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <section class="top">
+    <div class="eyebrow">Private technical notebook</div>
+    <div class="h1">Ivan IT Lab</div>
+    <p class="muted">Личная страница для заметок по инфраструктуре, релизам и тестовым окружениям. Публичная часть сайта остаётся обычным техническим блогом, эта страница живёт только по секретному адресу.</p>
+  </section>
+  <section class="grid">
+    <div class="card">
+      <h2>Рабочие заметки</h2>
+      <p class="muted">План на неделю: проверить резервные копии, обновить список зависимостей, прогнать диагностику TLS/HTTP3, сверить правила firewall и журнал systemd.</p>
+      <p class="muted">Последняя проверка: <code>$(date '+%Y-%m-%d %H:%M')</code></p>
+    </div>
+    <div class="card">
+      <h2>Статус</h2>
+      <div class="row"><span>Docs</span><span class="ok">online</span></div>
+      <div class="row"><span>Build notes</span><span class="ok">synced</span></div>
+      <div class="row"><span>Monitoring</span><span class="ok">active</span></div>
+    </div>
+  </section>
+</main>
+</body>
+</html>
+EOF
+    chmod 644 "${page_dir}/index.html"
+    ok "Персональная фейковая страница создана:"
+    echo "  ${url}"
+}
+
+cmd_xray_install() {
+    load_config
+    check_installed || { err "Сначала установи NaiveProxy и получи TLS сертификат"; return 1; }
+    hr
+    echo -e "${BOLD}  Xray Modern transports${RESET}"
+    hr
+    warn "443 fallback hub переключит внешний порт 443 с Caddy на Xray."
+    warn "NaiveProxy останется доступен на ${DOMAIN}:443 через fallback в Caddy local."
+    echo -ne "${YELLOW}Включить Xray fallback hub на 443? [y/N]: ${RESET}"
+    read -r ans
+    [[ "${ans,,}" == "y" ]] && XRAY_FALLBACK_ENABLED="1" || XRAY_FALLBACK_ENABLED="0"
+
+    echo -ne "${CYAN}Xray пользователь [xray]: ${RESET}"
+    read -r xuser
+    xuser="${xuser:-xray}"
+    if ! is_valid_proxy_user "$xuser"; then
+        err "Логин: 2-32 символа, только A-Z a-z 0-9 _ -"
+        return 1
+    fi
+
+    echo -ne "${CYAN}REALITY target [${XRAY_REALITY_TARGET:-www.microsoft.com:443}]: ${RESET}"
+    read -r ans
+    XRAY_REALITY_TARGET="${ans:-${XRAY_REALITY_TARGET:-www.microsoft.com:443}}"
+    XRAY_REALITY_SERVER_NAME="${XRAY_REALITY_TARGET%%:*}"
+
+    install_xray_bin || return 1
+    write_xray_config "$xuser" || return 1
+    write_xray_service
+
+    if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+        rewrite_caddyfile_current || return 1
+        systemctl restart caddy
+    fi
+
+    ufw allow "${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}/tcp" comment "Xray REALITY" >/dev/null 2>&1 || true
+    ufw allow "${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}/udp" comment "Xray mKCP" >/dev/null 2>&1 || true
+    ufw allow "${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}/tcp" comment "Xray gRPC" >/dev/null 2>&1 || true
+    systemctl restart xray
+    XRAY_ENABLED="1"
+    save_config
+    ok "Xray запущен"
+    print_xray_client_config "$xuser"
+}
+
+cmd_xray_status() {
+    load_config
+    hr
+    echo -e "${BOLD}  Xray статус${RESET}"
+    hr
+    [[ -x "$XRAY_BIN" ]] && "$XRAY_BIN" version | head -1 || warn "Xray не установлен"
+    systemctl status xray --no-pager -l 2>/dev/null || true
+    ss -tulpn | grep -E ":(443|${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}|${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}|${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT})\b" || true
+    [[ -f "$XRAY_CONFIG" ]] && "$XRAY_BIN" run -test -config "$XRAY_CONFIG" || true
+    hr
+}
+
+cmd_xray_logs() {
+    echo -e "${BOLD}Лог Xray (Ctrl+C для выхода):${RESET}"
+    journalctl -u xray -n 80 -f
+}
+
+cmd_xray_remove() {
+    echo -ne "${RED}Удалить Xray и вернуть Caddy на 443? [y/N]: ${RESET}"
+    read -r ans
+    [[ "${ans,,}" == "y" ]] || return
+    systemctl disable --now xray >/dev/null 2>&1 || true
+    rm -f "$XRAY_SERVICE" "$XRAY_CONFIG" "$XRAY_BIN"
+    ufw delete allow "${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}/tcp" >/dev/null 2>&1 || true
+    ufw delete allow "${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}/udp" >/dev/null 2>&1 || true
+    ufw delete allow "${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}/tcp" >/dev/null 2>&1 || true
+    XRAY_ENABLED="0"
+    XRAY_FALLBACK_ENABLED="0"
+    save_config
+    systemctl daemon-reload
+    rewrite_caddyfile_current || true
+    systemctl restart caddy 2>/dev/null || true
+    ok "Xray удалён из конфигурации, Caddy возвращён на 443"
+}
+
+cmd_xray_menu() {
+    while true; do
+        load_config
+        hr
+        echo -e "${BOLD}  Xray Modern transports & fallback${RESET}"
+        hr
+        echo -e "  ${BOLD}1)${RESET} Установить / пересобрать Xray config"
+        echo -e "  ${BOLD}2)${RESET} Показать клиентские ссылки"
+        echo -e "  ${BOLD}3)${RESET} Статус"
+        echo -e "  ${BOLD}4)${RESET} Логи"
+        echo -e "  ${BOLD}5)${RESET} Удалить Xray / вернуть Caddy"
+        echo -e "  ${BOLD}0)${RESET} Назад"
+        hr
+        echo -e "  Fallback 443: ${CYAN}${XRAY_FALLBACK_ENABLED:-0}${RESET} | REALITY: ${CYAN}${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}${RESET}"
+        echo -ne "${CYAN}Выбор: ${RESET}"
+        read -r choice
+        case "$choice" in
+            1) cmd_xray_install ;;
+            2)
+                echo -ne "${CYAN}Пользователь [первый]: ${RESET}"; read -r u
+                print_xray_client_config "$u"
+                ;;
+            3) cmd_xray_status ;;
+            4) cmd_xray_logs ;;
+            5) cmd_xray_remove ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+        echo -ne "${DIM}Enter для продолжения...${RESET}"; read -r _
+    done
+}
+
+# ─── CLOUDFLARE WARP PROXY MODE ───────────────────────────────
+install_warp_client() {
+    if command -v warp-cli &>/dev/null; then
+        ok "cloudflare-warp уже установлен: $(warp-cli --version 2>/dev/null | head -1 || echo warp-cli)"
+        return 0
+    fi
+
+    local codename
+    codename=$(lsb_release -cs 2>/dev/null || true)
+    if [[ -z "$codename" && -f /etc/os-release ]]; then
+        codename=$(awk -F= '$1=="VERSION_CODENAME"{gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null || true)
+    fi
+
+    if [[ -z "$codename" ]]; then
+        err "Не смог определить codename дистрибутива для репозитория Cloudflare WARP"
+        return 1
+    fi
+
+    case "$codename" in
+        focal|jammy|noble|bullseye|bookworm|trixie) ;;
+        *)
+            warn "Cloudflare официально поддерживает не все релизы. Codename: $codename"
+            echo -ne "${YELLOW}Продолжить установку WARP repo для ${codename}? [y/N]: ${RESET}"
+            read -r ans
+            [[ "${ans,,}" == "y" ]] || return 1
+            ;;
+    esac
+
+    info "Добавляю официальный репозиторий Cloudflare WARP..."
+    apt-get update -qq
+    apt-get install -y -q curl ca-certificates gnupg lsb-release
+    mkdir -p /usr/share/keyrings /etc/apt/sources.list.d
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+        | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${codename} main" \
+        > /etc/apt/sources.list.d/cloudflare-client.list
+
+    info "Устанавливаю cloudflare-warp..."
+    apt-get update -qq
+    apt-get install -y -q cloudflare-warp
+    ok "cloudflare-warp установлен"
+}
+
+warp_registration_new() {
+    if warp_cli registration show >/dev/null 2>&1 || warp_cli account >/dev/null 2>&1; then
+        ok "WARP регистрация уже есть"
+        return 0
+    fi
+
+    info "Регистрирую WARP клиент..."
+    if warp_cli registration new >/dev/null 2>&1 || warp_cli register >/dev/null 2>&1; then
+        ok "WARP клиент зарегистрирован"
+        return 0
+    fi
+
+    err "Не удалось зарегистрировать WARP. Попробуй вручную: warp-cli registration new"
+    return 1
+}
+
+warp_set_proxy_port() {
+    local port="$1"
+    if warp_cli proxy port "$port" >/dev/null 2>&1; then
+        return 0
+    fi
+    if warp_cli set-proxy-port "$port" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [[ "$port" == "$WARP_PROXY_PORT_DEFAULT" ]]; then
+        warn "Не смог явно выставить порт, оставляю дефолт WARP proxy: ${WARP_PROXY_PORT_DEFAULT}"
+        return 0
+    fi
+
+    err "Эта версия warp-cli не дала сменить proxy port. Используй ${WARP_PROXY_PORT_DEFAULT} или проверь: warp-cli --help"
+    return 1
+}
+
+warp_set_proxy_mode() {
+    # Современный WARP local proxy mode требует MASQUE; если команда недоступна, не считаем это фатальным.
+    warp_cli tunnel protocol set MASQUE >/dev/null 2>&1 || true
+
+    if warp_cli mode proxy >/dev/null 2>&1; then
+        return 0
+    fi
+    if warp_cli set-mode proxy >/dev/null 2>&1; then
+        return 0
+    fi
+
+    err "Не удалось включить WARP proxy mode. Проверь: warp-cli mode --help"
+    return 1
+}
+
+test_warp_proxy() {
+    local port="${1:-${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}}"
+    local trace tmp
+    tmp=$(mktemp /tmp/warp_trace_XXXXXX)
+    trap 'rm -f "${tmp:-}" 2>/dev/null; trap - RETURN' RETURN
+
+    if curl -fsSL --max-time 20 --socks5-hostname "127.0.0.1:${port}" \
+        https://www.cloudflare.com/cdn-cgi/trace -o "$tmp" 2>/dev/null; then
+        trace=$(cat "$tmp")
+    elif curl -fsSL --max-time 20 -x "http://127.0.0.1:${port}" \
+        https://www.cloudflare.com/cdn-cgi/trace -o "$tmp" 2>/dev/null; then
+        trace=$(cat "$tmp")
+    else
+        err "Не удалось пройти через WARP proxy 127.0.0.1:${port}"
+        return 1
+    fi
+
+    echo "$trace" | sed -n 's/^ip=/  ip=/p; s/^colo=/  colo=/p; s/^warp=/  warp=/p; s/^gateway=/  gateway=/p'
+    if echo "$trace" | grep -q '^warp=on'; then
+        ok "WARP proxy mode работает"
+    else
+        warn "Proxy отвечает, но trace не показал warp=on. Проверь warp-cli status/settings."
+    fi
+}
+
+cmd_warp_install() {
+    load_config
+    hr
+    echo -e "${BOLD}  Cloudflare WARP proxy mode${RESET}"
+    hr
+    warn "Это local proxy mode: слушает 127.0.0.1 и не меняет общий маршрут VPS."
+    warn "Внешние порты в UFW не открываются, SSH не должен пропасть."
+    echo
+
+    echo -ne "${CYAN}Локальный порт WARP proxy [${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}]: ${RESET}"
+    read -r ans_port
+    WARP_PROXY_PORT="${ans_port:-${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}}"
+    if ! is_valid_local_proxy_port "$WARP_PROXY_PORT"; then
+        err "Порт должен быть числом 1024-65535"
+        return 1
+    fi
+
+    if ss -tlnp 2>/dev/null | grep -q "127.0.0.1:${WARP_PROXY_PORT} "; then
+        warn "127.0.0.1:${WARP_PROXY_PORT} уже слушается"
+        echo -ne "${YELLOW}Продолжить всё равно? [y/N]: ${RESET}"
+        read -r ans
+        [[ "${ans,,}" == "y" ]] || return 1
+    fi
+
+    install_warp_client || return 1
+    systemctl enable --now warp-svc >/dev/null 2>&1 || systemctl enable --now cloudflare-warp >/dev/null 2>&1 || true
+    warp_registration_new || return 1
+    warp_set_proxy_port "$WARP_PROXY_PORT" || return 1
+    warp_set_proxy_mode || return 1
+
+    info "Подключаю WARP..."
+    warp_cli connect >/dev/null 2>&1 || true
+    sleep 3
+    WARP_PROXY_ENABLED="1"
+    save_config
+    cmd_warp_status
+    test_warp_proxy "$WARP_PROXY_PORT" || true
+}
+
+print_warp_proxy_config() {
+    load_config
+    local port="${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+    hr
+    echo -e "${BOLD}${GREEN}  WARP proxy mode config${RESET}"
+    hr
+    echo -e "  ${BOLD}SOCKS5:${RESET} socks5h://127.0.0.1:${port}"
+    echo -e "  ${BOLD}HTTP:${RESET}   http://127.0.0.1:${port}"
+    echo
+    echo -e "  ${YELLOW}Важно:${RESET} WARP local proxy подходит для приложений с SOCKS5/HTTP proxy."
+    echo -e "          Для очень долгих запросов у Cloudflare есть timeout local proxy."
+    echo
+    echo -e "${CYAN}  Проверка:${RESET}"
+    echo -e "  curl --socks5-hostname 127.0.0.1:${port} https://www.cloudflare.com/cdn-cgi/trace"
+    echo
+    echo -e "${CYAN}  Для временного использования в shell:${RESET}"
+    echo -e "  export ALL_PROXY=socks5h://127.0.0.1:${port}"
+    echo -e "  export HTTPS_PROXY=http://127.0.0.1:${port}"
+    hr
+}
+
+cmd_warp_status() {
+    load_config
+    local port="${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+    hr
+    echo -e "${BOLD}  WARP proxy mode статус${RESET}"
+    hr
+    if command -v warp-cli &>/dev/null; then
+        ok "warp-cli: $(warp-cli --version 2>/dev/null | head -1 || echo установлен)"
+        warp-cli status 2>/dev/null || true
+        warp-cli settings 2>/dev/null | sed -n '1,20p' || true
+    else
+        warn "cloudflare-warp не установлен"
+    fi
+    ss -tlnp 2>/dev/null | grep -E "127\.0\.0\.1:${port}\b|:${port}\b" || warn "Локальный порт ${port} не слушается"
+    hr
+}
+
+cmd_warp_test() {
+    load_config
+    test_warp_proxy "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+}
+
+cmd_warp_logs() {
+    echo -e "${BOLD}Лог WARP (Ctrl+C для выхода):${RESET}"
+    journalctl -u warp-svc -n 80 -f 2>/dev/null || journalctl -u cloudflare-warp -n 80 -f
+}
+
+cmd_warp_disable() {
+    load_config
+    warp_cli disconnect >/dev/null 2>&1 || true
+    WARP_PROXY_ENABLED="0"
+    save_config
+    ok "WARP отключён. Пакет оставлен установленным."
+}
+
+cmd_warp_remove() {
+    echo -ne "${RED}Удалить cloudflare-warp полностью? [y/N]: ${RESET}"
+    read -r ans
+    [[ "${ans,,}" == "y" ]] || return
+    load_config
+    warp_cli disconnect >/dev/null 2>&1 || true
+    systemctl stop warp-svc cloudflare-warp >/dev/null 2>&1 || true
+    apt-get purge -y -q cloudflare-warp || true
+    rm -f /etc/apt/sources.list.d/cloudflare-client.list
+    WARP_PROXY_ENABLED="0"
+    WARP_PROXY_PORT="$WARP_PROXY_PORT_DEFAULT"
+    save_config
+    ok "cloudflare-warp удалён"
+}
+
+cmd_warp_menu() {
+    while true; do
+        load_config
+        hr
+        echo -e "${BOLD}  Cloudflare WARP proxy mode${RESET}"
+        hr
+        echo -e "  ${BOLD}1)${RESET} Установить / включить proxy mode"
+        echo -e "  ${BOLD}2)${RESET} Показать proxy config"
+        echo -e "  ${BOLD}3)${RESET} Статус"
+        echo -e "  ${BOLD}4)${RESET} Проверить WARP"
+        echo -e "  ${BOLD}5)${RESET} Логи"
+        echo -e "  ${BOLD}6)${RESET} Отключить WARP"
+        echo -e "  ${BOLD}7)${RESET} Удалить WARP"
+        echo -e "  ${BOLD}0)${RESET} Назад"
+        hr
+        echo -ne "${CYAN}Выбор: ${RESET}"
+        read -r choice
+        case "$choice" in
+            1) cmd_warp_install ;;
+            2) print_warp_proxy_config ;;
+            3) cmd_warp_status ;;
+            4) cmd_warp_test ;;
+            5) cmd_warp_logs ;;
+            6) cmd_warp_disable ;;
+            7) cmd_warp_remove ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+        echo -ne "${DIM}Enter для продолжения...${RESET}"; read -r _
+    done
+}
+
 # ─── Ввод параметров ─────────────────────────────────────────
 prompt_params() {
     echo
@@ -2063,6 +3231,7 @@ cmd_users() {
         echo -e "  ${BOLD}2)${RESET} Добавить пользователя"
         echo -e "  ${BOLD}3)${RESET} Удалить пользователя"
         echo -e "  ${BOLD}4)${RESET} Сменить пароль"
+        echo -e "  ${BOLD}5)${RESET} Показать ссылку пользователя"
         echo -e "  ${BOLD}0)${RESET} Назад"
         hr
         echo -ne "${CYAN}Выбор: ${RESET}"
@@ -2101,7 +3270,7 @@ cmd_users() {
                 fi
                 printf '%s:%s\n' "${new_user}" "${new_pass}" >> "$USERS_FILE"
                 backup_config
-                write_caddyfile
+                rewrite_caddyfile_current
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy
                 ok "Пользователь $new_user добавлен"
                 tg_send "👤 <b>Новый пользователь NaiveProxy</b>
@@ -2114,9 +3283,13 @@ cmd_users() {
                     err "Пользователь $del_user не найден"
                     continue
                 fi
+                if [[ "$(active_user_count)" -le 1 ]]; then
+                    err "Нельзя удалить последнего активного пользователя — иначе прокси может остаться без auth."
+                    continue
+                fi
                 backup_config
                 awk -F: -v user="${del_user}" '$1 != user' "$USERS_FILE" > "${USERS_FILE}.tmp" && mv "${USERS_FILE}.tmp" "$USERS_FILE" || true
-                write_caddyfile
+                rewrite_caddyfile_current
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy
                 ok "Пользователь $del_user удалён"
                 tg_send "🗑 <b>Пользователь удалён: ${del_user}</b>
@@ -2149,15 +3322,430 @@ cmd_users() {
 ' "$u" "$p"
                     fi
                 done < "$USERS_FILE" > "$tmp_users" && mv "$tmp_users" "$USERS_FILE"
-                write_caddyfile
+                rewrite_caddyfile_current
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy
                 ok "Пароль $chg_user изменён"
+                ;;
+            5)
+                echo -ne "${CYAN}Логин: ${RESET}"; read -r show_user
+                print_client_config "$show_user"
                 ;;
             0) break ;;
             *) warn "Неверный выбор" ;;
         esac
 
         echo -ne "${YELLOW}Enter для продолжения...${RESET}"; read -r
+    done
+}
+
+# ─── ЛИМИТ УСТРОЙСТВ / АНТИ-ШАРИНГ ────────────────────────────
+device_log_files() {
+    local f
+    for f in "${LOG_DIR}/naive.log" "${LOG_DIR}"/naive.log.* "${LOG_DIR}"/naive_*.log "${LOG_DIR}"/naive_*.log.*; do
+        [[ -f "$f" ]] && printf '%s\n' "$f"
+    done
+}
+
+xray_log_files() {
+    local f
+    for f in /var/log/xray/access.log /var/log/xray/access.log.*; do
+        [[ -f "$f" ]] && printf '%s\n' "$f"
+    done
+}
+
+device_usage_report() {
+    local window="${1:-${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}}"
+    local since since_text pair_file
+    since=$(date -d "${window} hours ago" +%s 2>/dev/null || echo 0)
+    since_text=$(date -d "${window} hours ago" '+%Y/%m/%d %H:%M:%S' 2>/dev/null || echo "")
+    [[ "$since" =~ ^[0-9]+$ ]] || since=0
+    pair_file=$(mktemp)
+    trap 'rm -f "${pair_file:-}" 2>/dev/null; trap - RETURN' RETURN
+
+    local logs=()
+    mapfile -t logs < <(device_log_files)
+    if [[ "${#logs[@]}" -gt 0 ]]; then
+        awk -v since="$since" '
+            {
+                ts=0; user=""; ip="";
+                if ($0 !~ /"user_id":/ || $0 !~ /"remote_ip":/) next;
+
+                tmp=$0;
+                sub(/^.*"ts":/, "", tmp);
+                sub(/[,}].*$/, "", tmp);
+                ts=tmp+0;
+                if (ts < since) next;
+
+                tmp=$0;
+                sub(/^.*"user_id":"/, "", tmp);
+                sub(/".*$/, "", tmp);
+                user=tmp;
+
+                tmp=$0;
+                sub(/^.*"remote_ip":"/, "", tmp);
+                sub(/".*$/, "", tmp);
+                ip=tmp;
+
+                if (user != "" && ip != "") print user "\t" ip;
+            }
+        ' "${logs[@]}" >> "$pair_file"
+    fi
+
+    local xlogs=()
+    mapfile -t xlogs < <(xray_log_files)
+    if [[ "${#xlogs[@]}" -gt 0 && -f "$XRAY_USERS_FILE" ]]; then
+        awk -v since_text="$since_text" -v users_file="$XRAY_USERS_FILE" '
+            BEGIN {
+                while ((getline line < users_file) > 0) {
+                    split(line, a, ":");
+                    if (a[1] != "") users[a[1]]=1;
+                }
+            }
+            {
+                if (since_text != "" && substr($0, 1, 19) < since_text) next;
+                user=""; ip="";
+                for (u in users) {
+                    if ($0 ~ ("email[:= ]+" u) || $0 ~ ("\\[" u "\\]") || $0 ~ (" " u "$")) {
+                        user=u;
+                        break;
+                    }
+                }
+                if (user == "") next;
+                if (match($0, /(tcp|udp):[0-9][0-9.]*:[0-9]+/)) {
+                    ip=substr($0, RSTART, RLENGTH);
+                    sub(/^(tcp|udp):/, "", ip);
+                    sub(/:[0-9]+$/, "", ip);
+                } else if (match($0, / [0-9][0-9.]*:[0-9]+ accepted/)) {
+                    ip=substr($0, RSTART + 1, RLENGTH - 10);
+                    sub(/:[0-9]+$/, "", ip);
+                }
+                if (ip != "") print user "\t" ip;
+            }
+        ' "${xlogs[@]}" >> "$pair_file"
+    fi
+
+    [[ -s "$pair_file" ]] || return 1
+    awk -F'\t' '
+        { if ($1 != "" && $2 != "") seen[$1 SUBSEP $2]=1; }
+        END {
+            for (k in seen) {
+                split(k, a, SUBSEP);
+                counts[a[1]]++;
+                ips[a[1]]=ips[a[1]] " " a[2];
+            }
+            for (u in counts) {
+                out=ips[u];
+                sub(/^ /, "", out);
+                print u "\t" counts[u] "\t" out;
+            }
+        }
+    ' "$pair_file" | sort -k2,2nr -k1,1
+}
+
+write_device_cron() {
+    if [[ "${DEVICE_LIMIT_ENABLED:-0}" == "1" ]]; then
+        cat > "$DEVICE_CRON" <<EOF
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/15 * * * * root ${SCRIPT_PATH} devices-scan >/dev/null 2>&1
+EOF
+        chmod 644 "$DEVICE_CRON"
+        ok "Автопроверка устройств включена: каждые 15 минут"
+    else
+        rm -f "$DEVICE_CRON"
+        ok "Автопроверка устройств отключена"
+    fi
+}
+
+device_disable_user() {
+    local target="$1"
+    local has_naive=0 has_xray=0 changed=0
+    if ! is_valid_proxy_user "$target"; then
+        err "Некорректный логин"
+        return 1
+    fi
+    get_user_pass "$target" >/dev/null && has_naive=1
+    [[ -n "$(get_xray_user_uuid "$target" 2>/dev/null || true)" ]] && has_xray=1
+    if [[ "$has_naive" -eq 0 && "$has_xray" -eq 0 ]]; then
+        err "Пользователь $target не найден"
+        return 1
+    fi
+
+    local pass backup tmp
+    if [[ "$has_naive" -eq 1 ]]; then
+        if [[ "$(active_user_count)" -le 1 ]]; then
+            warn "Naive: нельзя отключить последнего активного пользователя"
+        else
+            pass=$(get_user_pass "$target")
+            backup=$(mktemp)
+            tmp=$(mktemp)
+            cp "$USERS_FILE" "$backup"
+            mkdir -p "$CONFIG_DIR"
+            touch "$DISABLED_USERS_FILE"
+            chmod 600 "$DISABLED_USERS_FILE"
+            printf '%s:%s\t# disabled by device-limit at %s\n' "$target" "$pass" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$DISABLED_USERS_FILE"
+            awk -F: -v user="$target" '$1 != user' "$USERS_FILE" > "$tmp" && mv "$tmp" "$USERS_FILE"
+            chmod 600 "$USERS_FILE"
+            if ! rewrite_caddyfile_current; then
+                mv "$backup" "$USERS_FILE"
+                rewrite_caddyfile_current >/dev/null 2>&1 || true
+                rm -f "$tmp" "$backup"
+                err "Не смог обновить Caddyfile, Naive пользователь $target возвращён"
+                return 1
+            fi
+            rm -f "$tmp" "$backup"
+            systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+            changed=1
+            ok "Naive пользователь $target отключён"
+        fi
+    fi
+
+    if [[ "$has_xray" -eq 1 ]]; then
+        if [[ "$(xray_active_user_count)" -le 1 ]]; then
+            warn "Xray: нельзя отключить последнего активного пользователя"
+        else
+            local uuid xray_tmp xray_backup
+            uuid=$(get_xray_user_uuid "$target")
+            xray_backup=$(mktemp)
+            cp "$XRAY_USERS_FILE" "$xray_backup"
+            touch "$XRAY_DISABLED_USERS_FILE"
+            chmod 600 "$XRAY_DISABLED_USERS_FILE"
+            printf '%s:%s\t# disabled by device-limit at %s\n' "$target" "$uuid" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$XRAY_DISABLED_USERS_FILE"
+            xray_tmp=$(mktemp)
+            awk -F: -v user="$target" '$1 != user' "$XRAY_USERS_FILE" > "$xray_tmp" && mv "$xray_tmp" "$XRAY_USERS_FILE"
+            chmod 600 "$XRAY_USERS_FILE"
+            if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+                if ! write_xray_config >/dev/null 2>&1; then
+                    mv "$xray_backup" "$XRAY_USERS_FILE"
+                    write_xray_config >/dev/null 2>&1 || true
+                    warn "Xray config не пересобран, пользователь $target возвращён"
+                    return 1
+                fi
+                systemctl restart xray 2>/dev/null || true
+            fi
+            rm -f "$xray_backup"
+            changed=1
+            ok "Xray пользователь $target отключён"
+        fi
+    fi
+
+    [[ "$changed" -eq 1 ]] || return 1
+}
+
+device_enable_user() {
+    local target="$1"
+    if ! is_valid_proxy_user "$target"; then
+        err "Некорректный логин"
+        return 1
+    fi
+    local restored=0
+    if get_user_pass "$target" >/dev/null; then
+        warn "Пользователь $target уже активен"
+        restored=1
+    fi
+
+    local line pass tmp
+    if [[ -f "$DISABLED_USERS_FILE" ]]; then
+        line=$(awk -F: -v user="$target" '$1 == user {print; exit}' "$DISABLED_USERS_FILE")
+        if [[ -n "$line" ]]; then
+            pass=$(printf '%s\n' "$line" | cut -d: -f2 | awk '{print $1}')
+            if is_valid_proxy_pass "$pass"; then
+                printf '%s:%s\n' "$target" "$pass" >> "$USERS_FILE"
+                tmp=$(mktemp)
+                awk -F: -v user="$target" '$1 != user' "$DISABLED_USERS_FILE" > "$tmp" && mv "$tmp" "$DISABLED_USERS_FILE"
+                chmod 600 "$USERS_FILE" "$DISABLED_USERS_FILE"
+                rewrite_caddyfile_current
+                systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+                restored=1
+                ok "Naive пользователь $target снова активен"
+            else
+                warn "Naive пароль отключенного пользователя повреждён"
+            fi
+        fi
+    fi
+
+    if [[ -f "$XRAY_DISABLED_USERS_FILE" ]]; then
+        line=$(awk -F: -v user="$target" '$1 == user {print; exit}' "$XRAY_DISABLED_USERS_FILE")
+        if [[ -n "$line" ]]; then
+            local uuid xray_tmp
+            uuid=$(printf '%s\n' "$line" | cut -d: -f2 | awk '{print $1}')
+            if [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+                printf '%s:%s\n' "$target" "$uuid" >> "$XRAY_USERS_FILE"
+                xray_tmp=$(mktemp)
+                awk -F: -v user="$target" '$1 != user' "$XRAY_DISABLED_USERS_FILE" > "$xray_tmp" && mv "$xray_tmp" "$XRAY_DISABLED_USERS_FILE"
+                chmod 600 "$XRAY_USERS_FILE" "$XRAY_DISABLED_USERS_FILE"
+                if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+                    write_xray_config >/dev/null 2>&1 && systemctl restart xray 2>/dev/null || warn "Xray config не пересобран после возврата $target"
+                fi
+                restored=1
+                ok "Xray пользователь $target снова активен"
+            else
+                warn "Xray UUID отключенного пользователя повреждён"
+            fi
+        fi
+    fi
+
+    [[ "$restored" -eq 1 ]] || { err "Пользователь $target не найден в отключенных"; return 1; }
+}
+
+cmd_devices_scan() {
+    load_config
+    load_users
+
+    local limit="${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}"
+    local window="${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}"
+    local mode="${DEVICE_LIMIT_MODE:-alert}"
+    local enabled="${DEVICE_LIMIT_ENABLED:-0}"
+
+    if ! [[ "$limit" =~ ^[0-9]+$ ]] || [[ "$limit" -lt 1 ]]; then limit="$DEVICE_LIMIT_DEFAULT"; fi
+    if ! [[ "$window" =~ ^[0-9]+$ ]] || [[ "$window" -lt 1 ]]; then window="$DEVICE_WINDOW_HOURS_DEFAULT"; fi
+    [[ "$mode" == "lock-user" ]] || mode="alert"
+
+    local report_file
+    report_file=$(mktemp)
+    trap 'rm -f "${report_file:-}" 2>/dev/null; trap - RETURN' RETURN
+
+    if ! device_usage_report "$window" > "$report_file"; then
+        warn "Логи NaiveProxy не найдены: ${LOG_DIR}/naive.log"
+        return 1
+    fi
+
+    hr
+    echo -e "${BOLD}  Лимит устройств NaiveProxy${RESET}"
+    hr
+    echo -e "  Лимит: ${CYAN}${limit}${RESET} уникальных IP за ${CYAN}${window}${RESET} ч"
+    echo -e "  Режим: ${CYAN}${mode}${RESET}  |  Авто: ${CYAN}${enabled}${RESET}"
+    echo
+    printf '  %-24s %-8s %s\n' "Пользователь" "IP" "Адреса"
+    printf '  %-24s %-8s %s\n' "------------" "--" "------"
+
+    local user count ips exceeded=0
+    if [[ ! -s "$report_file" ]]; then
+        warn "В окне ${window} ч нет CONNECT-записей с user_id"
+        return 0
+    fi
+
+    while IFS=$'\t' read -r user count ips; do
+        printf '  %-24s %-8s %s\n' "$user" "$count" "$ips"
+        if [[ "$count" =~ ^[0-9]+$ ]] && [[ "$count" -gt "$limit" ]]; then
+            exceeded=$((exceeded+1))
+            warn "Превышение: $user использует $count IP при лимите $limit"
+            tg_send "⚠️ <b>NaiveProxy: превышен лимит устройств</b>
+👤 Пользователь: <code>${user}</code>
+📱 IP за ${window} ч: <b>${count}</b> / лимит <b>${limit}</b>
+🔒 Режим: <code>${mode}</code>"
+            if [[ "$enabled" == "1" && "$mode" == "lock-user" ]]; then
+                device_disable_user "$user" || true
+            fi
+        fi
+    done < "$report_file"
+
+    echo
+    if [[ "$exceeded" -eq 0 ]]; then
+        ok "Превышений нет"
+    elif [[ "$enabled" != "1" ]]; then
+        warn "Автолимит выключен. Это только отчёт."
+    fi
+}
+
+cmd_devices_config() {
+    load_config
+    hr
+    echo -e "${BOLD}  Настройка лимита устройств${RESET}"
+    hr
+    echo -e "  Текущий лимит: ${CYAN}${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}${RESET}"
+    echo -e "  Окно анализа: ${CYAN}${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}${RESET} ч"
+    echo -e "  Режим:        ${CYAN}${DEVICE_LIMIT_MODE:-alert}${RESET}"
+    echo
+
+    local ans
+    echo -ne "${CYAN}Лимит IP на пользователя [${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}]: ${RESET}"
+    read -r ans
+    DEVICE_LIMIT="${ans:-${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}}"
+    if ! [[ "$DEVICE_LIMIT" =~ ^[0-9]+$ ]] || [[ "$DEVICE_LIMIT" -lt 1 ]] || [[ "$DEVICE_LIMIT" -gt 50 ]]; then
+        err "Лимит должен быть числом 1-50"
+        return 1
+    fi
+
+    echo -ne "${CYAN}Окно анализа, часов [${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}]: ${RESET}"
+    read -r ans
+    DEVICE_WINDOW_HOURS="${ans:-${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}}"
+    if ! [[ "$DEVICE_WINDOW_HOURS" =~ ^[0-9]+$ ]] || [[ "$DEVICE_WINDOW_HOURS" -lt 1 ]] || [[ "$DEVICE_WINDOW_HOURS" -gt 168 ]]; then
+        err "Окно должно быть числом 1-168 часов"
+        return 1
+    fi
+
+    echo -e "${CYAN}Режим:${RESET}"
+    echo -e "  1) alert — только предупреждать"
+    echo -e "  2) lock-user — отключать пользователя при превышении"
+    echo -ne "${CYAN}Выбор [1]: ${RESET}"
+    read -r ans
+    case "${ans:-1}" in
+        1) DEVICE_LIMIT_MODE="alert" ;;
+        2) DEVICE_LIMIT_MODE="lock-user" ;;
+        *) err "Неверный режим"; return 1 ;;
+    esac
+
+    DEVICE_LIMIT_ENABLED="1"
+    save_config
+    write_device_cron
+    ok "Лимит устройств включён"
+}
+
+cmd_devices_disable() {
+    load_config
+    DEVICE_LIMIT_ENABLED="0"
+    save_config
+    write_device_cron
+}
+
+cmd_devices_menu() {
+    while true; do
+        load_config
+        hr
+        echo -e "${BOLD}  Лимит устройств / анти-шаринг${RESET}"
+        hr
+        echo -e "  ${BOLD}1)${RESET} Отчёт и проверка сейчас"
+        echo -e "  ${BOLD}2)${RESET} Настроить и включить"
+        echo -e "  ${BOLD}3)${RESET} Отключить автолимит"
+        echo -e "  ${BOLD}4)${RESET} Отключить пользователя вручную"
+        echo -e "  ${BOLD}5)${RESET} Вернуть отключенного пользователя"
+        echo -e "  ${BOLD}6)${RESET} Список отключенных"
+        echo -e "  ${BOLD}0)${RESET} Назад"
+        hr
+        echo -e "  Авто: ${CYAN}${DEVICE_LIMIT_ENABLED:-0}${RESET} | Лимит: ${CYAN}${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}${RESET} | Окно: ${CYAN}${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}ч${RESET} | Режим: ${CYAN}${DEVICE_LIMIT_MODE:-alert}${RESET}"
+        echo -ne "${CYAN}Выбор: ${RESET}"
+        read -r choice
+        case "$choice" in
+            1) cmd_devices_scan ;;
+            2) cmd_devices_config ;;
+            3) cmd_devices_disable ;;
+            4)
+                echo -ne "${CYAN}Логин: ${RESET}"; read -r u
+                device_disable_user "$u"
+                ;;
+            5)
+                echo -ne "${CYAN}Логин: ${RESET}"; read -r u
+                device_enable_user "$u"
+                ;;
+            6)
+                local shown=0
+                if [[ -s "$DISABLED_USERS_FILE" ]]; then
+                    echo -e "  ${BOLD}Naive:${RESET}"
+                    awk -F: '{print "  • " $1}' "$DISABLED_USERS_FILE"
+                    shown=1
+                fi
+                if [[ -s "$XRAY_DISABLED_USERS_FILE" ]]; then
+                    echo -e "  ${BOLD}Xray:${RESET}"
+                    awk -F: '{print "  • " $1}' "$XRAY_DISABLED_USERS_FILE"
+                    shown=1
+                fi
+                [[ "$shown" -eq 0 ]] && warn "Отключенных пользователей нет"
+                ;;
+            0) return ;;
+            *) warn "Неверный выбор" ;;
+        esac
+        echo -ne "${DIM}Enter для продолжения...${RESET}"; read -r _
     done
 }
 
@@ -2450,14 +4038,102 @@ check_update_available() {
         latest_ver=$(curl -s --max-time 5 "$GITHUB_RAW" 2>/dev/null             | grep '^VERSION='             | grep -oP '"\K[^"]+' || echo "")
         if [[ -n "$latest_ver" && "$latest_ver" != "$VERSION" ]]; then
             echo -e "\n  ${YELLOW}⬆  Доступно обновление скрипта: v${VERSION} → v${latest_ver}${RESET}"
-            echo -e "  ${YELLOW}   Меню → 13) Обновить скрипт${RESET}\n"
+            echo -e "  ${YELLOW}   Меню → 14) Обновить скрипт${RESET}\n"
         fi
     ) &
 }
 
 
 # ─── ДИАГНОСТИКА СИСТЕМЫ ──────────────────────────────────────
+cmd_diagnose_fix() {
+    load_config 2>/dev/null || true
+    load_users 2>/dev/null || true
+    hr
+    echo -e "${BOLD}  🛠 Автофикс NaiveProxy Manager${RESET}"
+    hr
+
+    local changed=0
+
+    mkdir -p "$CONFIG_DIR" "$CADDY_DIR" "$LOG_DIR" "$WEBROOT" 2>/dev/null || true
+    ensure_web_privacy_files 2>/dev/null || true
+    [[ -f "$CONFIG_FILE" ]] && chown root:root "$CONFIG_FILE" 2>/dev/null || true
+    [[ -f "$CONFIG_FILE" ]] && chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    [[ -f "$USERS_FILE" ]] && chown root:root "$USERS_FILE" 2>/dev/null || true
+    [[ -f "$USERS_FILE" ]] && chmod 600 "$USERS_FILE" 2>/dev/null || true
+    [[ -f "$XRAY_USERS_FILE" ]] && chmod 600 "$XRAY_USERS_FILE" 2>/dev/null || true
+
+    if [[ -n "${DOMAIN:-}" && -f "$USERS_FILE" && "$(active_user_count)" -gt 0 ]]; then
+        info "Перегенерирую Caddyfile по текущему режиму..."
+        if rewrite_caddyfile_current; then
+            changed=1
+        else
+            warn "Caddyfile не удалось перегенерировать"
+        fi
+    else
+        warn "Caddyfile не генерирую: не задан DOMAIN или нет активных пользователей"
+    fi
+
+    if [[ -x "$CADDY_BIN" && -f "$CADDYFILE" ]]; then
+        if "$CADDY_BIN" validate --config "$CADDYFILE" >/dev/null 2>&1; then
+            if systemctl is-active caddy >/dev/null 2>&1; then
+                systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+            else
+                systemctl restart caddy >/dev/null 2>&1 || true
+            fi
+            ok "Caddy validate/start/reload выполнен"
+        else
+            err "Caddyfile всё ещё невалиден: caddy validate --config $CADDYFILE"
+        fi
+    else
+        warn "Caddy binary или Caddyfile отсутствует. Если модуль forward_proxy пропал — запусти: sudo bash naiveproxy.sh update"
+    fi
+
+    if command -v ufw >/dev/null 2>&1; then
+        setup_firewall || true
+        [[ -n "${HYSTERIA_PORT:-}" ]] && ufw allow "${HYSTERIA_PORT}/udp" comment "Hysteria2 QUIC" >/dev/null 2>&1 || true
+        if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
+            ufw allow "${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}/tcp" comment "Xray REALITY" >/dev/null 2>&1 || true
+            ufw allow "${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}/udp" comment "Xray mKCP" >/dev/null 2>&1 || true
+            ufw allow "${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}/tcp" comment "Xray gRPC" >/dev/null 2>&1 || true
+        fi
+        ok "UFW правила проверены/обновлены"
+    else
+        apt-get update -qq && apt-get install -y -q ufw && setup_firewall || warn "Не удалось установить/настроить UFW"
+    fi
+
+    if [[ "${DEVICE_LIMIT_ENABLED:-0}" == "1" ]]; then
+        write_device_cron
+    fi
+
+    if command -v fail2ban-client >/dev/null 2>&1; then
+        systemctl restart fail2ban >/dev/null 2>&1 || true
+    fi
+
+    if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+        if "$XRAY_BIN" run -test -config "$XRAY_CONFIG" >/dev/null 2>&1; then
+            systemctl restart xray >/dev/null 2>&1 || true
+            ok "Xray config валиден, сервис перезапущен"
+        else
+            warn "Xray config невалиден. Попробуй: sudo bash naiveproxy.sh xray-install"
+        fi
+    fi
+
+    if [[ "${WARP_PROXY_ENABLED:-0}" == "1" ]] && command -v warp-cli >/dev/null 2>&1; then
+        systemctl enable --now warp-svc >/dev/null 2>&1 || systemctl enable --now cloudflare-warp >/dev/null 2>&1 || true
+        warp_cli connect >/dev/null 2>&1 || true
+    fi
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    ok "Автофикс завершён"
+    [[ "$changed" -eq 1 ]] && info "После автофикса можно проверить: sudo bash naiveproxy.sh diagnose"
+}
+
 cmd_diagnose() {
+    if [[ "${1:-}" == "--fix" || "${1:-}" == "fix" ]]; then
+        cmd_diagnose_fix
+        return
+    fi
+
     load_config 2>/dev/null || true
 
     local pass=0 warn=0 fail=0
@@ -2557,7 +4233,7 @@ cmd_diagnose() {
 
         # Пользователи
         local user_count=0
-        [[ -f "${USERS_FILE}" ]] && user_count=$(grep -c "." "${USERS_FILE}" 2>/dev/null || echo 0)
+        [[ -f "${USERS_FILE}" ]] && user_count=$(get_users | wc -l)
         if [[ ${user_count} -gt 0 ]]; then
             _ok "Пользователей: ${user_count}"
         else
@@ -2687,6 +4363,51 @@ cmd_diagnose() {
         _warn "Fail2Ban не запущен — SSH не защищён от брутфорса"
     fi
 
+    # WARP proxy mode — опционально, локальный порт наружу не открывается
+    if command -v warp-cli &>/dev/null; then
+        local warp_port warp_trace
+        warp_port="${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+        if ss -tlnp 2>/dev/null | grep -q "127.0.0.1:${warp_port} "; then
+            _ok "WARP proxy слушает локально: 127.0.0.1:${warp_port}"
+        else
+            _warn "WARP установлен, но локальный proxy порт ${warp_port} не слушается"
+        fi
+
+        warp_trace=$(curl -fsSL --max-time 10 --socks5-hostname "127.0.0.1:${warp_port}" \
+            https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)
+        if echo "$warp_trace" | grep -q '^warp=on'; then
+            _ok "WARP proxy test: warp=on"
+        elif [[ -n "$warp_trace" ]]; then
+            _warn "WARP proxy отвечает, но trace не показал warp=on"
+        else
+            _warn "WARP proxy test не прошёл"
+        fi
+    else
+        _info "WARP proxy mode не установлен (опционально: меню → 21)"
+    fi
+
+    if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
+        if systemctl is-active xray &>/dev/null; then
+            _ok "Xray: сервис активен"
+        else
+            _warn "Xray установлен, но сервис не активен"
+        fi
+        if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]] && "$XRAY_BIN" run -test -config "$XRAY_CONFIG" >/dev/null 2>&1; then
+            _ok "Xray config валиден"
+        else
+            _warn "Xray config не проверен или содержит ошибку"
+        fi
+        if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+            if ss -tlnp 2>/dev/null | grep -q ":443 "; then
+                _ok "Xray fallback hub: порт 443 слушается"
+            else
+                _fail "Xray fallback hub включён, но порт 443 не слушается"
+            fi
+        fi
+    else
+        _info "Xray Modern не установлен (опционально: меню → 23)"
+    fi
+
     echo
 
     # ── БЛОК 5: РЕСУРСЫ ───────────────────────────────────────
@@ -2767,6 +4488,24 @@ print(errs)
             _warn "Логи: ${log_errors} ошибок в последних 100 запросах"
         fi
         _info "CONNECT туннелей в последних 100 записях: ${connect_count}"
+
+        if [[ "${DEVICE_LIMIT_ENABLED:-0}" == "1" ]]; then
+            local dev_report dev_over
+            dev_report=$(mktemp)
+            if device_usage_report "${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}" > "$dev_report"; then
+                dev_over=$(awk -F'\t' -v limit="${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}" '$2+0 > limit {c++} END{print c+0}' "$dev_report")
+                if [[ "$dev_over" -eq 0 ]]; then
+                    _ok "Лимит устройств: превышений нет"
+                else
+                    _warn "Лимит устройств: пользователей с превышением: ${dev_over}"
+                fi
+            else
+                _warn "Лимит устройств включён, но naive.log не найден"
+            fi
+            rm -f "$dev_report"
+        else
+            _info "Лимит устройств выключен (опционально: меню → 22)"
+        fi
     else
         _warn "Лог файл не найден: ${LOG_DIR}/access.log"
     fi
@@ -2878,6 +4617,30 @@ tg_reply() {
     curl -s --max-time 10         -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage"         --data-urlencode "chat_id=${chat_id}"         --data-urlencode "parse_mode=HTML"         --data-urlencode "text=${message}"         >/dev/null 2>&1 || true
 }
 
+tg_reply_pre() {
+    local chat_id="$1"
+    local title="$2"
+    local content="$3"
+    content=$(printf '%s' "$content" | sed -r 's/\x1B\[[0-9;]*[mK]//g' | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' | head -c 3400)
+    [[ -z "$content" ]] && content="нет вывода"
+    tg_reply "$chat_id" "${title}
+<pre>${content}</pre>"
+}
+
+tg_reply_file_tail() {
+    local chat_id="$1"
+    local title="$2"
+    local file="$3"
+    local lines="${4:-60}"
+    local content
+    if [[ -f "$file" ]]; then
+        content=$(tail -n "$lines" "$file" 2>/dev/null || true)
+    else
+        content="файл не найден: ${file}"
+    fi
+    tg_reply_pre "$chat_id" "$title" "$content"
+}
+
 # Отправка фото (QR код)
 tg_send_photo() {
     local chat_id="$1"
@@ -2957,11 +4720,22 @@ tg_handle_command() {
 /adduser логин пароль — добавить пользователя
 /deluser логин — удалить пользователя
 /qr логин — QR код для подключения
+/sub логин — страница подписки пользователя
+/subreset логин — перевыпустить ссылку подписки
+/devices — отчёт по лимиту устройств
+/lockuser логин — отключить пользователя
+/unlockuser логин — вернуть пользователя
+
+🧬 <b>Xray / Modern</b>
+/xray логин — ссылки VLESS/Trojan/REALITY
+/xraystatus — статус Xray
 
 ⚙️ <b>Управление</b>
 /restart — перезапустить Caddy
 /update — обновить Caddy
 /selfupdate — обновить скрипт
+/diagfix — автофикс диагностики
+/privatepage — личная фейковая страница
 /admins — список администраторов
 /addadmin ID — добавить администратора
 /deladmin ID — удалить администратора
@@ -3152,7 +4926,7 @@ ${user_list}"
 
             printf '%s:%s\n' "${new_user}" "${new_pass}" >> "${USERS_FILE}"
 
-            if write_caddyfile 2>/dev/null; then
+            if rewrite_caddyfile_current 2>/dev/null; then
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null
                 local uri="naive+https://${new_user}:${new_pass}@${DOMAIN}:443"
                 tg_reply "${chat_id}" "✅ <b>Пользователь добавлен</b>
@@ -3179,8 +4953,12 @@ ${user_list}"
                 return
             fi
 
+            if [[ "$(active_user_count)" -le 1 ]]; then
+                tg_reply "${chat_id}" "❌ Нельзя удалить последнего активного пользователя"
+                return
+            fi
             awk -F: -v user="${del_user}" '$1 != user' "${USERS_FILE}" > "${USERS_FILE}.tmp"                 && mv "${USERS_FILE}.tmp" "${USERS_FILE}"
-            write_caddyfile
+            rewrite_caddyfile_current
             systemctl reload caddy 2>/dev/null || systemctl restart caddy
 
             tg_reply "${chat_id}" "🗑 Пользователь <code>${del_user}</code> удалён"
@@ -3237,6 +5015,141 @@ ${user_list}"
                 tg_reply "${chat_id}" "📱 <b>URI для ${qr_user}:</b>
 <code>${uri}</code>
 (установи qrencode на сервере для QR картинки)"
+            fi
+            ;;
+
+        /sub)
+            local sub_user="${args%% *}"
+            if [[ -z "${sub_user}" ]]; then
+                sub_user=$(get_users | head -1 | cut -d: -f1)
+                [[ -z "$sub_user" && -s "$XRAY_USERS_FILE" ]] && sub_user=$(head -1 "$XRAY_USERS_FILE" | cut -d: -f1)
+            fi
+            if [[ -z "$sub_user" ]]; then
+                tg_reply "${chat_id}" "❌ Нет пользователей. Создай Naive или Xray пользователя."
+                return
+            fi
+            local sub_out sub_rc
+            sub_out=$(generate_subscription_page "$sub_user" 2>&1)
+            sub_rc=$?
+            if [[ "$sub_rc" -eq 0 ]]; then
+                tg_reply "${chat_id}" "🔗 <b>Подписка для ${sub_user}</b>
+<code>${sub_out}</code>
+
+Raw links:
+<code>${sub_out}links.txt</code>"
+            else
+                tg_reply_pre "${chat_id}" "❌ Ошибка создания подписки" "$sub_out"
+            fi
+            ;;
+
+        /subreset)
+            local reset_user="${args%% *}"
+            if [[ -z "$reset_user" ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /subreset логин"
+                return
+            fi
+            local reset_out reset_rc
+            reset_out=$(cmd_subscription_reset "$reset_user" 2>&1)
+            reset_rc=$?
+            if [[ "$reset_rc" -eq 0 ]]; then
+                tg_reply_pre "${chat_id}" "✅ Подписка перевыпущена" "$reset_out"
+            else
+                tg_reply_pre "${chat_id}" "❌ Ошибка перевыпуска подписки" "$reset_out"
+            fi
+            ;;
+
+        /devices)
+            local dev_tmp dev_rc
+            dev_tmp=$(mktemp)
+            cmd_devices_scan > "$dev_tmp" 2>&1
+            dev_rc=$?
+            if [[ "$dev_rc" -eq 0 ]]; then
+                tg_reply_file_tail "${chat_id}" "📱 <b>Лимит устройств</b>" "$dev_tmp" 80
+            else
+                tg_reply_file_tail "${chat_id}" "⚠️ <b>Лимит устройств</b>" "$dev_tmp" 80
+            fi
+            rm -f "$dev_tmp"
+            ;;
+
+        /lockuser)
+            local lock_user="${args%% *}"
+            if [[ -z "$lock_user" ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /lockuser логин"
+                return
+            fi
+            local lock_out lock_rc
+            lock_out=$(device_disable_user "$lock_user" 2>&1)
+            lock_rc=$?
+            if [[ "$lock_rc" -eq 0 ]]; then
+                tg_reply_pre "${chat_id}" "🔒 Пользователь отключён" "$lock_out"
+            else
+                tg_reply_pre "${chat_id}" "❌ Не удалось отключить пользователя" "$lock_out"
+            fi
+            ;;
+
+        /unlockuser)
+            local unlock_user="${args%% *}"
+            if [[ -z "$unlock_user" ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /unlockuser логин"
+                return
+            fi
+            local unlock_out unlock_rc
+            unlock_out=$(device_enable_user "$unlock_user" 2>&1)
+            unlock_rc=$?
+            if [[ "$unlock_rc" -eq 0 ]]; then
+                tg_reply_pre "${chat_id}" "🔓 Пользователь возвращён" "$unlock_out"
+            else
+                tg_reply_pre "${chat_id}" "❌ Не удалось вернуть пользователя" "$unlock_out"
+            fi
+            ;;
+
+        /xray)
+            local x_user="${args%% *}"
+            if [[ ! -s "$XRAY_USERS_FILE" ]]; then
+                tg_reply "${chat_id}" "❌ Xray пользователи не найдены. Сначала настрой Xray: sudo bash naiveproxy.sh xray-install"
+                return
+            fi
+            [[ -z "$x_user" ]] && x_user=$(head -1 "$XRAY_USERS_FILE" | cut -d: -f1)
+            local x_out x_rc
+            x_out=$(print_xray_client_config "$x_user" 2>&1)
+            x_rc=$?
+            if [[ "$x_rc" -eq 0 ]]; then
+                tg_reply_pre "${chat_id}" "🧬 Xray ссылки для ${x_user}" "$x_out"
+            else
+                tg_reply_pre "${chat_id}" "❌ Xray config недоступен" "$x_out"
+            fi
+            ;;
+
+        /xraystatus)
+            local xs_tmp
+            xs_tmp=$(mktemp)
+            cmd_xray_status > "$xs_tmp" 2>&1
+            tg_reply_file_tail "${chat_id}" "🧬 <b>Xray статус</b>" "$xs_tmp" 80
+            rm -f "$xs_tmp"
+            ;;
+
+        /diagfix)
+            local fix_tmp fix_rc
+            fix_tmp=$(mktemp)
+            tg_reply "${chat_id}" "🛠 Запускаю автофикс, подожди..."
+            cmd_diagnose_fix > "$fix_tmp" 2>&1
+            fix_rc=$?
+            if [[ "$fix_rc" -eq 0 ]]; then
+                tg_reply_file_tail "${chat_id}" "✅ <b>Автофикс завершён</b>" "$fix_tmp" 80
+            else
+                tg_reply_file_tail "${chat_id}" "⚠️ <b>Автофикс завершился с ошибкой</b>" "$fix_tmp" 80
+            fi
+            rm -f "$fix_tmp"
+            ;;
+
+        /privatepage)
+            local private_out private_rc
+            private_out=$(install_private_camouflage_page 2>&1)
+            private_rc=$?
+            if [[ "$private_rc" -eq 0 ]]; then
+                tg_reply_pre "${chat_id}" "🎭 Личная фейковая страница" "$private_out"
+            else
+                tg_reply_pre "${chat_id}" "❌ Ошибка личной страницы" "$private_out"
             fi
             ;;
 
@@ -3908,6 +5821,19 @@ cmd_status() {
             && ok "Hysteria 2: работает на UDP/${HYSTERIA_PORT:-8443}" \
             || warn "Hysteria 2: установлен, но не работает"
     fi
+    if command -v warp-cli &>/dev/null; then
+        ok "WARP proxy: установлен, порт ${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+    fi
+    if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
+        systemctl is-active --quiet xray 2>/dev/null \
+            && ok "Xray: работает (fallback 443: ${XRAY_FALLBACK_ENABLED:-0})" \
+            || warn "Xray: установлен, но не работает"
+    fi
+    if [[ "${DEVICE_LIMIT_ENABLED:-0}" == "1" ]]; then
+        ok "Лимит устройств: ${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT} IP / ${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT} ч (${DEVICE_LIMIT_MODE:-alert})"
+    else
+        warn "Лимит устройств: выключен"
+    fi
     check_cert "${DOMAIN:-}"
     echo
     info "Последние 10 строк лога:"
@@ -3991,7 +5917,10 @@ cmd_remove() {
     systemctl disable caddy 2>/dev/null || true
     systemctl stop hysteria 2>/dev/null || true
     systemctl disable hysteria 2>/dev/null || true
-    rm -f "$CADDY_SERVICE" "$CADDY_BIN" "$CADDYFILE" "$HYSTERIA_SERVICE" "$HYSTERIA_BIN" "$HYSTERIA_CONFIG"
+    systemctl stop xray 2>/dev/null || true
+    systemctl disable xray 2>/dev/null || true
+    systemctl stop warp-svc cloudflare-warp >/dev/null 2>&1 || true
+    rm -f "$CADDY_SERVICE" "$CADDY_BIN" "$CADDYFILE" "$HYSTERIA_SERVICE" "$HYSTERIA_BIN" "$HYSTERIA_CONFIG" "$XRAY_SERVICE" "$XRAY_BIN" "$XRAY_CONFIG" "$DEVICE_CRON"
     [[ -n "${CONFIG_DIR:-}" && "$CONFIG_DIR" != "/" ]] && rm -rf "$CONFIG_DIR"
     systemctl daemon-reload
 
@@ -3999,6 +5928,9 @@ cmd_remove() {
     ufw delete allow 443/tcp >/dev/null 2>&1 || true
     ufw delete allow 443/udp >/dev/null 2>&1 || true
     ufw delete allow "${HYSTERIA_PORT:-8443}/udp" >/dev/null 2>&1 || true
+    ufw delete allow "${XRAY_REALITY_PORT:-8444}/tcp" >/dev/null 2>&1 || true
+    ufw delete allow "${XRAY_MKCP_PORT:-8446}/udp" >/dev/null 2>&1 || true
+    ufw delete allow "${XRAY_GRPC_PORT:-8447}/tcp" >/dev/null 2>&1 || true
 
     ( crontab -l 2>/dev/null | grep -v "naiveproxy\|monitor\.sh" || true ) | crontab -
 
@@ -4039,6 +5971,25 @@ show_menu() {
             || hysteria_str="${RED}остановлен${RESET}"
     fi
     echo -e "   Hysteria 2: ${hysteria_str}"
+    local warp_str="${YELLOW}не установлен${RESET}"
+    if command -v warp-cli &>/dev/null; then
+        warp_str="${GREEN}127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}${RESET}"
+        [[ "${WARP_PROXY_ENABLED:-0}" == "1" ]] || warp_str="${YELLOW}установлен${RESET}"
+    fi
+    echo -e "   WARP proxy: ${warp_str}"
+    local xray_str="${YELLOW}не установлен${RESET}"
+    if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
+        systemctl is-active --quiet xray 2>/dev/null \
+            && xray_str="${GREEN}active${RESET}" \
+            || xray_str="${RED}остановлен${RESET}"
+        [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]] && xray_str="${xray_str} ${CYAN}443-fallback${RESET}"
+    fi
+    echo -e "   Xray Modern: ${xray_str}"
+    local device_str="${YELLOW}выкл${RESET}"
+    if [[ "${DEVICE_LIMIT_ENABLED:-0}" == "1" ]]; then
+        device_str="${GREEN}${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}/${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}ч ${DEVICE_LIMIT_MODE:-alert}${RESET}"
+    fi
+    echo -e "   Лимит устройств: ${device_str}"
     hr
     echo -e "   ${BOLD}1)${RESET}  Установить NaiveProxy"
     echo -e "   ${BOLD}2)${RESET}  Статус"
@@ -4057,13 +6008,19 @@ show_menu() {
     echo -e "   ──────────────────────────"
     echo -e "   ${BOLD}12)${RESET} 🔒 SSH Hardening"
     echo -e "   ${BOLD}13)${RESET} 🔄 Обновить систему"
-    echo -e "   ${BOLD}14)${RESET} ⬆️  Обновить скрипт
-   ${BOLD}15)${RESET} 🎭 Обновить камуфляж"
+    echo -e "   ${BOLD}14)${RESET} ⬆️  Обновить скрипт"
+    echo -e "   ${BOLD}15)${RESET} 🎭 Обновить камуфляж"
     echo -e "   ${BOLD}19)${RESET} ♻️  Reload Caddy без разрыва"
     echo -e "   ${BOLD}20)${RESET} ⚡ Hysteria 2 (UDP/8443, без конфликта)"
+    echo -e "   ${BOLD}21)${RESET} 🌀 WARP proxy mode (127.0.0.1)"
+    echo -e "   ${BOLD}22)${RESET} 📱 Лимит устройств / анти-шаринг"
+    echo -e "   ${BOLD}23)${RESET} 🧬 Xray VLESS/Trojan/REALITY fallback"
+    echo -e "   ${BOLD}24)${RESET} 🛠 Diagnose --fix"
+    echo -e "   ${BOLD}25)${RESET} 🔗 Страница подписки пользователя"
+    echo -e "   ${BOLD}26)${RESET} 🎭 Личная фейковая страница"
     echo -e "   ${BOLD}0)${RESET}  Выход"
     hr
-    echo -ne "${CYAN}Выбор [0-20]: ${RESET}"
+    echo -ne "${CYAN}Выбор [0-26]: ${RESET}"
 }
 
 # ─── MAIN ────────────────────────────────────────────────────
@@ -4076,7 +6033,7 @@ main() {
         case "$1" in
             install)   cmd_install ;;
             status)    cmd_status ;;
-            config)    print_client_config ;;
+            config)    print_client_config "${2:-}" ;;
             reload)    cmd_reload ;;
             restart)   cmd_restart ;;
             update)    cmd_update ;;
@@ -4090,6 +6047,29 @@ main() {
             hysteria-status|hy2-status) cmd_hysteria_status ;;
             hysteria-logs|hy2-logs) cmd_hysteria_logs ;;
             hysteria-remove|hy2-remove) cmd_hysteria_remove ;;
+            warp) cmd_warp_menu ;;
+            warp-install) cmd_warp_install ;;
+            warp-config) print_warp_proxy_config ;;
+            warp-status) cmd_warp_status ;;
+            warp-test) cmd_warp_test ;;
+            warp-logs) cmd_warp_logs ;;
+            warp-disable) cmd_warp_disable ;;
+            warp-remove) cmd_warp_remove ;;
+            xray) cmd_xray_menu ;;
+            xray-install) cmd_xray_install ;;
+            xray-config) print_xray_client_config "${2:-}" ;;
+            xray-status) cmd_xray_status ;;
+            xray-logs) cmd_xray_logs ;;
+            xray-remove) cmd_xray_remove ;;
+            devices) cmd_devices_menu ;;
+            devices-scan) cmd_devices_scan ;;
+            devices-config) cmd_devices_config ;;
+            devices-disable) cmd_devices_disable ;;
+            devices-lock) device_disable_user "${2:-}" ;;
+            devices-unlock) device_enable_user "${2:-}" ;;
+            subscription|sub) cmd_subscription_user "${2:-}" ;;
+            subscription-reset|sub-reset) cmd_subscription_reset "${2:-}" ;;
+            private-page) install_private_camouflage_page "${2:-}" ;;
             tg-stats)      tg_send_stats; ok "Отправлено" ;;
             ssh-hardening) cmd_ssh_hardening ;;
             ssh-rescue)    cmd_ssh_rescue ;;
@@ -4098,7 +6078,7 @@ main() {
             domains)     load_config; cmd_domains ;;
             qr)          load_config; print_client_config ;;
             ssh-key)     cat "${CONFIG_DIR}/ssh_private_key" 2>/dev/null || err "Ключ не найден: ${CONFIG_DIR}/ssh_private_key" ;;
-            diagnose)    cmd_diagnose ;;
+            diagnose)    cmd_diagnose "${2:-}" ;;
             dns)         cmd_dns_menu ;;
             dns-install) cmd_dns_install ;;
             dns-update)  cmd_dns_update ;;
@@ -4114,7 +6094,7 @@ main() {
                 echo "GitHub:   github.com/ivan-yurich/naiveproxy"
                 ;;
             *) err "Неизвестная команда: $1"
-               echo "Доступные: install status config reload restart update remove logs monitor users hysteria hy2 tg-stats ssh-hardening ssh-rescue sysupdate cert domains self-update version camouflage"
+               echo "Доступные: install status config [user] reload restart update remove logs monitor users hysteria hy2 warp xray devices subscription private-page tg-stats ssh-hardening ssh-rescue sysupdate cert domains self-update version camouflage"
                exit 1 ;;
         esac
         exit 0
@@ -4148,6 +6128,12 @@ main() {
             18) cmd_donate ;;
             19) cmd_reload ;;
             20) cmd_hysteria_menu ;;
+            21) cmd_warp_menu ;;
+            22) cmd_devices_menu ;;
+            23) cmd_xray_menu ;;
+            24) cmd_diagnose_fix ;;
+            25) cmd_subscription_user ;;
+            26) install_private_camouflage_page ;;
             0)  echo -e "${GREEN}Пока!${RESET}"; exit 0 ;;
             *)  warn "Неверный выбор" ;;
         esac

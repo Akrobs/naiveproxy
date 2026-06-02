@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.0.0-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.5.0-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -89,7 +89,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### 🤖 Convenience
 **Telegram control**
-16 commands + multi-admin + QR code in chat
+25+ commands + multi-admin + QR, subscriptions and Xray in chat
 
 </td>
 </tr>
@@ -97,7 +97,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ---
 
-## 🎉 What's new in v5.0.0
+## 🎉 What's new in v5.5.0
 
 <table>
 <tr>
@@ -122,9 +122,16 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### ⚡ New features
 
+🔗 **User subscription pages** — per-user `/s/<token>/` secret URL
+🎭 **Private camouflage page** — personal `/p/<token>/` secret URL
+🤖 **Telegram bot v2** — `/sub`, `/devices`, `/xray`, `/diagfix`, `/privatepage`
+🌀 **Cloudflare WARP proxy mode** — local `127.0.0.1:40000`
+🧬 **Xray Modern** — VLESS/Trojan/REALITY + 443 fallback hub
+📱 **Device limit** — Naive + Xray, up to 5 IPs per user
+🛠 **Diagnose --fix** — terminal auto-fix for common issues
 ⚡ **Hysteria 2** — separate UDP/8443 without conflicting with Caddy
 📱 **hy2:// configs** + QR for mobile clients
-🤖 **16 bot commands** + multi-admin
+🤖 **25+ bot commands** + multi-admin
 🚫 **DNS blocking** ~1.5M domains + DoT
 🔍 **Diagnostics** — 7 blocks, 18+ checks
 🔒 **SSH Hardening** — ED25519, `ssh.socket` fix
@@ -264,7 +271,7 @@ Encrypted queries to Cloudflare and Google
 
 ### 🤖 Telegram Bot
 
-⚙️ **16 commands** — full control
+⚙️ **25+ commands** — full control
 👥 **Multi-admin** — multiple administrators
 📱 **QR code as image** — right in chat
 👤 **User management** — `/adduser`, `/deluser`
@@ -311,7 +318,7 @@ Encrypted queries to Cloudflare and Google
 
 ```
 ──────────────────────────────────────────────────────
-   NaiveProxy Manager v5.0.0  [ENG]
+   NaiveProxy Manager v5.5.0  [ENG]
    Status: ● running  │  Domain: proxy.example.com
    Telegram: connected  │  Users: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
@@ -331,13 +338,14 @@ Encrypted queries to Cloudflare and Google
 ### 📟 All CLI commands:
 
 <details>
-<summary><b>Click to see full list (24 commands)</b></summary>
+<summary><b>Click to see full list (32+ commands)</b></summary>
 
 ```bash
 # === Main ===
 sudo bash naiveproxy.sh install        # Full installation
 sudo bash naiveproxy.sh status         # Status + certificate
 sudo bash naiveproxy.sh config         # Config + QR code
+sudo bash naiveproxy.sh config ivan    # Unique user link
 sudo bash naiveproxy.sh qr             # QR code only
 sudo bash naiveproxy.sh cert           # Certificate only
 sudo bash naiveproxy.sh users          # User management
@@ -346,6 +354,23 @@ sudo bash naiveproxy.sh monitor        # Monitoring
 sudo bash naiveproxy.sh restart        # Restart Caddy
 sudo bash naiveproxy.sh update         # Update Caddy
 sudo bash naiveproxy.sh logs           # Logs
+
+# === Device limit ===
+sudo bash naiveproxy.sh devices        # Anti-sharing menu
+sudo bash naiveproxy.sh devices-scan   # Check violations now
+
+# === Xray Modern ===
+sudo bash naiveproxy.sh xray           # Xray menu
+sudo bash naiveproxy.sh xray-install   # VLESS/Trojan/REALITY + fallback
+sudo bash naiveproxy.sh xray-config    # Show Xray links
+sudo bash naiveproxy.sh xray-status    # Xray status
+sudo bash naiveproxy.sh xray-remove    # Remove Xray / return Caddy
+
+# === Subscriptions and pages ===
+sudo bash naiveproxy.sh subscription ivan       # User subscription page
+sudo bash naiveproxy.sh subscription-reset ivan # Rotate secret URL
+sudo bash naiveproxy.sh private-page            # Private camouflage page
+sudo bash naiveproxy.sh private-page reset      # Rotate page secret URL
 
 # === Telegram ===
 sudo bash naiveproxy.sh tg-stats       # Stats to Telegram
@@ -360,6 +385,7 @@ sudo bash naiveproxy.sh dns-status     # Blocker status
 
 # === Diagnostics ===
 sudo bash naiveproxy.sh diagnose       # 7-block diagnostics
+sudo bash naiveproxy.sh diagnose --fix # Auto-fix common issues
 
 # === SSH ===
 sudo bash naiveproxy.sh ssh-hardening  # SSH Hardening
@@ -394,7 +420,7 @@ systemctl stop naiveproxy-bot
 journalctl -u naiveproxy-bot -f
 ```
 
-### 📋 All 16 commands:
+### 📋 All 25+ commands:
 
 <table>
 <tr>
@@ -409,8 +435,10 @@ journalctl -u naiveproxy-bot -f
 `/status` — Status + RAM
 `/stats` — Full statistics
 `/diagnose` — 7-block diagnostics
+`/diagfix` — Auto-fix issues
 `/logs` — Last 20 logs
 `/cert` — TLS status 🟢/🟡/🔴
+`/xraystatus` — Xray status
 
 </td>
 <td valign="top">
@@ -419,6 +447,12 @@ journalctl -u naiveproxy-bot -f
 `/adduser login pass` — Add
 `/deluser login` — Remove
 `/qr login` — QR code image
+`/sub login` — Subscription page
+`/subreset login` — Rotate secret URL
+`/devices` — Device report
+`/lockuser login` — Disable
+`/unlockuser login` — Restore
+`/xray login` — Xray links
 `/restart` — Restart Caddy
 `/update` — Update Caddy
 
@@ -429,11 +463,25 @@ journalctl -u naiveproxy-bot -f
 `/addadmin ID` — Add admin
 `/deladmin ID` — Remove admin
 `/selfupdate` — Update script
+`/privatepage` — Private camouflage page
 `/donate` — Support project
 
 </td>
 </tr>
 </table>
+
+### 🔗 User subscriptions:
+
+```bash
+# Create/show user subscription page:
+sudo bash naiveproxy.sh subscription ivan
+
+# If the link leaks, rotate the token:
+sudo bash naiveproxy.sh subscription-reset ivan
+```
+
+The page is created under a secret URL like `https://domain/s/<token>/`, with raw import links available as `links.txt`.
+It includes NaiveProxy URI, naive-client JSON, Xray/VLESS/Trojan links and setup hints for Windows, Android, iOS/macOS and Linux.
 
 ### 🔐 Multi-admin:
 
@@ -504,7 +552,7 @@ sudo bash naiveproxy.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Diagnostics NaiveProxy Manager v5.0.0               │
+│  🔍 Diagnostics NaiveProxy Manager v5.5.0               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -544,7 +592,7 @@ sudo bash naiveproxy.sh diagnose
   ✅ journald: no critical errors
 
 [7/7] Version and updates
-  ✅ Script up to date: v5.0.0
+  ✅ Script up to date: v5.5.0
   ✅ SSH Hardening done
 
 ══════════════════════════════════════════════════════════
@@ -1094,7 +1142,7 @@ rm -rf /etc/caddy /etc/naiveproxy /etc/unbound
 <tr><td>SSH key auto-save</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>QR code</td><td align="center">✅</td><td align="center">❌</td><td align="center">⚠️</td></tr>
 <tr><td><strong>DNS Ad Blocking</strong></td><td align="center">✅ ~1.5M</td><td align="center">❌</td><td align="center">❌</td></tr>
-<tr><td><strong>Telegram bot with commands</strong></td><td align="center">✅ 16 cmds</td><td align="center">⚠️ basic</td><td align="center">⚠️ basic</td></tr>
+<tr><td><strong>Telegram bot with commands</strong></td><td align="center">✅ 25+ cmds</td><td align="center">⚠️ basic</td><td align="center">⚠️ basic</td></tr>
 <tr><td>System diagnostics (7 blocks)</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Fail2Ban 3 levels</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Camouflage page</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td></tr>
@@ -1180,7 +1228,73 @@ for donors
 ## 📜 Changelog
 
 <details>
-<summary><b>v5.0.0</b> — Hysteria 2 + NaiveProxy ← CURRENT</summary>
+<summary><b>v5.5.0</b> — Telegram v2 + User Subscriptions ← CURRENT</summary>
+
+**🔗 Subscriptions and Telegram:**
+- Per-user subscription page: `subscription USER`
+- Secret URL `/s/<token>/`, not a plain login-based path
+- `links.txt` for client import and HTML setup page for Windows/Android/iOS/macOS/Linux
+- Token rotation: `subscription-reset USER`
+- Private camouflage page under `/p/<token>/`
+- Telegram commands: `/sub`, `/subreset`, `/devices`, `/lockuser`, `/unlockuser`, `/xray`, `/xraystatus`, `/diagfix`, `/privatepage`
+- `diagnose --fix` restores privacy files for `/s/` and `/p/`
+
+</details>
+
+<details>
+<summary><b>v5.4.0</b> — Device Limit + Diagnose Fix</summary>
+
+**📱 Device limit and auto-fix:**
+- Device limit now reads both Caddy/Naive and Xray access logs
+- `lock-user` disables the user in Naive and Xray when the login exists in both
+- `devices-unlock` restores the user in both subsystems
+- Added `diagnose --fix` for terminal auto-fix of common issues
+- Auto-fix repairs config permissions, Caddyfile, services, UFW ports, device-limit cron and Xray restart
+
+</details>
+
+<details>
+<summary><b>v5.3.0</b> — Xray Modern Transports</summary>
+
+**🧬 Xray VLESS/Trojan/REALITY:**
+- Added a dedicated Xray-core module
+- VLESS TCP TLS + XTLS Vision support
+- VLESS REALITY TCP support
+- mKCP, WebSocket, gRPC, HTTPUpgrade and XHTTP support
+- Trojan WebSocket through fallback
+- Optional `443` fallback hub: Xray listens on 443 while Caddy/NaiveProxy moves to a local fallback port
+- `xray-remove` returns Caddy back to 443
+
+</details>
+
+<details>
+<summary><b>v5.2.0</b> — Device Limit / Anti-sharing</summary>
+
+**📱 Unique links and device limit:**
+- Client config can be printed for a specific user: `config USER`
+- Added a unique-IP limit per user over a time window
+- Default policy is designed around `5` IPs over `24` hours
+- Modes: `alert` and `lock-user`
+- Automatic scan via cron every 15 minutes
+- Open-proxy protection: Caddyfile generation refuses zero active users
+
+</details>
+
+<details>
+<summary><b>v5.1.0</b> — WARP Proxy Mode</summary>
+
+**🌀 Cloudflare WARP in safe proxy mode:**
+- WARP runs as a local proxy on `127.0.0.1:40000`
+- The VPS default route is not changed, so SSH should stay reachable
+- Added install, status, `warp=on` test, logs, disable and removal actions
+- Diagnostics now checks WARP when it is installed
+- Added a local proxy note: use it only with apps that support SOCKS5/HTTP proxy
+- Config saving now uses safer shell escaping through `printf %q`
+
+</details>
+
+<details>
+<summary><b>v5.0.0</b> — Hysteria 2 + NaiveProxy</summary>
 
 **⚡ Hysteria 2 added without conflicting with NaiveProxy:**
 - NaiveProxy stays on `TCP/443` through Caddy
