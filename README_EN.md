@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.5.0-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.5.1-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -97,7 +97,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ---
 
-## 🎉 What's new in v5.5.0
+## 🎉 What's new in v5.5.1
 
 <table>
 <tr>
@@ -105,6 +105,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### 🐛 Bug fixes
 
+✅ Xray REALITY key parsing for newer `xray x25519` output
 ✅ Broken quotes in DNS whitelist
 ✅ `((var++))` → `var=$((var+1))` (set -e safety)
 ✅ `/qr` command — curl conflict fix
@@ -318,7 +319,7 @@ Encrypted queries to Cloudflare and Google
 
 ```
 ──────────────────────────────────────────────────────
-   NaiveProxy Manager v5.5.0  [ENG]
+   NaiveProxy Manager v5.5.1  [ENG]
    Status: ● running  │  Domain: proxy.example.com
    Telegram: connected  │  Users: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
@@ -552,7 +553,7 @@ sudo bash naiveproxy.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Diagnostics NaiveProxy Manager v5.5.0               │
+│  🔍 Diagnostics NaiveProxy Manager v5.5.1               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -592,7 +593,7 @@ sudo bash naiveproxy.sh diagnose
   ✅ journald: no critical errors
 
 [7/7] Version and updates
-  ✅ Script up to date: v5.5.0
+  ✅ Script up to date: v5.5.1
   ✅ SSH Hardening done
 
 ══════════════════════════════════════════════════════════
@@ -1228,7 +1229,17 @@ for donors
 ## 📜 Changelog
 
 <details>
-<summary><b>v5.5.0</b> — Telegram v2 + User Subscriptions ← CURRENT</summary>
+<summary><b>v5.5.1</b> — Xray REALITY Key Parsing ← CURRENT</summary>
+
+**🧬 Xray REALITY:**
+- Fixed REALITY key parsing for newer Xray builds
+- `xray x25519` output now supports both `Public key` and `Password`
+- Added a manual check hint when key generation fails
+
+</details>
+
+<details>
+<summary><b>v5.5.0</b> — Telegram v2 + User Subscriptions</summary>
 
 **🔗 Subscriptions and Telegram:**
 - Per-user subscription page: `subscription USER`

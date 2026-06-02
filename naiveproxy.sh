@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v5.5.0 — by Иван Юрьевич
+#   NaiveProxy Manager v5.5.1 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.5.0"
+VERSION="5.5.1"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -2118,12 +2118,35 @@ ensure_xray_reality_keys() {
     XRAY_REALITY_SHORT_ID="${XRAY_REALITY_SHORT_ID:-$(openssl rand -hex 8)}"
     if [[ -z "${XRAY_REALITY_PRIVATE_KEY:-}" || -z "${XRAY_REALITY_PUBLIC_KEY:-}" ]]; then
         local key_out
-        key_out=$("$XRAY_BIN" x25519 2>/dev/null || true)
-        XRAY_REALITY_PRIVATE_KEY=$(echo "$key_out" | awk -F': ' '/Private key/{print $2; exit}')
-        XRAY_REALITY_PUBLIC_KEY=$(echo "$key_out" | awk -F': ' '/Public key/{print $2; exit}')
+        key_out=$("$XRAY_BIN" x25519 2>&1 || true)
+        XRAY_REALITY_PRIVATE_KEY=$(printf '%s\n' "$key_out" | awk -F':' '
+            {
+                label=tolower($1);
+                if (label ~ /private/) {
+                    value=$0;
+                    sub(/^[^:]*:[[:space:]]*/, "", value);
+                    gsub(/[[:space:]]+$/, "", value);
+                    print value;
+                    exit;
+                }
+            }
+        ')
+        XRAY_REALITY_PUBLIC_KEY=$(printf '%s\n' "$key_out" | awk -F':' '
+            {
+                label=tolower($1);
+                if (label ~ /public/ || label ~ /password/) {
+                    value=$0;
+                    sub(/^[^:]*:[[:space:]]*/, "", value);
+                    gsub(/[[:space:]]+$/, "", value);
+                    print value;
+                    exit;
+                }
+            }
+        ')
     fi
     if [[ -z "${XRAY_REALITY_PRIVATE_KEY:-}" || -z "${XRAY_REALITY_PUBLIC_KEY:-}" ]]; then
         err "Не смог сгенерировать REALITY ключи: xray x25519"
+        warn "Проверь вручную: ${XRAY_BIN} x25519"
         return 1
     fi
 }
