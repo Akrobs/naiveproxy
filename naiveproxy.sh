@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v5.5.6 — by Иван Юрьевич
+#   NaiveProxy Manager v5.5.7 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.5.6"
+VERSION="5.5.7"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -775,6 +775,8 @@ save_config() {
         printf 'HYSTERIA_OBFS_PASSWORD=%q\n' "${HYSTERIA_OBFS_PASSWORD:-}"
         printf 'WARP_PROXY_PORT=%q\n' "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
         printf 'WARP_PROXY_ENABLED=%q\n' "${WARP_PROXY_ENABLED:-0}"
+        printf 'WARP_MODE=%q\n' "${WARP_MODE:-off}"
+        printf 'WARP_PROTOCOL=%q\n' "${WARP_PROTOCOL:-auto}"
         printf 'DEVICE_LIMIT_ENABLED=%q\n' "${DEVICE_LIMIT_ENABLED:-0}"
         printf 'DEVICE_LIMIT=%q\n' "${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}"
         printf 'DEVICE_WINDOW_HOURS=%q\n' "${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}"
@@ -3176,6 +3178,51 @@ warp_set_proxy_mode() {
     return 1
 }
 
+warp_set_mode() {
+    local mode="$1"
+    if warp_cli mode "$mode" >/dev/null 2>&1; then
+        return 0
+    fi
+    if warp_cli set-mode "$mode" >/dev/null 2>&1; then
+        return 0
+    fi
+    err "Не удалось переключить WARP mode: ${mode}. Проверь: warp-cli mode --help"
+    return 1
+}
+
+warp_set_tunnel_protocol() {
+    local proto="$1"
+    case "$proto" in
+        MASQUE|WireGuard) ;;
+        auto|"") return 0 ;;
+        *)
+            err "Протокол WARP должен быть auto, MASQUE или WireGuard"
+            return 1
+            ;;
+    esac
+    if warp_cli tunnel protocol set "$proto" >/dev/null 2>&1; then
+        WARP_PROTOCOL="$proto"
+        ok "WARP protocol: ${proto}"
+        return 0
+    fi
+    warn "Не удалось выставить WARP protocol=${proto}. Проверь: warp-cli tunnel protocol set ${proto}"
+    return 1
+}
+
+warp_wait_connected() {
+    local i status
+    for i in {1..30}; do
+        status=$(warp_cli status 2>/dev/null || true)
+        if echo "$status" | grep -Eiq "connected|соедин"; then
+            return 0
+        fi
+        sleep 1
+    done
+    warn "WARP не подтвердил Connected за 30 секунд"
+    warp_cli status 2>/dev/null || true
+    return 1
+}
+
 warp_wait_proxy_ready() {
     local port="${1:-${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}}"
     local i status settings
@@ -3246,6 +3293,39 @@ test_warp_proxy() {
     fi
 }
 
+test_warp_full() {
+    local trace direct_ip warp_state colo gateway tmp
+    tmp=$(mktemp /tmp/warp_full_trace_XXXXXX)
+    trap 'rm -f "${tmp:-}" 2>/dev/null; trap - RETURN' RETURN
+
+    if ! curl -fsSL --connect-timeout 8 --max-time 15 \
+        https://www.cloudflare.com/cdn-cgi/trace -o "$tmp" 2>/dev/null; then
+        err "Не удалось проверить full-tunnel WARP через прямой curl"
+        warn "Проверь: warp-cli status; warp-cli settings; journalctl -u warp-svc -n 30"
+        return 1
+    fi
+
+    trace=$(cat "$tmp")
+    direct_ip=$(printf '%s\n' "$trace" | awk -F= '$1=="ip"{print $2; exit}')
+    warp_state=$(printf '%s\n' "$trace" | awk -F= '$1=="warp"{print $2; exit}')
+    colo=$(printf '%s\n' "$trace" | awk -F= '$1=="colo"{print $2; exit}')
+    gateway=$(printf '%s\n' "$trace" | awk -F= '$1=="gateway"{print $2; exit}')
+
+    echo "  mode=full-tunnel"
+    echo "  ip=${direct_ip:-unknown}"
+    echo "  colo=${colo:-unknown}"
+    echo "  warp=${warp_state:-unknown}"
+    echo "  gateway=${gateway:-unknown}"
+
+    if [[ "$warp_state" == "on" ]]; then
+        ok "Full-tunnel WARP работает: весь исходящий трафик сервера идёт через WARP"
+        return 0
+    fi
+
+    warn "Full-tunnel включён не полностью: trace не показал warp=on"
+    return 1
+}
+
 cmd_warp_install() {
     load_config
     hr
@@ -3282,8 +3362,11 @@ cmd_warp_install() {
 
     if test_warp_proxy "$WARP_PROXY_PORT"; then
         WARP_PROXY_ENABLED="1"
+        WARP_MODE="proxy"
+        WARP_PROTOCOL="MASQUE"
     else
         WARP_PROXY_ENABLED="0"
+        WARP_MODE="off"
         save_config
         return 1
     fi
@@ -3301,23 +3384,98 @@ cmd_warp_install() {
     cmd_warp_status
 }
 
+cmd_warp_full_install() {
+    load_config
+    hr
+    echo -e "${BOLD}  Cloudflare WARP full tunnel${RESET}"
+    hr
+    warn "Full tunnel меняет исходящий маршрут всего VPS через WARP."
+    warn "Входящие порты Caddy/SSH обычно остаются входящими, но на VPS проверяй через консоль провайдера."
+    warn "Если что-то пошло не так: sudo bash naiveproxy.sh warp-disable"
+    echo
+
+    echo -ne "${CYAN}DNS тоже через WARP DoH? [Y/n]: ${RESET}"
+    read -r dns_ans
+    local full_mode="warp+doh"
+    [[ "${dns_ans,,}" == "n" ]] && full_mode="warp"
+
+    echo -ne "${CYAN}Протокол [auto/MASQUE/WireGuard] (Enter = auto/RU): ${RESET}"
+    read -r proto_ans
+    proto_ans="${proto_ans:-auto}"
+    case "$proto_ans" in
+        auto|MASQUE|WireGuard) ;;
+        masque) proto_ans="MASQUE" ;;
+        wireguard|wg) proto_ans="WireGuard" ;;
+        *) err "Неверный протокол"; return 1 ;;
+    esac
+
+    install_warp_client || return 1
+    systemctl enable --now warp-svc >/dev/null 2>&1 || systemctl enable --now cloudflare-warp >/dev/null 2>&1 || true
+    warp_registration_new || return 1
+
+    local tried="" proto
+    if [[ "$proto_ans" == "auto" ]]; then
+        for proto in MASQUE WireGuard; do
+            info "Пробую WARP full tunnel: ${full_mode}, protocol=${proto}"
+            warp_set_tunnel_protocol "$proto" || true
+            warp_set_mode "$full_mode" || return 1
+            warp_cli connect >/dev/null 2>&1 || true
+            warp_wait_connected || true
+            if test_warp_full; then
+                WARP_MODE="$full_mode"
+                WARP_PROTOCOL="$proto"
+                WARP_PROXY_ENABLED="0"
+                save_config
+                tried="ok"
+                break
+            fi
+            warn "protocol=${proto} не подтвердил warp=on"
+        done
+        [[ "$tried" == "ok" ]] || { err "Full-tunnel WARP не заработал ни на MASQUE, ни на WireGuard"; return 1; }
+    else
+        warp_set_tunnel_protocol "$proto_ans" || return 1
+        warp_set_mode "$full_mode" || return 1
+        warp_cli connect >/dev/null 2>&1 || true
+        warp_wait_connected || true
+        test_warp_full || return 1
+        WARP_MODE="$full_mode"
+        WARP_PROTOCOL="$proto_ans"
+        WARP_PROXY_ENABLED="0"
+        save_config
+    fi
+
+    if [[ "${XRAY_ENABLED:-0}" == "1" && -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+        info "Пересобираю Xray config: full-tunnel использует системный маршрут WARP, без local proxy outbound..."
+        if write_xray_config && systemctl restart xray; then
+            ok "Xray перезапущен под full-tunnel WARP"
+        else
+            warn "WARP full tunnel работает, но Xray не удалось пересобрать автоматически"
+        fi
+    fi
+}
+
 print_warp_proxy_config() {
     load_config
     local port="${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
     hr
-    echo -e "${BOLD}${GREEN}  WARP proxy mode config${RESET}"
+    echo -e "${BOLD}${GREEN}  WARP modes config${RESET}"
     hr
+    echo -e "  ${BOLD}Текущий режим:${RESET} ${WARP_MODE:-off}"
+    echo -e "  ${BOLD}Текущий протокол:${RESET} ${WARP_PROTOCOL:-auto}"
+    echo
     echo -e "  ${BOLD}SOCKS5:${RESET} socks5h://127.0.0.1:${port}"
     echo -e "  ${BOLD}HTTP:${RESET}   http://127.0.0.1:${port}"
     echo
     echo -e "  ${YELLOW}Важно:${RESET} WARP local proxy подходит для приложений с SOCKS5/HTTP proxy."
-    echo -e "          Для очень долгих запросов у Cloudflare есть timeout local proxy."
-    echo -e "          NaiveProxy/Caddy не меняет upstream через WARP автоматически."
+    echo -e "          У Cloudflare Local Proxy есть ограничения для долгих запросов."
+    echo -e "          В proxy mode NaiveProxy/Caddy не меняет upstream через WARP автоматически."
     echo -e "          Xray после пересборки использует WARP outbound, если WARP включён."
+    echo -e "          Full tunnel: весь исходящий трафик VPS через WARP, проверка без -x."
     echo
     echo -e "${CYAN}  Проверка:${RESET}"
     echo -e "  curl -x http://127.0.0.1:${port} https://www.cloudflare.com/cdn-cgi/trace"
     echo -e "  curl --socks5-hostname 127.0.0.1:${port} https://www.cloudflare.com/cdn-cgi/trace"
+    echo -e "  curl https://www.cloudflare.com/cdn-cgi/trace"
     echo
     echo -e "${CYAN}  Для временного использования в shell:${RESET}"
     echo -e "  export ALL_PROXY=socks5h://127.0.0.1:${port}"
@@ -3329,8 +3487,10 @@ cmd_warp_status() {
     load_config
     local port="${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
     hr
-    echo -e "${BOLD}  WARP proxy mode статус${RESET}"
+    echo -e "${BOLD}  WARP статус${RESET}"
     hr
+    echo -e "  Config mode: ${CYAN}${WARP_MODE:-off}${RESET}"
+    echo -e "  Protocol:    ${CYAN}${WARP_PROTOCOL:-auto}${RESET}"
     if command -v warp-cli &>/dev/null; then
         ok "warp-cli: $(warp-cli --version 2>/dev/null | head -1 || echo установлен)"
         warp-cli status 2>/dev/null || true
@@ -3338,13 +3498,43 @@ cmd_warp_status() {
     else
         warn "cloudflare-warp не установлен"
     fi
-    ss -tlnp 2>/dev/null | grep -E "(127\.0\.0\.1|\*):${port}[[:space:]]|:${port}[[:space:]]" || warn "Локальный порт ${port} не слушается"
+    if [[ "${WARP_MODE:-off}" == "warp" || "${WARP_MODE:-off}" == "warp+doh" ]]; then
+        info "Full tunnel активен: local proxy порт ${port} может не слушаться, это нормально."
+    else
+        ss -tlnp 2>/dev/null | grep -E "(127\.0\.0\.1|\*):${port}[[:space:]]|:${port}[[:space:]]" || warn "Локальный порт ${port} не слушается"
+    fi
     hr
 }
 
 cmd_warp_test() {
     load_config
-    test_warp_proxy "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+    if [[ "${WARP_MODE:-}" == "warp" || "${WARP_MODE:-}" == "warp+doh" ]]; then
+        test_warp_full
+    else
+        test_warp_proxy "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+    fi
+}
+
+cmd_warp_test_full() {
+    load_config
+    test_warp_full
+}
+
+cmd_warp_protocol() {
+    load_config
+    echo -e "${BOLD}  WARP tunnel protocol${RESET}"
+    echo -e "  1) auto"
+    echo -e "  2) MASQUE"
+    echo -e "  3) WireGuard"
+    echo -ne "${CYAN}Выбор [1-3]: ${RESET}"
+    read -r choice
+    case "$choice" in
+        1|"") WARP_PROTOCOL="auto"; ok "Protocol: auto" ;;
+        2) warp_set_tunnel_protocol MASQUE || return 1 ;;
+        3) warp_set_tunnel_protocol WireGuard || return 1 ;;
+        *) warn "Неверный выбор"; return 1 ;;
+    esac
+    save_config
 }
 
 cmd_warp_logs() {
@@ -3356,7 +3546,11 @@ cmd_warp_disable() {
     load_config
     warp_cli disconnect >/dev/null 2>&1 || true
     WARP_PROXY_ENABLED="0"
+    WARP_MODE="off"
     save_config
+    if [[ "${XRAY_ENABLED:-0}" == "1" && -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+        write_xray_config >/dev/null 2>&1 && systemctl restart xray 2>/dev/null || true
+    fi
     ok "WARP отключён. Пакет оставлен установленным."
 }
 
@@ -3371,6 +3565,8 @@ cmd_warp_remove() {
     rm -f /etc/apt/sources.list.d/cloudflare-client.list
     WARP_PROXY_ENABLED="0"
     WARP_PROXY_PORT="$WARP_PROXY_PORT_DEFAULT"
+    WARP_MODE="off"
+    WARP_PROTOCOL="auto"
     save_config
     ok "cloudflare-warp удалён"
 }
@@ -3379,27 +3575,35 @@ cmd_warp_menu() {
     while true; do
         load_config
         hr
-        echo -e "${BOLD}  Cloudflare WARP proxy mode${RESET}"
+        echo -e "${BOLD}  Cloudflare WARP modes${RESET}"
         hr
-        echo -e "  ${BOLD}1)${RESET} Установить / включить proxy mode"
-        echo -e "  ${BOLD}2)${RESET} Показать proxy config"
-        echo -e "  ${BOLD}3)${RESET} Статус"
-        echo -e "  ${BOLD}4)${RESET} Проверить WARP"
-        echo -e "  ${BOLD}5)${RESET} Логи"
-        echo -e "  ${BOLD}6)${RESET} Отключить WARP"
-        echo -e "  ${BOLD}7)${RESET} Удалить WARP"
+        echo -e "  ${BOLD}1)${RESET} Включить local proxy mode (127.0.0.1)"
+        echo -e "  ${BOLD}2)${RESET} Включить full tunnel для всего VPS"
+        echo -e "  ${BOLD}3)${RESET} Выбрать протокол (auto/MASQUE/WireGuard)"
+        echo -e "  ${BOLD}4)${RESET} Показать config"
+        echo -e "  ${BOLD}5)${RESET} Статус"
+        echo -e "  ${BOLD}6)${RESET} Проверить local proxy"
+        echo -e "  ${BOLD}7)${RESET} Проверить full tunnel"
+        echo -e "  ${BOLD}8)${RESET} Логи"
+        echo -e "  ${BOLD}9)${RESET} Отключить WARP"
+        echo -e "  ${BOLD}10)${RESET} Удалить WARP"
         echo -e "  ${BOLD}0)${RESET} Назад"
+        echo
+        echo -e "  Mode: ${CYAN}${WARP_MODE:-off}${RESET} | Protocol: ${CYAN}${WARP_PROTOCOL:-auto}${RESET} | Proxy: ${CYAN}127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}${RESET}"
         hr
         echo -ne "${CYAN}Выбор: ${RESET}"
         read -r choice
         case "$choice" in
             1) cmd_warp_install ;;
-            2) print_warp_proxy_config ;;
-            3) cmd_warp_status ;;
-            4) cmd_warp_test ;;
-            5) cmd_warp_logs ;;
-            6) cmd_warp_disable ;;
-            7) cmd_warp_remove ;;
+            2) cmd_warp_full_install ;;
+            3) cmd_warp_protocol ;;
+            4) print_warp_proxy_config ;;
+            5) cmd_warp_status ;;
+            6) test_warp_proxy "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}" ;;
+            7) cmd_warp_test_full ;;
+            8) cmd_warp_logs ;;
+            9) cmd_warp_disable ;;
+            10) cmd_warp_remove ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -4712,29 +4916,42 @@ cmd_diagnose() {
         _warn "Fail2Ban не запущен — SSH не защищён от брутфорса"
     fi
 
-    # WARP proxy mode — опционально, локальный порт наружу не открывается
+    # WARP modes — proxy/full-tunnel
     if command -v warp-cli &>/dev/null; then
-        local warp_port warp_trace
+        local warp_port warp_trace warp_mode
         warp_port="${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
-        if ss -tlnp 2>/dev/null | grep -Eq "(127\.0\.0\.1|\*):${warp_port}[[:space:]]|:${warp_port}[[:space:]]"; then
-            _ok "WARP proxy слушает локально: 127.0.0.1:${warp_port}"
+        warp_mode="${WARP_MODE:-off}"
+        if [[ "$warp_mode" == "warp" || "$warp_mode" == "warp+doh" ]]; then
+            warp_trace=$(curl -fsSL --connect-timeout 5 --max-time 12 \
+                https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)
+            if echo "$warp_trace" | grep -q '^warp=on'; then
+                _ok "WARP full tunnel: warp=on (${warp_mode}, ${WARP_PROTOCOL:-auto})"
+            elif [[ -n "$warp_trace" ]]; then
+                _warn "WARP full tunnel не подтвердил warp=on"
+            else
+                _warn "WARP full tunnel test не прошёл"
+            fi
         else
-            _warn "WARP установлен, но локальный proxy порт ${warp_port} не слушается"
-        fi
+            if ss -tlnp 2>/dev/null | grep -Eq "(127\.0\.0\.1|\*):${warp_port}[[:space:]]|:${warp_port}[[:space:]]"; then
+                _ok "WARP proxy слушает локально: 127.0.0.1:${warp_port}"
+            else
+                _warn "WARP установлен, но локальный proxy порт ${warp_port} не слушается"
+            fi
 
-        warp_trace=$(curl -fsSL --connect-timeout 5 --max-time 9 -x "http://127.0.0.1:${warp_port}" \
-            https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || \
-            curl -fsSL --connect-timeout 5 --max-time 9 --socks5-hostname "127.0.0.1:${warp_port}" \
-            https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)
-        if echo "$warp_trace" | grep -q '^warp=on'; then
-            _ok "WARP proxy test: warp=on"
-        elif [[ -n "$warp_trace" ]]; then
-            _warn "WARP proxy отвечает, но trace не показал warp=on — общий IP VPS в proxy mode не меняется"
-        else
-            _warn "WARP proxy test не прошёл"
+            warp_trace=$(curl -fsSL --connect-timeout 5 --max-time 9 -x "http://127.0.0.1:${warp_port}" \
+                https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || \
+                curl -fsSL --connect-timeout 5 --max-time 9 --socks5-hostname "127.0.0.1:${warp_port}" \
+                https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null || true)
+            if echo "$warp_trace" | grep -q '^warp=on'; then
+                _ok "WARP proxy test: warp=on"
+            elif [[ -n "$warp_trace" ]]; then
+                _warn "WARP proxy отвечает, но trace не показал warp=on — общий IP VPS в proxy mode не меняется"
+            else
+                _warn "WARP proxy test не прошёл"
+            fi
         fi
     else
-        _info "WARP proxy mode не установлен (опционально: меню → 21)"
+        _info "WARP не установлен (опционально: меню → 21)"
     fi
 
     if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
@@ -6462,10 +6679,13 @@ show_menu() {
     echo -e "   Hysteria 2: ${hysteria_str}"
     local warp_str="${YELLOW}не установлен${RESET}"
     if command -v warp-cli &>/dev/null; then
-        warp_str="${GREEN}127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}${RESET}"
-        [[ "${WARP_PROXY_ENABLED:-0}" == "1" ]] || warp_str="${YELLOW}установлен${RESET}"
+        case "${WARP_MODE:-off}" in
+            proxy) warp_str="${GREEN}proxy 127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}${RESET}" ;;
+            warp|warp+doh) warp_str="${GREEN}full ${WARP_MODE}${RESET}" ;;
+            *) warp_str="${YELLOW}установлен${RESET}" ;;
+        esac
     fi
-    echo -e "   WARP proxy: ${warp_str}"
+    echo -e "   WARP: ${warp_str}"
     local xray_str="${YELLOW}не установлен${RESET}"
     if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
         systemctl is-active --quiet xray 2>/dev/null \
@@ -6501,7 +6721,7 @@ show_menu() {
     echo -e "   ${BOLD}15)${RESET} 🎭 Обновить камуфляж"
     echo -e "   ${BOLD}19)${RESET} ♻️  Reload Caddy без разрыва"
     echo -e "   ${BOLD}20)${RESET} ⚡ Hysteria 2 (UDP/8443, без конфликта)"
-    echo -e "   ${BOLD}21)${RESET} 🌀 WARP proxy mode (127.0.0.1)"
+    echo -e "   ${BOLD}21)${RESET} 🌀 WARP modes (proxy/full tunnel)"
     echo -e "   ${BOLD}22)${RESET} 📱 Лимит устройств / анти-шаринг"
     echo -e "   ${BOLD}23)${RESET} 🧬 Xray VLESS/Trojan/REALITY fallback"
     echo -e "   ${BOLD}24)${RESET} 🛠 Diagnose --fix"
@@ -6537,10 +6757,13 @@ main() {
             hysteria-logs|hy2-logs) cmd_hysteria_logs ;;
             hysteria-remove|hy2-remove) cmd_hysteria_remove ;;
             warp) cmd_warp_menu ;;
-            warp-install) cmd_warp_install ;;
+            warp-install|warp-proxy) cmd_warp_install ;;
+            warp-full|warp-full-install) cmd_warp_full_install ;;
             warp-config) print_warp_proxy_config ;;
             warp-status) cmd_warp_status ;;
             warp-test) cmd_warp_test ;;
+            warp-full-test) cmd_warp_test_full ;;
+            warp-protocol) cmd_warp_protocol ;;
             warp-logs) cmd_warp_logs ;;
             warp-disable) cmd_warp_disable ;;
             warp-remove) cmd_warp_remove ;;
@@ -6584,7 +6807,7 @@ main() {
                 echo "GitHub:   github.com/ivan-yurich/naiveproxy"
                 ;;
             *) err "Неизвестная команда: $1"
-               echo "Доступные: install status config [user] reload restart update remove logs monitor users hysteria hy2 warp xray xray-add-user [user] devices subscription private-page tg-stats ssh-hardening ssh-rescue sysupdate cert domains self-update version camouflage"
+               echo "Доступные: install status config [user] reload restart update remove logs monitor users hysteria hy2 warp warp-proxy warp-full warp-protocol xray xray-add-user [user] devices subscription private-page tg-stats ssh-hardening ssh-rescue sysupdate cert domains self-update version camouflage"
                exit 1 ;;
         esac
         exit 0

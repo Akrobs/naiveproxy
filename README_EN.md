@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.5.6-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.5.7-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -59,6 +59,7 @@
 [**✨ Features**](#-features) ·
 [**🤖 Telegram Bot**](#-telegram-bot) ·
 [**🚫 Ad Blocking**](#-dns-ad-blocking) ·
+[**🌀 WARP**](#-cloudflare-warp-modes) ·
 [**🔍 Diagnostics**](#-diagnostics) ·
 [**❓ FAQ**](#-faq) ·
 [**💛 Donate**](#-support-the-project)
@@ -97,7 +98,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ---
 
-## 🎉 What's new in v5.5.6
+## 🎉 What's new in v5.5.7
 
 <table>
 <tr>
@@ -128,6 +129,11 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### ⚡ New features
 
+🌀 **WARP full tunnel** — route all outgoing VPS traffic through Cloudflare WARP with `warp` / `warp+doh`
+🧭 **WARP protocol picker** — `auto`, `MASQUE`, or `WireGuard`; auto tries MASQUE first, then WireGuard
+🔌 **WARP local proxy mode** — still available on `127.0.0.1:40000` for apps that support SOCKS5/HTTP proxy
+🔍 **Separate WARP diagnostics** — local proxy test and full tunnel test are checked independently
+⏱ **Local Proxy limitation note** — local proxy mode is not ideal for long-running connections
 🧬 **Xray user creation in menu 23** — add a VLESS/REALITY user without reinstalling Xray
 🔗 **Unified subscription page** — Naive + Xray links are generated together for the same user
 🛠 **xray-add-user USER** — direct CLI provisioning with config rebuild and subscription page
@@ -334,7 +340,7 @@ Encrypted queries to Cloudflare and Google
 
 ```
 ──────────────────────────────────────────────────────
-   NaiveProxy Manager v5.5.6  [ENG]
+   NaiveProxy Manager v5.5.7  [ENG]
    Status: ● running  │  Domain: proxy.example.com
    Telegram: connected  │  Users: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
@@ -399,6 +405,15 @@ sudo bash naiveproxy.sh dns            # DNS menu
 sudo bash naiveproxy.sh dns-install    # Install blocker
 sudo bash naiveproxy.sh dns-update     # Update blocklists
 sudo bash naiveproxy.sh dns-status     # Blocker status
+
+# === Cloudflare WARP modes ===
+sudo bash naiveproxy.sh warp           # WARP menu
+sudo bash naiveproxy.sh warp-proxy     # Local proxy mode: 127.0.0.1:40000
+sudo bash naiveproxy.sh warp-full      # Full tunnel for all outgoing VPS traffic
+sudo bash naiveproxy.sh warp-protocol  # Select auto / MASQUE / WireGuard
+sudo bash naiveproxy.sh warp-test      # Test local proxy mode
+sudo bash naiveproxy.sh warp-full-test # Test full tunnel mode
+sudo bash naiveproxy.sh warp-disable   # Disconnect WARP
 
 # === Diagnostics ===
 sudo bash naiveproxy.sh diagnose       # 7-block diagnostics
@@ -564,6 +579,30 @@ sudo bash naiveproxy.sh dns
 
 ---
 
+## 🌀 Cloudflare WARP Modes
+
+Menu `21` now supports two WARP modes:
+
+| Mode | Best for | Notes |
+|------|----------|-------|
+| `proxy` | Specific apps that can use SOCKS5/HTTP proxy | Listens on `127.0.0.1:40000`; best for explicitly configured apps, not long-running server-wide traffic |
+| `warp` / `warp+doh` | All outgoing VPS traffic | Full tunnel mode; useful when apps cannot be configured with a proxy manually |
+
+### Commands:
+
+```bash
+sudo bash naiveproxy.sh warp           # WARP menu
+sudo bash naiveproxy.sh warp-proxy     # Local proxy mode
+sudo bash naiveproxy.sh warp-full      # Full tunnel mode
+sudo bash naiveproxy.sh warp-protocol  # auto / MASQUE / WireGuard
+sudo bash naiveproxy.sh warp-full-test # Verify full tunnel output
+sudo bash naiveproxy.sh warp-disable   # Rollback / disconnect
+```
+
+In proxy mode Xray can use `127.0.0.1:40000` as outbound. In full tunnel mode Xray and regular server processes use the system route automatically. For Russia and unstable networks, `auto` tries MASQUE first, then WireGuard.
+
+---
+
 ## 🔍 Diagnostics
 
 ```bash
@@ -574,7 +613,7 @@ sudo bash naiveproxy.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Diagnostics NaiveProxy Manager v5.5.6               │
+│  🔍 Diagnostics NaiveProxy Manager v5.5.7               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -614,7 +653,7 @@ sudo bash naiveproxy.sh diagnose
   ✅ journald: no critical errors
 
 [7/7] Version and updates
-  ✅ Script up to date: v5.5.6
+  ✅ Script up to date: v5.5.7
   ✅ SSH Hardening done
 
 ══════════════════════════════════════════════════════════
@@ -1250,7 +1289,20 @@ for donors
 ## 📜 Changelog
 
 <details>
-<summary><b>v5.5.6</b> — Xray User Provisioning ← CURRENT</summary>
+<summary><b>v5.5.7</b> — WARP Full Tunnel Modes ← CURRENT</summary>
+
+**🌀 Cloudflare WARP modes:**
+- Added full tunnel mode for all outgoing VPS traffic: `warp` / `warp+doh`
+- Added `warp-full`, `warp-protocol` and `warp-full-test` CLI commands
+- Menu 21 now separates local proxy mode and full tunnel mode
+- Added protocol selection: `auto`, `MASQUE`, `WireGuard`
+- Diagnostics now checks proxy mode and full tunnel mode separately
+- Documented Cloudflare Local Proxy limitations for long-running connections
+
+</details>
+
+<details>
+<summary><b>v5.5.6</b> — Xray User Provisioning</summary>
 
 **🧬 Xray users and subscriptions:**
 - Added menu 23 option to create an Xray user without reinstalling Xray
