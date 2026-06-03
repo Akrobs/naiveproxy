@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v5.5.3 — by Иван Юрьевич
+#   NaiveProxy Manager v5.5.4 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.5.3"
+VERSION="5.5.4"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -2123,11 +2123,15 @@ install_xray_bin() {
 
 load_xray_users() {
     mkdir -p "$CONFIG_DIR"
+    local default_user uuid
+    default_user="${1:-xray}"
     if [[ ! -s "$XRAY_USERS_FILE" ]]; then
-        local default_user uuid
-        default_user="${1:-xray}"
         uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || "$XRAY_BIN" uuid)
         printf '%s:%s\n' "$default_user" "$uuid" > "$XRAY_USERS_FILE"
+        chmod 600 "$XRAY_USERS_FILE"
+    elif is_valid_proxy_user "$default_user" && ! get_xray_user_uuid "$default_user" >/dev/null; then
+        uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || "$XRAY_BIN" uuid)
+        printf '%s:%s\n' "$default_user" "$uuid" >> "$XRAY_USERS_FILE"
         chmod 600 "$XRAY_USERS_FILE"
     fi
 }
@@ -2539,6 +2543,25 @@ remove_web_token_dir() {
     rm -rf -- "${base_dir}/${token}" 2>/dev/null || true
 }
 
+cleanup_subscription_page() {
+    local user="$1"
+    local token_file old_token
+
+    if ! is_valid_proxy_user "$user"; then
+        return 0
+    fi
+
+    token_file="${SUBS_DIR}/${user}.token"
+    old_token=""
+    if [[ -s "$token_file" ]]; then
+        old_token=$(tr -dc 'a-fA-F0-9' < "$token_file" | head -c 48 || true)
+    fi
+    if [[ "$old_token" =~ ^[a-fA-F0-9]{32,64}$ ]]; then
+        remove_web_token_dir "$SUBS_WEB_DIR" "$old_token"
+    fi
+    rm -f -- "$token_file" 2>/dev/null || true
+}
+
 subscription_user_exists() {
     local user="$1"
     get_user_pass "$user" >/dev/null 2>&1 && return 0
@@ -2864,6 +2887,12 @@ cmd_xray_install() {
     XRAY_ENABLED="1"
     save_config
     ok "Xray запущен"
+    local sub_url
+    sub_url=$(generate_subscription_page "$xuser" 2>/dev/null || true)
+    if [[ -n "$sub_url" ]]; then
+        ok "Страница подписки Xray пользователя создана: $sub_url"
+        echo -e "  links.txt: ${sub_url}links.txt"
+    fi
     print_xray_client_config "$xuser"
 }
 
@@ -3445,6 +3474,15 @@ cmd_users() {
                 rewrite_caddyfile_current
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy
                 ok "Пользователь $new_user добавлен"
+                local sub_url
+                sub_url=$(generate_subscription_page "$new_user" 2>/dev/null || true)
+                if [[ -n "$sub_url" ]]; then
+                    ok "Страница подписки создана: $sub_url"
+                    echo -e "  links.txt: ${sub_url}links.txt"
+                else
+                    warn "Страница подписки не создана автоматически. Проверь: sudo bash naiveproxy.sh subscription ${new_user}"
+                fi
+                print_client_config "$new_user"
                 tg_send "👤 <b>Новый пользователь NaiveProxy</b>
 🔑 Логин: <code>${new_user}</code>
 🕐 $(date '+%Y-%m-%d %H:%M:%S')"
@@ -3460,10 +3498,12 @@ cmd_users() {
                     continue
                 fi
                 backup_config
+                cleanup_subscription_page "$del_user"
                 awk -F: -v user="${del_user}" '$1 != user' "$USERS_FILE" > "${USERS_FILE}.tmp" && mv "${USERS_FILE}.tmp" "$USERS_FILE" || true
                 rewrite_caddyfile_current
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy
                 ok "Пользователь $del_user удалён"
+                ok "Страница подписки $del_user удалена"
                 tg_send "🗑 <b>Пользователь удалён: ${del_user}</b>
 🕐 $(date '+%Y-%m-%d %H:%M:%S')"
                 ;;
@@ -4830,6 +4870,29 @@ tg_send_photo() {
         >/dev/null 2>&1 || true
 }
 
+tg_send_naive_qr() {
+    local chat_id="$1"
+    local user="$2"
+    local uri="$3"
+
+    if ! command -v qrencode &>/dev/null; then
+        tg_reply "${chat_id}" "📦 Устанавливаю qrencode для QR..."
+        apt-get install -y -q qrencode >/dev/null 2>&1 || true
+    fi
+
+    if command -v qrencode &>/dev/null; then
+        local qr_file="/tmp/naiveproxy_qr_${user}_$$.png"
+        if qrencode -o "${qr_file}" -s 8 "${uri}" 2>/dev/null && [[ -s "${qr_file}" ]]; then
+            tg_send_photo "${chat_id}" "${qr_file}" "📱 QR для ${user}@${DOMAIN}"
+            rm -f "${qr_file}"
+            return 0
+        fi
+        rm -f "${qr_file}"
+    fi
+
+    return 1
+}
+
 # Обработка одной команды
 tg_handle_command() {
     local chat_id="$1"
@@ -4891,8 +4954,8 @@ tg_handle_command() {
 /cert — статус TLS сертификата
 
 👥 <b>Пользователи</b>
-/adduser логин пароль — добавить пользователя
-/deluser логин — удалить пользователя
+/adduser логин [пароль] — добавить пользователя + QR + подписка
+/deluser логин — удалить пользователя + страницу
 /qr логин — QR код для подключения
 /sub логин — страница подписки пользователя
 /subreset логин — перевыпустить ссылку подписки
@@ -5103,13 +5166,23 @@ ${user_list}"
             if rewrite_caddyfile_current 2>/dev/null; then
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null
                 local uri="naive+https://${new_user}:${new_pass}@${DOMAIN}:443"
+                local sub_url sub_links
+                sub_url=$(generate_subscription_page "${new_user}" 2>/dev/null || true)
+                sub_links="${sub_url:+${sub_url}links.txt}"
                 tg_reply "${chat_id}" "✅ <b>Пользователь добавлен</b>
 👤 Логин: <code>${new_user}</code>
 🔑 Пароль: <code>${new_pass}</code>
 🌐 URI:
 <code>${uri}</code>
 
-Используй /qr ${new_user} для QR кода"
+📄 Страница:
+<code>${sub_url:-не создана автоматически}</code>
+
+Raw links:
+<code>${sub_links:-не создано}</code>"
+                if ! tg_send_naive_qr "${chat_id}" "${new_user}" "${uri}"; then
+                    tg_reply "${chat_id}" "⚠️ QR не удалось создать автоматически. URI выше рабочий."
+                fi
             else
                 tg_reply "${chat_id}" "⚠️ Пользователь добавлен но Caddyfile не обновлён"
             fi
@@ -5131,11 +5204,13 @@ ${user_list}"
                 tg_reply "${chat_id}" "❌ Нельзя удалить последнего активного пользователя"
                 return
             fi
+            cleanup_subscription_page "${del_user}"
             awk -F: -v user="${del_user}" '$1 != user' "${USERS_FILE}" > "${USERS_FILE}.tmp"                 && mv "${USERS_FILE}.tmp" "${USERS_FILE}"
             rewrite_caddyfile_current
             systemctl reload caddy 2>/dev/null || systemctl restart caddy
 
-            tg_reply "${chat_id}" "🗑 Пользователь <code>${del_user}</code> удалён"
+            tg_reply "${chat_id}" "🗑 Пользователь <code>${del_user}</code> удалён
+📄 Страница подписки тоже удалена"
             ;;
 
         /qr)

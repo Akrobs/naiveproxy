@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.5.3-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.5.4-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -97,7 +97,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ---
 
-## 🎉 What's new in v5.5.3
+## 🎉 What's new in v5.5.4
 
 <table>
 <tr>
@@ -105,6 +105,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### 🐛 Bug fixes
 
+✅ User deletion now removes the subscription token and web page
 ✅ Hysteria 2 empty or short `obfs.salamander.password`
 ✅ Xray mKCP config for newer Xray-core builds without legacy `header`/`seed`
 ✅ Hysteria 2 password generation under `set -euo pipefail`
@@ -127,6 +128,8 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### ⚡ New features
 
+📱 **Auto QR on add user** — terminal and Telegram creation now generate QR immediately
+🔗 **Auto subscription page** — `/s/<token>/` is created when a Naive or Xray user is created
 🌀 **Xray via WARP** — when WARP is enabled, Xray uses local WARP HTTP proxy as outbound
 🔐 **Safe token generator** — shared random password generator for install, users, Hysteria and bot
 🔗 **User subscription pages** — per-user `/s/<token>/` secret URL
@@ -325,7 +328,7 @@ Encrypted queries to Cloudflare and Google
 
 ```
 ──────────────────────────────────────────────────────
-   NaiveProxy Manager v5.5.3  [ENG]
+   NaiveProxy Manager v5.5.4  [ENG]
    Status: ● running  │  Domain: proxy.example.com
    Telegram: connected  │  Users: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
@@ -559,7 +562,7 @@ sudo bash naiveproxy.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Diagnostics NaiveProxy Manager v5.5.3               │
+│  🔍 Diagnostics NaiveProxy Manager v5.5.4               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -599,7 +602,7 @@ sudo bash naiveproxy.sh diagnose
   ✅ journald: no critical errors
 
 [7/7] Version and updates
-  ✅ Script up to date: v5.5.3
+  ✅ Script up to date: v5.5.4
   ✅ SSH Hardening done
 
 ══════════════════════════════════════════════════════════
@@ -1235,7 +1238,19 @@ for donors
 ## 📜 Changelog
 
 <details>
-<summary><b>v5.5.3</b> — Hysteria PSK + Xray mKCP Compatibility ← CURRENT</summary>
+<summary><b>v5.5.4</b> — Auto QR + Subscription Pages ← CURRENT</summary>
+
+**📱 User provisioning:**
+- Adding a Naive user now prints URI, JSON and QR immediately
+- A `/s/<token>/` subscription page is created automatically for new Naive and Xray users
+- Telegram `/adduser` sends URI, QR image and the subscription page URL
+- Telegram `/deluser` removes the user and cleans the subscription page
+- User deletion removes the subscription token file and static web directory
+
+</details>
+
+<details>
+<summary><b>v5.5.3</b> — Hysteria PSK + Xray mKCP Compatibility</summary>
 
 **⚡ Hysteria 2 and Xray mKCP:**
 - Added Hysteria password and obfs password validation before writing `hysteria.yaml`
