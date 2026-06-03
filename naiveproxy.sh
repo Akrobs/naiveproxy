@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v5.5.4 — by Иван Юрьевич
+#   NaiveProxy Manager v5.5.5 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.5.4"
+VERSION="5.5.5"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -4831,6 +4831,27 @@ tg_reply() {
     curl -s --max-time 10         -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage"         --data-urlencode "chat_id=${chat_id}"         --data-urlencode "parse_mode=HTML"         --data-urlencode "text=${message}"         >/dev/null 2>&1 || true
 }
 
+tg_main_menu_markup() {
+    cat <<'EOF'
+{"keyboard":[[{"text":"📊 Статус"},{"text":"👥 Пользователи"}],[{"text":"➕ Добавить пользователя"},{"text":"🗑 Удалить пользователя"}],[{"text":"📱 QR / ссылка"},{"text":"🔗 Подписка"}],[{"text":"🧬 Xray"},{"text":"⚡ Hysteria"},{"text":"🌀 WARP"}],[{"text":"🔍 Диагностика"},{"text":"📄 Логи"}],[{"text":"♻️ Restart Caddy"},{"text":"🛠 Автофикс"}],[{"text":"💛 Донат"},{"text":"❓ Помощь"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
+EOF
+}
+
+tg_reply_menu() {
+    local chat_id="$1"
+    local message="$2"
+    local reply_markup
+    [[ -z "${TG_TOKEN:-}" ]] && return
+    reply_markup=$(tg_main_menu_markup)
+    curl -s --max-time 10 \
+        -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=${chat_id}" \
+        --data-urlencode "parse_mode=HTML" \
+        --data-urlencode "text=${message}" \
+        --data-urlencode "reply_markup=${reply_markup}" \
+        >/dev/null 2>&1 || true
+}
+
 tg_reply_pre() {
     local chat_id="$1"
     local title="$2"
@@ -4916,6 +4937,25 @@ tg_handle_command() {
     text="${text//$'\r'/}"
     text="${text//$'\n'/}"
 
+    # Русские кнопки Telegram reply keyboard -> существующие команды
+    case "${text}" in
+        "📊 Статус") text="/status" ;;
+        "👥 Пользователи") text="/users" ;;
+        "➕ Добавить пользователя") text="/adduser" ;;
+        "🗑 Удалить пользователя") text="/deluser" ;;
+        "📱 QR / ссылка") text="/qr" ;;
+        "🔗 Подписка") text="/sub" ;;
+        "🧬 Xray") text="/xray" ;;
+        "⚡ Hysteria") text="/hysteria" ;;
+        "🌀 WARP") text="/warp" ;;
+        "🔍 Диагностика") text="/diagnose" ;;
+        "📄 Логи") text="/logs" ;;
+        "♻️ Restart Caddy") text="/restart" ;;
+        "🛠 Автофикс") text="/diagfix" ;;
+        "💛 Донат") text="/donate" ;;
+        "❓ Помощь") text="/menu" ;;
+    esac
+
     # Лимит длины команды — защита от flood/injection
     if [[ ${#text} -gt 256 ]]; then
         tg_reply "${chat_id}" "❌ Команда слишком длинная"
@@ -4939,9 +4979,11 @@ tg_handle_command() {
 
     case "${cmd}" in
 
-        /start|/help)
-            tg_reply "${chat_id}" "🛡 <b>NaiveProxy Manager v${VERSION}</b>
+        /start|/help|/menu)
+            tg_reply_menu "${chat_id}" "🛡 <b>NaiveProxy Manager v${VERSION}</b>
 🖥 Сервер: <code>$(hostname)</code>
+
+Русское меню включено. Кнопки ниже запускают основные действия, а команды руками тоже работают.
 
 <b>Доступные команды:</b>
 
@@ -4966,6 +5008,8 @@ tg_handle_command() {
 🧬 <b>Xray / Modern</b>
 /xray логин — ссылки VLESS/Trojan/REALITY
 /xraystatus — статус Xray
+/hysteria — статус Hysteria 2
+/warp — статус и тест WARP proxy
 
 ⚙️ <b>Управление</b>
 /restart — перезапустить Caddy
@@ -5128,7 +5172,8 @@ ${user_list}"
             new_pass=$(echo "${args}" | awk '{print $2}')
 
             if [[ -z "${new_user}" ]]; then
-                tg_reply "${chat_id}" "❌ Использование: /adduser логин пароль
+                tg_reply "${chat_id}" "❌ Использование: /adduser логин [пароль]
+Пароль можно не указывать — бот сгенерирует безопасный.
 Пример: /adduser alice MyPass123"
                 return
             fi
@@ -5377,6 +5422,24 @@ Raw links:
             rm -f "$xs_tmp"
             ;;
 
+        /hysteria|/hy2|/hysteriastatus|/hy2status)
+            local hy_tmp
+            hy_tmp=$(mktemp)
+            cmd_hysteria_status > "$hy_tmp" 2>&1
+            tg_reply_file_tail "${chat_id}" "⚡ <b>Hysteria 2 статус</b>" "$hy_tmp" 80
+            rm -f "$hy_tmp"
+            ;;
+
+        /warp|/warpstatus)
+            local warp_tmp
+            warp_tmp=$(mktemp)
+            cmd_warp_status > "$warp_tmp" 2>&1
+            echo >> "$warp_tmp"
+            cmd_warp_test >> "$warp_tmp" 2>&1 || true
+            tg_reply_file_tail "${chat_id}" "🌀 <b>WARP proxy статус</b>" "$warp_tmp" 100
+            rm -f "$warp_tmp"
+            ;;
+
         /diagfix)
             local fix_tmp fix_rc
             fix_tmp=$(mktemp)
@@ -5527,7 +5590,7 @@ ${admin_list}"
             ;;
 
         *)
-            tg_reply "${chat_id}" "❓ Неизвестная команда. Используй /help"
+            tg_reply_menu "${chat_id}" "❓ Неизвестная команда. Используй /help или кнопки меню."
             ;;
     esac
 }
@@ -5565,8 +5628,9 @@ try:
         msg = u.get('message', {})
         chat_id = msg.get('chat', {}).get('id', '')
         from_id = msg.get('from', {}).get('id', '')
-        text = msg.get('text', '')
-        if text.startswith('/'):
+        text = str(msg.get('text') or '')
+        if text:
+            text = text.replace('|', ' ').replace('\\r', ' ').replace('\\n', ' ')
             print(f'{uid}|{chat_id}|{from_id}|{text}')
 except: pass
 " 2>/dev/null || echo "")
