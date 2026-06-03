@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.5.5-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.5.6-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -97,7 +97,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ---
 
-## 🎉 What's new in v5.5.5
+## 🎉 What's new in v5.5.6
 
 <table>
 <tr>
@@ -128,6 +128,9 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### ⚡ New features
 
+🧬 **Xray user creation in menu 23** — add a VLESS/REALITY user without reinstalling Xray
+🔗 **Unified subscription page** — Naive + Xray links are generated together for the same user
+🛠 **xray-add-user USER** — direct CLI provisioning with config rebuild and subscription page
 🤖 **Russian Telegram menu** — persistent reply keyboard for the main admin actions
 🧭 **/menu command** — reopen the Telegram button menu at any time
 ⚡ **Hysteria/WARP buttons** — quick status and WARP proxy test from chat
@@ -331,7 +334,7 @@ Encrypted queries to Cloudflare and Google
 
 ```
 ──────────────────────────────────────────────────────
-   NaiveProxy Manager v5.5.5  [ENG]
+   NaiveProxy Manager v5.5.6  [ENG]
    Status: ● running  │  Domain: proxy.example.com
    Telegram: connected  │  Users: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
@@ -375,6 +378,7 @@ sudo bash naiveproxy.sh devices-scan   # Check violations now
 # === Xray Modern ===
 sudo bash naiveproxy.sh xray           # Xray menu
 sudo bash naiveproxy.sh xray-install   # VLESS/Trojan/REALITY + fallback
+sudo bash naiveproxy.sh xray-add-user USER
 sudo bash naiveproxy.sh xray-config    # Show Xray links
 sudo bash naiveproxy.sh xray-status    # Xray status
 sudo bash naiveproxy.sh xray-remove    # Remove Xray / return Caddy
@@ -470,6 +474,7 @@ The bot also shows a persistent Russian reply keyboard after `/start`, `/help` o
 `/lockuser login` — Disable
 `/unlockuser login` — Restore
 `/xray login` — Xray links
+`/xrayadduser login` — Create Xray user + subscription
 `/restart` — Restart Caddy
 `/update` — Update Caddy
 
@@ -569,7 +574,7 @@ sudo bash naiveproxy.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Diagnostics NaiveProxy Manager v5.5.5               │
+│  🔍 Diagnostics NaiveProxy Manager v5.5.6               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -609,7 +614,7 @@ sudo bash naiveproxy.sh diagnose
   ✅ journald: no critical errors
 
 [7/7] Version and updates
-  ✅ Script up to date: v5.5.5
+  ✅ Script up to date: v5.5.6
   ✅ SSH Hardening done
 
 ══════════════════════════════════════════════════════════
@@ -1245,7 +1250,20 @@ for donors
 ## 📜 Changelog
 
 <details>
-<summary><b>v5.5.5</b> — Russian Telegram Button Menu ← CURRENT</summary>
+<summary><b>v5.5.6</b> — Xray User Provisioning ← CURRENT</summary>
+
+**🧬 Xray users and subscriptions:**
+- Added menu 23 option to create an Xray user without reinstalling Xray
+- Added `xray-add-user USER` CLI command
+- Adding a Naive user can also create the matching Xray/VLESS profile
+- Personal `/s/<token>/` pages now combine Naive and Xray links for the same user
+- Telegram `/adduser` can provision Xray too when Xray is active
+- Added Telegram `/xrayadduser USER`
+
+</details>
+
+<details>
+<summary><b>v5.5.5</b> — Russian Telegram Button Menu</summary>
 
 **🤖 Telegram UX:**
 - Added a persistent Russian reply keyboard for common admin actions

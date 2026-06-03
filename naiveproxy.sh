@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v5.5.5 — by Иван Юрьевич
+#   NaiveProxy Manager v5.5.6 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.5.5"
+VERSION="5.5.6"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -2123,23 +2123,55 @@ install_xray_bin() {
 
 load_xray_users() {
     mkdir -p "$CONFIG_DIR"
-    local default_user uuid
+    local default_user
     default_user="${1:-xray}"
     if [[ ! -s "$XRAY_USERS_FILE" ]]; then
-        uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || "$XRAY_BIN" uuid)
-        printf '%s:%s\n' "$default_user" "$uuid" > "$XRAY_USERS_FILE"
-        chmod 600 "$XRAY_USERS_FILE"
-    elif is_valid_proxy_user "$default_user" && ! get_xray_user_uuid "$default_user" >/dev/null; then
-        uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || "$XRAY_BIN" uuid)
-        printf '%s:%s\n' "$default_user" "$uuid" >> "$XRAY_USERS_FILE"
-        chmod 600 "$XRAY_USERS_FILE"
+        xray_ensure_user "$default_user" >/dev/null || return 1
+    elif is_valid_proxy_user "$default_user"; then
+        xray_ensure_user "$default_user" >/dev/null || return 1
     fi
 }
 
 get_xray_user_uuid() {
     local lookup_user="$1"
+    local uuid
     [[ -f "$XRAY_USERS_FILE" ]] || return 1
-    awk -F: -v user="$lookup_user" '$1 == user {print $2; exit}' "$XRAY_USERS_FILE"
+    uuid=$(awk -F: -v user="$lookup_user" '$1 == user {print $2; exit}' "$XRAY_USERS_FILE")
+    [[ -n "$uuid" ]] || return 1
+    printf '%s\n' "$uuid"
+}
+
+xray_generate_uuid() {
+    local uuid raw
+    uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
+    if [[ ! "$uuid" =~ ^[0-9a-fA-F-]{36}$ && -x "$XRAY_BIN" ]]; then
+        uuid=$("$XRAY_BIN" uuid 2>/dev/null | head -1 || true)
+    fi
+    if [[ ! "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+        raw=$(openssl rand -hex 16)
+        uuid="${raw:0:8}-${raw:8:4}-${raw:12:4}-${raw:16:4}-${raw:20:12}"
+    fi
+    printf '%s\n' "$uuid"
+}
+
+xray_ensure_user() {
+    local user="$1"
+    local uuid
+    if ! is_valid_proxy_user "$user"; then
+        err "Логин Xray: 2-32 символа, только A-Z a-z 0-9 _ -"
+        return 1
+    fi
+    mkdir -p "$CONFIG_DIR"
+    touch "$XRAY_USERS_FILE"
+    chmod 600 "$XRAY_USERS_FILE"
+    if uuid=$(get_xray_user_uuid "$user" 2>/dev/null); then
+        printf '%s\n' "$uuid"
+        return 0
+    fi
+    uuid=$(xray_generate_uuid)
+    printf '%s:%s\n' "$user" "$uuid" >> "$XRAY_USERS_FILE"
+    chmod 600 "$XRAY_USERS_FILE"
+    printf '%s\n' "$uuid"
 }
 
 xray_active_user_count() {
@@ -2227,7 +2259,12 @@ EOF
 
 write_xray_config() {
     load_config
-    load_xray_users "${1:-xray}"
+    local seed_user="${1:-}"
+    if [[ -n "$seed_user" ]]; then
+        load_xray_users "$seed_user"
+    elif [[ ! -s "$XRAY_USERS_FILE" ]]; then
+        load_xray_users "xray"
+    fi
     ensure_xray_reality_keys || return 1
 
     local cert key fallback_enabled fallback_port reality_port mkcp_port grpc_port trojan_pass reality_target reality_sni
@@ -2434,7 +2471,7 @@ EOF
 
 print_xray_client_config() {
     load_config
-    load_xray_users
+    [[ -s "$XRAY_USERS_FILE" ]] || load_xray_users "xray"
     local user="${1:-}"
     local uuid
     if [[ -z "$user" ]]; then
@@ -2896,6 +2933,88 @@ cmd_xray_install() {
     print_xray_client_config "$xuser"
 }
 
+provision_xray_user() {
+    load_config
+    local xuser="$1"
+    local backup_file="" existed=0 uuid
+
+    if ! is_valid_proxy_user "$xuser"; then
+        err "Логин Xray: 2-32 символа, только A-Z a-z 0-9 _ -"
+        return 1
+    fi
+    if [[ ! -x "$XRAY_BIN" ]]; then
+        err "Xray не установлен. Открой меню 23 → 1."
+        return 1
+    fi
+    if ! is_valid_domain "${DOMAIN:-}"; then
+        err "Домен не настроен или некорректен"
+        return 1
+    fi
+
+    if get_xray_user_uuid "$xuser" >/dev/null 2>&1; then
+        existed=1
+    fi
+    if [[ -f "$XRAY_USERS_FILE" ]]; then
+        backup_file=$(mktemp)
+        cp "$XRAY_USERS_FILE" "$backup_file"
+    fi
+
+    uuid=$(xray_ensure_user "$xuser") || return 1
+    if [[ "$existed" -eq 1 ]]; then
+        ok "Xray пользователь уже существует: ${xuser}"
+    else
+        ok "Xray пользователь создан: ${xuser} (${uuid})"
+    fi
+
+    if ! write_xray_config "$xuser"; then
+        if [[ -n "$backup_file" && -f "$backup_file" ]]; then
+            mv "$backup_file" "$XRAY_USERS_FILE"
+            chmod 600 "$XRAY_USERS_FILE"
+        else
+            rm -f "$XRAY_USERS_FILE"
+        fi
+        err "Xray config не прошёл проверку, пользователь ${xuser} не применён"
+        return 1
+    fi
+    rm -f "$backup_file" 2>/dev/null || true
+
+    write_xray_service
+    if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+        rewrite_caddyfile_current || return 1
+        systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
+    fi
+    ufw allow "${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}/tcp" comment "Xray REALITY" >/dev/null 2>&1 || true
+    ufw allow "${XRAY_MKCP_PORT:-$XRAY_MKCP_PORT_DEFAULT}/udp" comment "Xray mKCP" >/dev/null 2>&1 || true
+    ufw allow "${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}/tcp" comment "Xray gRPC" >/dev/null 2>&1 || true
+    systemctl restart xray || return 1
+    XRAY_ENABLED="1"
+    save_config
+}
+
+cmd_xray_add_user() {
+    load_config
+    local xuser="${1:-}"
+    if [[ -z "$xuser" ]]; then
+        echo -ne "${CYAN}Новый Xray пользователь: ${RESET}"
+        read -r xuser
+    fi
+    if ! provision_xray_user "$xuser"; then
+        return 1
+    fi
+
+    local sub_url
+    sub_url=$(generate_subscription_page "$xuser" 2>/dev/null || true)
+    if [[ -n "$sub_url" ]]; then
+        ok "Личная страница подписки создана:"
+        echo "  ${sub_url}"
+        echo "  links.txt: ${sub_url}links.txt"
+    else
+        warn "Страница подписки не создана автоматически. Проверь: sudo bash naiveproxy.sh subscription ${xuser}"
+    fi
+
+    print_xray_client_config "$xuser"
+}
+
 cmd_xray_status() {
     load_config
     hr
@@ -2942,6 +3061,7 @@ cmd_xray_menu() {
         echo -e "  ${BOLD}3)${RESET} Статус"
         echo -e "  ${BOLD}4)${RESET} Логи"
         echo -e "  ${BOLD}5)${RESET} Удалить Xray / вернуть Caddy"
+        echo -e "  ${BOLD}6)${RESET} Создать Xray пользователя + подписка"
         echo -e "  ${BOLD}0)${RESET} Назад"
         hr
         echo -e "  Fallback 443: ${CYAN}${XRAY_FALLBACK_ENABLED:-0}${RESET} | REALITY: ${CYAN}${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}${RESET}"
@@ -2956,6 +3076,7 @@ cmd_xray_menu() {
             3) cmd_xray_status ;;
             4) cmd_xray_logs ;;
             5) cmd_xray_remove ;;
+            6) cmd_xray_add_user ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -3474,6 +3595,19 @@ cmd_users() {
                 rewrite_caddyfile_current
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy
                 ok "Пользователь $new_user добавлен"
+                local xray_added=0
+                if [[ "${XRAY_ENABLED:-0}" == "1" && -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+                    echo -ne "${CYAN}Создать Xray/VLESS конфиги для ${new_user} тоже? [Y/n]: ${RESET}"
+                    read -r add_xray_ans
+                    if [[ "${add_xray_ans,,}" != "n" ]]; then
+                        if provision_xray_user "$new_user"; then
+                            xray_added=1
+                            ok "Xray/VLESS конфиги для ${new_user} готовы"
+                        else
+                            warn "Naive пользователь создан, но Xray профиль не применён"
+                        fi
+                    fi
+                fi
                 local sub_url
                 sub_url=$(generate_subscription_page "$new_user" 2>/dev/null || true)
                 if [[ -n "$sub_url" ]]; then
@@ -3483,6 +3617,9 @@ cmd_users() {
                     warn "Страница подписки не создана автоматически. Проверь: sudo bash naiveproxy.sh subscription ${new_user}"
                 fi
                 print_client_config "$new_user"
+                if [[ "$xray_added" -eq 1 ]]; then
+                    print_xray_client_config "$new_user"
+                fi
                 tg_send "👤 <b>Новый пользователь NaiveProxy</b>
 🔑 Логин: <code>${new_user}</code>
 🕐 $(date '+%Y-%m-%d %H:%M:%S')"
@@ -5007,6 +5144,7 @@ tg_handle_command() {
 
 🧬 <b>Xray / Modern</b>
 /xray логин — ссылки VLESS/Trojan/REALITY
+/xrayadduser логин — создать Xray пользователя + подписка
 /xraystatus — статус Xray
 /hysteria — статус Hysteria 2
 /warp — статус и тест WARP proxy
@@ -5211,12 +5349,24 @@ ${user_list}"
             if rewrite_caddyfile_current 2>/dev/null; then
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null
                 local uri="naive+https://${new_user}:${new_pass}@${DOMAIN}:443"
-                local sub_url sub_links
+                local sub_url sub_links xray_note xray_tmp xray_ok
+                xray_note=""
+                xray_ok=0
+                if [[ "${XRAY_ENABLED:-0}" == "1" && -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+                    xray_tmp=$(mktemp)
+                    if provision_xray_user "${new_user}" > "$xray_tmp" 2>&1; then
+                        xray_ok=1
+                        xray_note="🧬 Xray/VLESS: создан для этого же пользователя"
+                    else
+                        xray_note="⚠️ Xray/VLESS: Naive создан, но Xray профиль не применён"
+                    fi
+                fi
                 sub_url=$(generate_subscription_page "${new_user}" 2>/dev/null || true)
                 sub_links="${sub_url:+${sub_url}links.txt}"
                 tg_reply "${chat_id}" "✅ <b>Пользователь добавлен</b>
 👤 Логин: <code>${new_user}</code>
 🔑 Пароль: <code>${new_pass}</code>
+${xray_note}
 🌐 URI:
 <code>${uri}</code>
 
@@ -5228,6 +5378,14 @@ Raw links:
                 if ! tg_send_naive_qr "${chat_id}" "${new_user}" "${uri}"; then
                     tg_reply "${chat_id}" "⚠️ QR не удалось создать автоматически. URI выше рабочий."
                 fi
+                if [[ "$xray_ok" -eq 1 ]]; then
+                    local x_links
+                    x_links=$(print_xray_client_config "${new_user}" 2>&1)
+                    tg_reply_pre "${chat_id}" "🧬 Xray ссылки для ${new_user}" "$x_links"
+                elif [[ -n "${xray_tmp:-}" && -f "$xray_tmp" ]]; then
+                    tg_reply_file_tail "${chat_id}" "⚠️ Xray профиль не применён" "$xray_tmp" 60
+                fi
+                [[ -n "${xray_tmp:-}" ]] && rm -f "$xray_tmp"
             else
                 tg_reply "${chat_id}" "⚠️ Пользователь добавлен но Caddyfile не обновлён"
             fi
@@ -5412,6 +5570,24 @@ Raw links:
             else
                 tg_reply_pre "${chat_id}" "❌ Xray config недоступен" "$x_out"
             fi
+            ;;
+
+        /xrayadduser|/xrayuser)
+            local x_new="${args%% *}"
+            if [[ -z "$x_new" ]]; then
+                tg_reply "${chat_id}" "❌ Использование: /xrayadduser логин"
+                return
+            fi
+            local xa_tmp xa_rc
+            xa_tmp=$(mktemp)
+            cmd_xray_add_user "$x_new" > "$xa_tmp" 2>&1
+            xa_rc=$?
+            if [[ "$xa_rc" -eq 0 ]]; then
+                tg_reply_file_tail "${chat_id}" "✅ <b>Xray пользователь создан</b>" "$xa_tmp" 100
+            else
+                tg_reply_file_tail "${chat_id}" "❌ <b>Xray пользователь не создан</b>" "$xa_tmp" 100
+            fi
+            rm -f "$xa_tmp"
             ;;
 
         /xraystatus)
@@ -6370,6 +6546,7 @@ main() {
             warp-remove) cmd_warp_remove ;;
             xray) cmd_xray_menu ;;
             xray-install) cmd_xray_install ;;
+            xray-add-user|xray-user) cmd_xray_add_user "${2:-}" ;;
             xray-config) print_xray_client_config "${2:-}" ;;
             xray-status) cmd_xray_status ;;
             xray-logs) cmd_xray_logs ;;
@@ -6407,7 +6584,7 @@ main() {
                 echo "GitHub:   github.com/ivan-yurich/naiveproxy"
                 ;;
             *) err "Неизвестная команда: $1"
-               echo "Доступные: install status config [user] reload restart update remove logs monitor users hysteria hy2 warp xray devices subscription private-page tg-stats ssh-hardening ssh-rescue sysupdate cert domains self-update version camouflage"
+               echo "Доступные: install status config [user] reload restart update remove logs monitor users hysteria hy2 warp xray xray-add-user [user] devices subscription private-page tg-stats ssh-hardening ssh-rescue sysupdate cert domains self-update version camouflage"
                exit 1 ;;
         esac
         exit 0
