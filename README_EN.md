@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.5.8-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.5.9-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -98,7 +98,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ---
 
-## 🎉 What's new in v5.5.8
+## 🎉 What's new in v5.5.9
 
 <table>
 <tr>
@@ -129,6 +129,10 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ### ⚡ New features
 
+🧭 **Recursive Unbound DNS** — own resolver without Google/Cloudflare upstreams
+🔐 **DNSSEC validation** — trust anchor and `dnssec-failed.org` status test
+🚦 **DNS modes** — recursive/forward DoT with adblock on/off
+🔒 **VPN-only DNS access** — expose `:53` only to allowed VPN CIDRs, no open resolver
 🧩 **Unbound DNS plugin** — DNS blocker is now exposed as a module with `unbound-*` CLI aliases
 ⚡ **Per-user Hysteria 2** — Hysteria server config now uses `auth.type: userpass` for NaiveProxy users
 ⚙️ **Hysteria port selector** — choose the default UDP/8443 or enter a custom UDP port
@@ -345,7 +349,7 @@ Encrypted queries to Cloudflare and Google
 
 ```
 ──────────────────────────────────────────────────────
-   NaiveProxy Manager v5.5.8  [ENG]
+   NaiveProxy Manager v5.5.9  [ENG]
    Status: ● running  │  Domain: proxy.example.com
    Telegram: connected  │  Users: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
@@ -420,6 +424,8 @@ sudo bash naiveproxy.sh dns-update     # Update blocklists
 sudo bash naiveproxy.sh dns-status     # Blocker status
 sudo bash naiveproxy.sh unbound        # Unbound plugin menu
 sudo bash naiveproxy.sh unbound-install
+sudo bash naiveproxy.sh unbound-mode
+sudo bash naiveproxy.sh unbound-vpn
 sudo bash naiveproxy.sh unbound-status
 
 # === Cloudflare WARP modes ===
@@ -629,7 +635,7 @@ sudo bash naiveproxy.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Diagnostics NaiveProxy Manager v5.5.8               │
+│  🔍 Diagnostics NaiveProxy Manager v5.5.9               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -669,7 +675,7 @@ sudo bash naiveproxy.sh diagnose
   ✅ journald: no critical errors
 
 [7/7] Version and updates
-  ✅ Script up to date: v5.5.8
+  ✅ Script up to date: v5.5.9
   ✅ SSH Hardening done
 
 ══════════════════════════════════════════════════════════
@@ -1305,7 +1311,20 @@ for donors
 ## 📜 Changelog
 
 <details>
-<summary><b>v5.5.8</b> — Unbound Plugin + Per-user Hysteria + SSH-safe WARP ← CURRENT</summary>
+<summary><b>v5.5.9</b> — Recursive Unbound DNS + VPN DNS Access ← CURRENT</summary>
+
+**🧭 DNS resolver modes:**
+- Added recursive Unbound mode without Google/Cloudflare upstreams
+- Added mode selection: recursive/forward DoT with adblock on/off
+- Added DNSSEC trust anchor and status test
+- Added VPN-only DNS access through CIDR allowlist
+- Added `unbound-mode` and `unbound-vpn` CLI commands
+- Unbound now listens locally on `127.0.0.1:53` and `127.0.0.1:5335`
+
+</details>
+
+<details>
+<summary><b>v5.5.8</b> — Unbound Plugin + Per-user Hysteria + SSH-safe WARP</summary>
 
 **🧩 Modules and safety:**
 - Added `unbound`, `unbound-install`, `unbound-status`, `unbound-update` aliases
