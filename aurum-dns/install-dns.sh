@@ -5,6 +5,8 @@ CONF="/etc/unbound/unbound.conf.d/aurum-vpn.conf"
 ENV_DIR="/etc/aurum-dns"
 ENV_FILE="${ENV_DIR}/aurum-dns.env"
 NO_STUB="/etc/systemd/resolved.conf.d/no-stub.conf"
+GATEWAY_SERVICE="/etc/systemd/system/aurum-dns-gateway.service"
+DEFAULT_GATEWAY="10.0.0.1"
 DEFAULT_CIDRS="10.0.0.0/24"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -70,6 +72,45 @@ ip_on_server() {
     local gateway="$1"
     [[ "$gateway" == "127.0.0.1" ]] && return 0
     server_ipv4s | grep -Fxq "$gateway"
+}
+
+ensure_managed_gateway() {
+    local gateway="$1" ip_bin
+    is_ipv4 "$gateway" || die "Invalid gateway IP: $gateway"
+    ip_bin=$(command -v ip || echo "/usr/sbin/ip")
+    cat > "$GATEWAY_SERVICE" <<EOF
+[Unit]
+Description=Aurum DNS local gateway IP (${gateway})
+Before=unbound.service
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '${ip_bin} addr replace ${gateway}/32 dev lo && ${ip_bin} link set lo up'
+ExecStop=/bin/sh -c '${ip_bin} addr del ${gateway}/32 dev lo 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now aurum-dns-gateway.service >/dev/null 2>&1
+}
+
+prepare_gateway() {
+    local gateway="$1" ans
+    if ip_on_server "$gateway"; then
+        return 0
+    fi
+    warn "Gateway IP $gateway is not assigned to this server."
+    if [[ -t 0 ]]; then
+        printf 'Create local gateway %s/32 on lo automatically? [Y/n]: ' "$gateway"
+        read -r ans
+    else
+        ans="y"
+    fi
+    [[ "${ans,,}" == "n" ]] && die "Gateway is required for VPN DNS"
+    ensure_managed_gateway "$gateway"
 }
 
 port53_listeners() {
@@ -217,14 +258,16 @@ main() {
     detected=$(detect_gateway || true)
 
     if [[ -t 0 && -z "$gateway" ]]; then
-        printf 'VPN gateway IP [%s]: ' "${detected:-Enter = local only}"
+        printf 'VPN gateway IP [%s, 0 = local only]: ' "${detected:-$DEFAULT_GATEWAY}"
         read -r gateway
-        gateway="${gateway:-$detected}"
+        gateway="${gateway:-${detected:-$DEFAULT_GATEWAY}}"
     fi
 
-    if [[ -n "$gateway" ]]; then
+    if [[ "$gateway" =~ ^(0|local|none)$ ]]; then
+        gateway=""
+    elif [[ -n "$gateway" ]]; then
         is_ipv4 "$gateway" || die "Invalid gateway IP: $gateway"
-        ip_on_server "$gateway" || die "Gateway IP $gateway is not assigned to this server"
+        prepare_gateway "$gateway"
     fi
 
     if [[ -t 0 && -z "$cidrs" ]]; then

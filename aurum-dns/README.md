@@ -46,7 +46,7 @@ sudo bash install-dns.sh
 - VPN gateway IP, например `10.0.0.1`;
 - VPN CIDR, например `10.0.0.0/24`.
 
-Если VPN-интерфейс ещё не поднят и IP `10.0.0.1` отсутствует на сервере, установка остановится. Это сделано специально, чтобы Unbound не слушал внешний публичный адрес случайно.
+Если IP `10.0.0.1` ещё не поднят на сервере, установщик предложит создать безопасный локальный gateway `10.0.0.1/32` на `lo` через `aurum-dns-gateway.service`. Это не открывает DNS наружу: Unbound всё равно слушает только localhost и разрешённые VPN CIDR.
 
 Можно запускать без интерактива:
 
@@ -62,6 +62,7 @@ sudo AURUM_DNS_GATEWAY=10.0.0.1 AURUM_DNS_CIDRS=10.0.0.0/24 bash install-dns.sh
 - проверяет порт `53`;
 - если порт занят `systemd-resolved`, создаёт `/etc/systemd/resolved.conf.d/no-stub.conf` с `DNSStubListener=no`;
 - не меняет `/etc/resolv.conf`;
+- при необходимости создаёт локальный gateway IP через `aurum-dns-gateway.service`;
 - пишет `/etc/unbound/unbound.conf.d/aurum-vpn.conf`;
 - делает backup старых файлов с датой;
 - добавляет UFW allow только от VPN CIDR на `53/tcp` и `53/udp`;
@@ -99,7 +100,7 @@ dig @127.0.0.1 dnssec-failed.org A
     "servers": [
       {
         "tag": "aurum-dns",
-        "address": "udp://10.0.0.1",
+        "address": "tcp://10.0.0.1:53",
         "detour": "direct"
       }
     ],
@@ -182,7 +183,7 @@ sudo ss -lntup | grep ':53'
 Частые причины:
 
 - порт `53` занят другим DNS-сервисом;
-- VPN gateway IP ещё не назначен интерфейсу;
+- `aurum-dns-gateway.service` не поднял локальный gateway IP;
 - указана слишком широкая подсеть `0.0.0.0/0`;
 - в конфиг вручную добавили повторный `auto-trust-anchor-file`.
 

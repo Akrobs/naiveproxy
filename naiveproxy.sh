@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   NaiveProxy Manager v5.5.11 — by Иван Юрьевич
+#   NaiveProxy Manager v5.5.12 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.5.11"
+VERSION="5.5.12"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/naiveproxy.sh"
 GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
@@ -777,6 +777,7 @@ save_config() {
         printf 'UNBOUND_MODE=%q\n' "${UNBOUND_MODE:-recursive}"
         printf 'UNBOUND_ADBLOCK=%q\n' "${UNBOUND_ADBLOCK:-0}"
         printf 'UNBOUND_GATEWAY_IP=%q\n' "${UNBOUND_GATEWAY_IP:-}"
+        printf 'UNBOUND_MANAGED_GATEWAY=%q\n' "${UNBOUND_MANAGED_GATEWAY:-0}"
         printf 'UNBOUND_VPN_ENABLED=%q\n' "${UNBOUND_VPN_ENABLED:-0}"
         printf 'UNBOUND_VPN_CIDRS=%q\n' "${UNBOUND_VPN_CIDRS:-10.0.0.0/24}"
         printf 'WARP_PROXY_PORT=%q\n' "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
@@ -1695,6 +1696,89 @@ backup_config() {
 }
 
 # ─── Клиентский конфиг ───────────────────────────────────────
+aurum_dns_client_ip() {
+    if [[ "${UNBOUND_VPN_ENABLED:-0}" == "1" && -n "${UNBOUND_GATEWAY_IP:-}" ]]; then
+        printf '%s\n' "$UNBOUND_GATEWAY_IP"
+    fi
+}
+
+singbox_naive_tun_json() {
+    local user="$1" pass="$2" dns_ip
+    dns_ip=$(aurum_dns_client_ip)
+    if [[ -n "$dns_ip" ]]; then
+        cat <<EOF
+{
+  "dns": {
+    "servers": [
+      {
+        "tag": "aurum-dns",
+        "address": "tcp://${dns_ip}:53",
+        "detour": "naiveproxy-out"
+      }
+    ],
+    "final": "aurum-dns",
+    "strategy": "ipv4_only"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": "172.19.0.1/30",
+      "auto_route": true,
+      "strict_route": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "naive",
+      "tag": "naiveproxy-out",
+      "server": "${DOMAIN}",
+      "server_port": 443,
+      "username": "${user}",
+      "password": "${pass}",
+      "tls": { "enabled": true, "server_name": "${DOMAIN}" }
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": {
+    "rules": [
+      { "protocol": "dns", "outbound": "naiveproxy-out" }
+    ],
+    "final": "naiveproxy-out",
+    "auto_detect_interface": true
+  }
+}
+EOF
+    else
+        cat <<EOF
+{
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": "172.19.0.1/30",
+      "auto_route": true,
+      "strict_route": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "naive",
+      "tag": "naiveproxy-out",
+      "server": "${DOMAIN}",
+      "server_port": 443,
+      "username": "${user}",
+      "password": "${pass}",
+      "tls": { "enabled": true, "server_name": "${DOMAIN}" }
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": { "final": "naiveproxy-out" }
+}
+EOF
+    fi
+}
+
 print_client_config() {
     load_config
     hr
@@ -1753,32 +1837,12 @@ EOF
 EOF
     echo
     echo -e "${CYAN}  JSON (sing-box полный пример, Android VPN/TUN):${RESET}"
-    cat <<EOF
-  {
-    "inbounds": [
-      {
-        "type": "tun",
-        "tag": "tun-in",
-        "address": "172.19.0.1/30",
-        "auto_route": true,
-        "strict_route": true
-      }
-    ],
-    "outbounds": [
-      {
-        "type": "naive",
-        "tag": "naiveproxy-out",
-        "server": "${DOMAIN}",
-        "server_port": 443,
-        "username": "${first_user}",
-        "password": "${first_pass}",
-        "tls": { "enabled": true, "server_name": "${DOMAIN}" }
-      },
-      { "type": "direct", "tag": "direct" }
-    ],
-    "route": { "final": "naiveproxy-out" }
-  }
-EOF
+    if [[ -n "$(aurum_dns_client_ip)" ]]; then
+        echo -e "${GREEN}  Aurum DNS включён:${RESET} DNS в этом примере идёт через ${CYAN}tcp://$(aurum_dns_client_ip):53${RESET}"
+    else
+        echo -e "${YELLOW}  Aurum DNS для клиентов выключен:${RESET} меню 17 → 2 включит DNS в этот пример."
+    fi
+    singbox_naive_tun_json "$first_user" "$first_pass" | sed 's/^/  /'
     echo
     echo -e "${CYAN}  Fallback HTTPS proxy (если приложение не умеет native NaiveProxy):${RESET}"
     cat <<EOF
@@ -2064,6 +2128,12 @@ print_hysteria_client_config() {
     }
   }
 EOF
+    if [[ -n "$(aurum_dns_client_ip)" ]]; then
+        echo
+        echo -e "${CYAN}  Aurum DNS для full TUN/sing-box:${RESET}"
+        echo -e "  DNS server: ${GREEN}tcp://$(aurum_dns_client_ip):53${RESET}"
+        echo -e "  detour: ${GREEN}hysteria2-out${RESET}"
+    fi
     echo
     if command -v qrencode &>/dev/null; then
         qrencode -t ANSIUTF8 "$hy2_uri"
@@ -2698,6 +2768,12 @@ print_xray_client_config() {
     echo
     echo -e "${CYAN}  VLESS gRPC TLS:${RESET}"
     echo "  vless://${uuid}@${DOMAIN}:${XRAY_GRPC_PORT:-$XRAY_GRPC_PORT_DEFAULT}?security=tls&type=grpc&serviceName=vless-grpc&sni=${DOMAIN}&fp=chrome#${user}-grpc"
+    if [[ -n "$(aurum_dns_client_ip)" ]]; then
+        echo
+        echo -e "${CYAN}  Aurum DNS для full TUN/sing-box:${RESET}"
+        echo -e "  DNS server: ${GREEN}tcp://$(aurum_dns_client_ip):53${RESET}"
+        echo -e "  detour: ${GREEN}xray-out${RESET} (или тег твоего Xray outbound в клиенте)"
+    fi
     hr
 }
 
@@ -2814,7 +2890,7 @@ generate_subscription_page() {
 
     ensure_web_privacy_files
 
-    local token token_file page_dir links_file naive_pass naive_uri naive_json hy2_uri hy2_json
+    local token token_file page_dir links_file naive_pass naive_uri naive_json naive_singbox_tun_json hy2_uri hy2_json
     token_file="${SUBS_DIR}/${user}.token"
     token=$(get_or_create_token_file "$token_file")
     page_dir="${SUBS_WEB_DIR}/${token}"
@@ -2825,6 +2901,7 @@ generate_subscription_page() {
     naive_pass=$(get_user_pass "$user" 2>/dev/null || true)
     naive_uri=""
     naive_json=""
+    naive_singbox_tun_json=""
     if [[ -n "$naive_pass" ]]; then
         naive_uri="naive+https://${user}:${naive_pass}@${DOMAIN}:443"
         naive_json=$(cat <<EOF
@@ -2834,6 +2911,7 @@ generate_subscription_page() {
 }
 EOF
 )
+        naive_singbox_tun_json=$(singbox_naive_tun_json "$user" "$naive_pass")
     fi
 
     hy2_uri=""
@@ -2899,7 +2977,7 @@ EOF
     } > "$links_file"
     chmod 644 "$links_file"
 
-    local sub_url links_url title safe_user safe_domain safe_naive_uri safe_naive_json safe_hy2_uri safe_hy2_json
+    local sub_url links_url title safe_user safe_domain safe_naive_uri safe_naive_json safe_naive_singbox_tun_json safe_hy2_uri safe_hy2_json
     sub_url="https://${DOMAIN}/s/${token}/"
     links_url="${sub_url}links.txt"
     title="Subscription for ${user}"
@@ -2907,6 +2985,7 @@ EOF
     safe_domain=$(html_escape_text "$DOMAIN")
     safe_naive_uri=$(html_escape_text "$naive_uri")
     safe_naive_json=$(html_escape_text "$naive_json")
+    safe_naive_singbox_tun_json=$(html_escape_text "$naive_singbox_tun_json")
     safe_hy2_uri=$(html_escape_text "$hy2_uri")
     safe_hy2_json=$(html_escape_text "$hy2_json")
 
@@ -2959,6 +3038,8 @@ EOF
       <pre>${safe_naive_uri:-Naive пользователь не найден}</pre>
       <h3>naive-client JSON</h3>
       <pre>${safe_naive_json:-Naive конфиг недоступен}</pre>
+      <h3>sing-box Android VPN/TUN + Aurum DNS</h3>
+      <pre>${safe_naive_singbox_tun_json:-sing-box TUN конфиг недоступен}</pre>
       <h2>Hysteria 2</h2>
       <p class="muted">Персональный UDP/QUIC профиль для этого же пользователя, если Hysteria 2 установлен.</p>
       <pre>${safe_hy2_uri:-Hysteria 2 не установлен или пользователь недоступен}</pre>
@@ -6520,6 +6601,8 @@ DNS_LEGACY_CONF="/etc/unbound/unbound.conf.d/naiveproxy-dns.conf"
 DNS_LEGACY_BLOCKLIST="/etc/unbound/blocklist.conf"
 DNS_LEGACY_WHITELIST="/etc/unbound/whitelist.txt"
 DNS_RESOLVED_NO_STUB="/etc/systemd/resolved.conf.d/no-stub.conf"
+DNS_GATEWAY_SERVICE="/etc/systemd/system/aurum-dns-gateway.service"
+DNS_DEFAULT_GATEWAY_IP="10.0.0.1"
 DNS_DEFAULT_VPN_CIDRS="10.0.0.0/24"
 DNS_STATS_FILE="/etc/naiveproxy/dns_stats"
 
@@ -6581,6 +6664,74 @@ ip_is_on_server() {
     local ip_addr="$1"
     [[ "$ip_addr" == "127.0.0.1" ]] && return 0
     get_unbound_vpn_bind_ips | grep -Fxq "$ip_addr"
+}
+
+ensure_managed_dns_gateway() {
+    local gateway_ip="$1"
+    local ip_bin
+    is_valid_ipv4 "$gateway_ip" || return 1
+    ip_bin=$(command -v ip || echo "/usr/sbin/ip")
+
+    cat > "$DNS_GATEWAY_SERVICE" <<EOF
+[Unit]
+Description=Aurum DNS local gateway IP (${gateway_ip})
+Before=unbound.service
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '${ip_bin} addr replace ${gateway_ip}/32 dev lo && ${ip_bin} link set lo up'
+ExecStop=/bin/sh -c '${ip_bin} addr del ${gateway_ip}/32 dev lo 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now aurum-dns-gateway.service >/dev/null 2>&1 || {
+        err "Не смог запустить aurum-dns-gateway.service"
+        journalctl -u aurum-dns-gateway -n 20 --no-pager || true
+        return 1
+    }
+    ip addr show dev lo | grep -q "${gateway_ip}/32" || {
+        err "Gateway IP ${gateway_ip} не появился на lo"
+        return 1
+    }
+    ok "Локальный DNS gateway поднят: ${gateway_ip}/32 на lo"
+}
+
+remove_managed_dns_gateway() {
+    systemctl disable --now aurum-dns-gateway.service >/dev/null 2>&1 || true
+    rm -f "$DNS_GATEWAY_SERVICE" 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+}
+
+prepare_unbound_gateway_ip() {
+    local gateway_ip="$1"
+    local ans
+
+    if ip_is_on_server "$gateway_ip"; then
+        UNBOUND_MANAGED_GATEWAY="0"
+        return 0
+    fi
+
+    warn "IP ${gateway_ip} не найден на интерфейсах сервера."
+    echo -e "${CYAN}Могу создать безопасный локальный DNS gateway ${gateway_ip}/32 на lo.${RESET}"
+    echo -e "${DIM}Это нужно, чтобы Unbound мог слушать DNS для клиентских TUN/VPN конфигов. Наружу DNS всё равно не открывается.${RESET}"
+    if [[ -t 0 ]]; then
+        echo -ne "${YELLOW}Создать автоматически? [Y/n]: ${RESET}"
+        read -r ans
+    else
+        ans="y"
+    fi
+    if [[ "${ans,,}" == "n" ]]; then
+        err "Gateway не создан. Сначала подними VPN-интерфейс с IP ${gateway_ip} или разреши авто-gateway."
+        return 1
+    fi
+
+    ensure_managed_dns_gateway "$gateway_ip" || return 1
+    UNBOUND_MANAGED_GATEWAY="1"
 }
 
 detect_private_dns_gateway() {
@@ -6794,21 +6945,23 @@ cmd_dns_install() {
     echo -e "${DIM}Если нужен DNS для VPN-клиентов, укажи IP gateway на VPN-интерфейсе, например 10.0.0.1.${RESET}"
     local detected_gateway gateway_input vpn_cidrs
     detected_gateway=$(detect_private_dns_gateway || true)
-    echo -ne "${CYAN}VPN gateway IP [${detected_gateway:-Enter = только 127.0.0.1}]: ${RESET}"
+    echo -ne "${CYAN}VPN gateway IP [${detected_gateway:-$DNS_DEFAULT_GATEWAY_IP}, 0 = только локально]: ${RESET}"
     read -r gateway_input
-    gateway_input="${gateway_input:-$detected_gateway}"
+    gateway_input="${gateway_input:-${detected_gateway:-$DNS_DEFAULT_GATEWAY_IP}}"
 
     UNBOUND_MODE="recursive"
     UNBOUND_ADBLOCK="0"
-    if [[ -n "$gateway_input" ]]; then
+    if [[ "$gateway_input" =~ ^(0|local|none|нет)$ ]]; then
+        UNBOUND_GATEWAY_IP=""
+        UNBOUND_MANAGED_GATEWAY="0"
+        UNBOUND_VPN_ENABLED="0"
+        UNBOUND_VPN_CIDRS="${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}"
+    elif [[ -n "$gateway_input" ]]; then
         if ! is_valid_ipv4 "$gateway_input"; then
             err "Некорректный IPv4: $gateway_input"
             return 1
         fi
-        if ! ip_is_on_server "$gateway_input"; then
-            err "IP $gateway_input не найден на интерфейсах сервера. Сначала подними VPN-интерфейс с этим gateway IP."
-            return 1
-        fi
+        prepare_unbound_gateway_ip "$gateway_input" || return 1
         UNBOUND_GATEWAY_IP="$gateway_input"
         UNBOUND_VPN_ENABLED="1"
         echo -ne "${CYAN}VPN CIDR через запятую [${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}]: ${RESET}"
@@ -6820,6 +6973,7 @@ cmd_dns_install() {
         fi
     else
         UNBOUND_GATEWAY_IP=""
+        UNBOUND_MANAGED_GATEWAY="0"
         UNBOUND_VPN_ENABLED="0"
         UNBOUND_VPN_CIDRS="${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}"
     fi
@@ -6861,6 +7015,9 @@ cmd_dns_restart() {
         err "unbound не установлен"
         return 1
     fi
+    if [[ "${UNBOUND_VPN_ENABLED:-0}" == "1" && "${UNBOUND_MANAGED_GATEWAY:-0}" == "1" && -n "${UNBOUND_GATEWAY_IP:-}" ]]; then
+        ensure_managed_dns_gateway "$UNBOUND_GATEWAY_IP" || return 1
+    fi
     write_unbound_config
     restart_unbound_checked || return 1
     ok "Aurum DNS перезапущен"
@@ -6888,6 +7045,7 @@ cmd_dns_status() {
     echo -e "  Local DNS: ${CYAN}127.0.0.1:53${RESET}"
     if [[ "${UNBOUND_VPN_ENABLED:-0}" == "1" ]]; then
         echo -e "  VPN DNS: ${CYAN}${UNBOUND_GATEWAY_IP:-не задан}:53${RESET} только для ${CYAN}${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}${RESET}"
+        echo -e "  Gateway mode: ${CYAN}$([[ "${UNBOUND_MANAGED_GATEWAY:-0}" == "1" ]] && echo "auto lo /32" || echo "server interface")${RESET}"
     else
         echo -e "  VPN DNS: ${YELLOW}выключен${RESET}"
     fi
@@ -6951,6 +7109,7 @@ cmd_dns_vpn_access() {
     load_config
     local old_unbound_vpn_cidrs="${UNBOUND_VPN_CIDRS:-}"
     local old_unbound_gateway="${UNBOUND_GATEWAY_IP:-}"
+    local old_unbound_managed="${UNBOUND_MANAGED_GATEWAY:-0}"
     hr
     echo -e "${BOLD}  🔐 DNS доступ для VPN-клиентов${RESET}"
     hr
@@ -6966,17 +7125,17 @@ cmd_dns_vpn_access() {
         1)
             local cidrs gateway_input detected_gateway
             detected_gateway=$(detect_private_dns_gateway || true)
-            echo -ne "${CYAN}VPN gateway IP [${UNBOUND_GATEWAY_IP:-${detected_gateway:-10.0.0.1}}]: ${RESET}"
+            echo -ne "${CYAN}VPN gateway IP [${UNBOUND_GATEWAY_IP:-${detected_gateway:-$DNS_DEFAULT_GATEWAY_IP}}]: ${RESET}"
             read -r gateway_input
-            gateway_input="${gateway_input:-${UNBOUND_GATEWAY_IP:-${detected_gateway:-10.0.0.1}}}"
+            gateway_input="${gateway_input:-${UNBOUND_GATEWAY_IP:-${detected_gateway:-$DNS_DEFAULT_GATEWAY_IP}}}"
             if ! is_valid_ipv4 "$gateway_input"; then
                 err "Некорректный IPv4: $gateway_input"
                 return 1
             fi
-            if ! ip_is_on_server "$gateway_input"; then
-                err "IP $gateway_input не найден на интерфейсах сервера. Сначала подними VPN-интерфейс с этим gateway IP."
-                return 1
+            if [[ "$old_unbound_managed" == "1" && -n "$old_unbound_gateway" && "$old_unbound_gateway" != "$gateway_input" ]]; then
+                remove_managed_dns_gateway
             fi
+            prepare_unbound_gateway_ip "$gateway_input" || return 1
             echo -ne "${CYAN}VPN CIDR через запятую [${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}]: ${RESET}"
             read -r cidrs
             UNBOUND_VPN_CIDRS=$(normalize_cidr_list "${cidrs:-${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}}") || return 1
@@ -6990,7 +7149,9 @@ cmd_dns_vpn_access() {
         2)
             UNBOUND_VPN_ENABLED="0"
             UNBOUND_GATEWAY_IP=""
+            UNBOUND_MANAGED_GATEWAY="0"
             remove_unbound_ufw_rules "$old_unbound_vpn_cidrs"
+            [[ "$old_unbound_managed" == "1" ]] && remove_managed_dns_gateway
             ;;
         0) return 0 ;;
         *) err "Неверный выбор"; return 1 ;;
@@ -7025,6 +7186,7 @@ cmd_dns_remove() {
     systemctl stop unbound 2>/dev/null || true
     systemctl disable unbound 2>/dev/null || true
     remove_unbound_ufw_rules
+    [[ "${UNBOUND_MANAGED_GATEWAY:-0}" == "1" || -f "$DNS_GATEWAY_SERVICE" ]] && remove_managed_dns_gateway
     cleanup_legacy_dns_files
     dns_config_backup "$DNS_CONF"
     rm -f "$DNS_CONF"
@@ -7036,6 +7198,7 @@ cmd_dns_remove() {
     fi
     UNBOUND_ENABLED="0"
     UNBOUND_GATEWAY_IP=""
+    UNBOUND_MANAGED_GATEWAY="0"
     UNBOUND_VPN_ENABLED="0"
     UNBOUND_ADBLOCK="0"
     save_config
@@ -7104,6 +7267,7 @@ cmd_dns_menu() {
         echo -e "  Статус: ${dns_status}"
         echo -e "  Режим: ${CYAN}$(unbound_mode_label)${RESET}"
         echo -e "  VPN DNS: ${CYAN}${UNBOUND_VPN_ENABLED:-0}${RESET} | Gateway: ${CYAN}${UNBOUND_GATEWAY_IP:-нет}${RESET} | CIDR: ${CYAN}${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}${RESET}"
+        [[ "${UNBOUND_MANAGED_GATEWAY:-0}" == "1" ]] && echo -e "  Gateway mode: ${CYAN}auto lo /32${RESET}"
         echo
         echo -e "  ${BOLD}1)${RESET} Установить / переустановить Aurum DNS"
         echo -e "  ${BOLD}2)${RESET} Настроить DNS для VPN-клиентов"

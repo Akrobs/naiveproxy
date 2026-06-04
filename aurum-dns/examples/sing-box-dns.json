@@ -3,7 +3,7 @@
     "servers": [
       {
         "tag": "aurum-dns",
-        "address": "udp://10.0.0.1",
+        "address": "tcp://10.0.0.1:53",
         "detour": "direct"
       }
     ],

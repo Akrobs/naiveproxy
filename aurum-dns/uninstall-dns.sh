@@ -4,6 +4,7 @@ set -euo pipefail
 CONF="/etc/unbound/unbound.conf.d/aurum-vpn.conf"
 ENV_FILE="/etc/aurum-dns/aurum-dns.env"
 NO_STUB="/etc/systemd/resolved.conf.d/no-stub.conf"
+GATEWAY_SERVICE="/etc/systemd/system/aurum-dns-gateway.service"
 
 log() { printf '[i] %s\n' "$*"; }
 ok() { printf '[OK] %s\n' "$*"; }
@@ -42,6 +43,8 @@ main() {
 
     systemctl stop unbound 2>/dev/null || true
     systemctl disable unbound 2>/dev/null || true
+    systemctl disable --now aurum-dns-gateway.service 2>/dev/null || true
+    rm -f "$GATEWAY_SERVICE"
     remove_ufw_rules
 
     backup_file "$CONF"
