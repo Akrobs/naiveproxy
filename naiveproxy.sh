@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.6.8 — by Иван Юрьевич
+#   Yurich Panel v5.6.9 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.6.8"
+VERSION="5.6.9"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -901,11 +901,16 @@ user_expiry_tag() {
 prompt_user_term_months() {
     local default_months="${1:-12}" ans
     is_valid_user_months "$default_months" || default_months="12"
-    echo -ne "${CYAN}Срок пользователя 1-12 месяцев [${default_months}]: ${RESET}"
-    read -r ans
+    if [[ -r /dev/tty && -w /dev/tty ]]; then
+        printf "%b" "${CYAN}Срок пользователя 1-12 месяцев [${default_months}]: ${RESET}" > /dev/tty
+        read -r ans < /dev/tty
+    else
+        printf "%b" "${CYAN}Срок пользователя 1-12 месяцев [${default_months}]: ${RESET}" >&2
+        read -r ans
+    fi
     ans="${ans:-$default_months}"
     if ! is_valid_user_months "$ans"; then
-        err "Срок должен быть от 1 до 12 месяцев"
+        err "Срок должен быть от 1 до 12 месяцев" >&2
         return 1
     fi
     printf '%s\n' "$ans"
