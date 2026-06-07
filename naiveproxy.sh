@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.6.10 — by Иван Юрьевич
+#   Yurich Panel v5.6.11 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.6.10"
+VERSION="5.6.11"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -3204,6 +3204,119 @@ ensure_xray_reality_keys() {
     fi
 }
 
+xray_reality_target_presets() {
+    cat <<'EOF'
+RU|ya.ru:443|Yandex short
+RU|www.yandex.ru:443|Yandex
+RU|www.ozon.ru:443|Ozon
+RU|www.wildberries.ru:443|Wildberries
+RU|www.avito.ru:443|Avito
+RU|www.rbc.ru:443|RBC
+RU|www.drom.ru:443|Drom
+RU|www.vk.com:443|VK
+GLOBAL|www.microsoft.com:443|Microsoft
+GLOBAL|www.apple.com:443|Apple
+GLOBAL|www.cloudflare.com:443|Cloudflare
+GLOBAL|www.ubuntu.com:443|Ubuntu
+GLOBAL|www.debian.org:443|Debian
+GLOBAL|www.mozilla.org:443|Mozilla
+GLOBAL|www.python.org:443|Python
+GLOBAL|www.wikipedia.org:443|Wikipedia
+EOF
+}
+
+normalize_reality_target() {
+    local raw="${1:-}" host port
+    raw="${raw#https://}"
+    raw="${raw#http://}"
+    raw="${raw%%/*}"
+    raw="${raw//[[:space:]]/}"
+    [[ -n "$raw" ]] || return 1
+    if [[ "$raw" == *:* ]]; then
+        host="${raw%%:*}"
+        port="${raw##*:}"
+    else
+        host="$raw"
+        port="443"
+    fi
+    is_valid_domain "$host" || return 1
+    is_valid_port "$port" || return 1
+    printf '%s:%s\n' "$host" "$port"
+}
+
+test_reality_target_tls() {
+    local target="$1" host port out
+    target=$(normalize_reality_target "$target") || return 2
+    host="${target%%:*}"
+    port="${target##*:}"
+    command -v openssl >/dev/null 2>&1 || return 3
+    out=$(echo | timeout 8 openssl s_client \
+        -connect "${host}:${port}" \
+        -servername "$host" \
+        -alpn h2,http/1.1 \
+        -brief 2>&1 || true)
+    if printf '%s\n' "$out" | grep -Eq 'CONNECTION ESTABLISHED|Protocol version|Ciphersuite'; then
+        return 0
+    fi
+    return 1
+}
+
+prompt_xray_reality_target() {
+    local current="${XRAY_REALITY_TARGET:-www.microsoft.com:443}" choice target label group desc i ans
+    current=$(normalize_reality_target "$current" 2>/dev/null || printf 'www.microsoft.com:443')
+
+    echo
+    echo -e "${BOLD}REALITY target presets${RESET}"
+    echo -e "${DIM}Это кандидаты для TLS/SNI target. Доступность меняется, поэтому скрипт проверит выбранный домен с сервера.${RESET}"
+    echo -e "${DIM}Enter = оставить текущий: ${current}${RESET}"
+    echo
+    i=1
+    while IFS='|' read -r group target desc; do
+        printf '  %2d) [%s] %-28s %s\n' "$i" "$group" "$target" "$desc"
+        i=$((i + 1))
+    done < <(xray_reality_target_presets)
+    echo "   c) свой домен:порт"
+    echo
+    echo -ne "${CYAN}REALITY target choice [Enter = ${current}]: ${RESET}"
+    read -r choice
+
+    if [[ -z "$choice" ]]; then
+        target="$current"
+    elif [[ "${choice,,}" == "c" || "${choice,,}" == "custom" ]]; then
+        echo -ne "${CYAN}Custom REALITY target [domain:443]: ${RESET}"
+        read -r target
+    elif [[ "$choice" =~ ^[0-9]+$ ]]; then
+        target=$(xray_reality_target_presets | awk -F'|' -v n="$choice" 'NR==n {print $2; exit}')
+        if [[ -z "$target" ]]; then
+            warn "Нет такого номера, оставляю текущий target: $current"
+            target="$current"
+        fi
+    else
+        target="$choice"
+    fi
+
+    target=$(normalize_reality_target "$target" 2>/dev/null || true)
+    if [[ -z "$target" ]]; then
+        err "REALITY target должен быть domain:port, например www.microsoft.com:443"
+        return 1
+    fi
+
+    info "Проверяю TLS/SNI для ${target}..."
+    if test_reality_target_tls "$target"; then
+        ok "REALITY target отвечает по TLS: ${target}"
+    else
+        warn "TLS-проверка ${target} не прошла с этого сервера."
+        warn "Это не всегда значит, что target плохой, но лучше выбрать другой кандидат."
+        echo -ne "${YELLOW}Использовать всё равно? [y/N]: ${RESET}"
+        read -r ans
+        [[ "${ans,,}" == "y" ]] || return 1
+    fi
+
+    XRAY_REALITY_TARGET="$target"
+    XRAY_REALITY_SERVER_NAME="${target%%:*}"
+    ok "REALITY target выбран: ${XRAY_REALITY_TARGET}"
+}
+
 write_xray_service() {
     cat > "$XRAY_SERVICE" <<EOF
 [Unit]
@@ -3974,10 +4087,7 @@ cmd_xray_install() {
     x_months=$(prompt_user_term_months 12) || return 1
     set_user_expiry_months "$xuser" "$x_months" || true
 
-    echo -ne "${CYAN}REALITY target [${XRAY_REALITY_TARGET:-www.microsoft.com:443}]: ${RESET}"
-    read -r ans
-    XRAY_REALITY_TARGET="${ans:-${XRAY_REALITY_TARGET:-www.microsoft.com:443}}"
-    XRAY_REALITY_SERVER_NAME="${XRAY_REALITY_TARGET%%:*}"
+    prompt_xray_reality_target || return 1
 
     install_xray_bin || return 1
     write_xray_config "$xuser" || return 1
@@ -4110,6 +4220,21 @@ cmd_xray_status() {
     hr
 }
 
+cmd_xray_reality_target() {
+    load_config
+    prompt_xray_reality_target || return 1
+    save_config
+
+    if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
+        write_xray_config || return 1
+        systemctl restart xray || return 1
+        ok "Xray config пересобран с REALITY target: ${XRAY_REALITY_TARGET}"
+    else
+        ok "REALITY target сохранён: ${XRAY_REALITY_TARGET}"
+        warn "Xray ещё не установлен. Target применится при установке Xray."
+    fi
+}
+
 cmd_xray_logs() {
     echo -e "${BOLD}Лог Xray (Ctrl+C для выхода):${RESET}"
     journalctl -u xray -n 80 -f
@@ -4146,9 +4271,10 @@ cmd_xray_menu() {
         echo -e "  ${BOLD}4)${RESET} Логи"
         echo -e "  ${BOLD}5)${RESET} Удалить Xray / вернуть Caddy"
         echo -e "  ${BOLD}6)${RESET} Создать Xray пользователя + подписка"
+        echo -e "  ${BOLD}7)${RESET} REALITY target presets / test"
         echo -e "  ${BOLD}0)${RESET} Назад"
         hr
-        echo -e "  Fallback 443: ${CYAN}${XRAY_FALLBACK_ENABLED:-0}${RESET} | REALITY: ${CYAN}${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}${RESET}"
+        echo -e "  Fallback 443: ${CYAN}${XRAY_FALLBACK_ENABLED:-0}${RESET} | REALITY: ${CYAN}${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}${RESET} | Target: ${CYAN}${XRAY_REALITY_TARGET:-www.microsoft.com:443}${RESET}"
         echo -ne "${CYAN}Выбор: ${RESET}"
         read -r choice
         case "$choice" in
@@ -4161,6 +4287,7 @@ cmd_xray_menu() {
             4) cmd_xray_logs ;;
             5) cmd_xray_remove ;;
             6) cmd_xray_add_user ;;
+            7) cmd_xray_reality_target ;;
             0) return ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -8675,7 +8802,7 @@ main() {
             help|--help|-h)
                 echo "Yurich Panel v${VERSION}"
                 echo "Usage: sudo bash yurich-panel.sh [command]"
-                echo "Commands: install status config [user] reload restart update remove logs monitor users hysteria hy2 hysteria-port warp warp-proxy warp-full warp-protocol warp-ssh-allow xray xray-add-user [user] devices subscription private-page tg-stats bot-menu health safe-apply backup export import bridge fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart self-update version camouflage"
+                echo "Commands: install status config [user] reload restart update remove logs monitor users hysteria hy2 hysteria-port warp warp-proxy warp-full warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] devices subscription private-page tg-stats bot-menu health safe-apply backup export import bridge fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart self-update version camouflage"
                 return 0
                 ;;
         esac
@@ -8718,6 +8845,7 @@ main() {
             warp-remove) cmd_warp_remove ;;
             xray) cmd_xray_menu ;;
             xray-install) cmd_xray_install ;;
+            xray-target|xray-reality-target) cmd_xray_reality_target ;;
             xray-add-user|xray-user) cmd_xray_add_user "${2:-}" "${3:-}" ;;
             xray-config) print_xray_client_config "${2:-}" ;;
             xray-status) cmd_xray_status ;;
@@ -8771,7 +8899,7 @@ main() {
                 echo "GitHub:   github.com/ivan-yurich/naiveproxy"
                 ;;
             *) err "Неизвестная команда: $1"
-               echo "Доступные: install status config [user] reload restart update remove logs monitor users hysteria hy2 hysteria-port warp warp-proxy warp-full warp-protocol warp-ssh-allow xray xray-add-user [user] devices subscription private-page tg-stats bot-menu health safe-apply backup export import bridge fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart self-update version camouflage"
+               echo "Доступные: install status config [user] reload restart update remove logs monitor users hysteria hy2 hysteria-port warp warp-proxy warp-full warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] devices subscription private-page tg-stats bot-menu health safe-apply backup export import bridge fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart self-update version camouflage"
                exit 1 ;;
         esac
         exit 0
