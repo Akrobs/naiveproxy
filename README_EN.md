@@ -22,11 +22,11 @@
 
 **One script. Bare VPS → secure proxy, private DNS and diagnostics in 10 minutes.**
 
-*Caddy 2 · NaiveProxy · Telegram Bot · DNS (Unbound) · Diagnostics · SSH Hardening*
+*Caddy 2 · Yurich Proxy · Telegram Bot · DNS (Unbound) · Diagnostics · SSH Hardening*
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.6.3-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.6.4-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/ShellCheck-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.shellcheck.net)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -83,7 +83,7 @@ from bare VPS to working proxy with auto TLS, bans and private DNS
 
 ### 🛡️ Security
 **DPI protection**
-NaiveProxy disguises traffic as regular Chrome — invisible to censors
+Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 </td>
 <td align="center" width="33%">
@@ -98,7 +98,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ---
 
-## 🎉 What's new in v5.6.3
+## 🎉 What's new in v5.6.4
 
 <table>
 <tr>
@@ -107,6 +107,9 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 ### 🐛 Bug fixes
 
 ✅ Yurich Panel branding refresh
+✅ Public transport brand added: `Yurich Proxy`
+✅ Branded `yurich://proxy?...` alias added for future Yurich clients
+✅ Compatible `naive+https://` URI is kept unchanged for current clients
 ✅ Main script renamed to `yurich-panel.sh`, with `naiveproxy.sh` kept as a compatibility alias
 ✅ Public UI, Telegram messages, subscription pages and DNS docs aligned with Yurich Panel
 ✅ Technical protocol names stay intact where they refer to real components
@@ -166,9 +169,9 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 🔐 **DNS (Unbound) env guard** — standalone status/uninstall scripts trust only root-owned env files
 🧩 **Bot install sync** — service install syncs the currently running valid script into `/usr/local/bin`
 🛠️ **bot-menu CLI** — refresh the Telegram command menu manually
-⚡ **Per-user Hysteria 2** — Hysteria server config now uses `auth.type: userpass` for NaiveProxy users
+⚡ **Per-user Hysteria 2** — Hysteria server config now uses `auth.type: userpass` for Yurich Proxy users
 ⚙️ **Hysteria port selector** — choose the default UDP/8443 or enter a custom UDP port
-🔗 **Hysteria in subscriptions** — personal pages now include Naive + Hysteria 2 + Xray links when available
+🔗 **Hysteria in subscriptions** — personal pages now include Yurich Proxy + Hysteria 2 + Xray links when available
 🛟 **WARP SSH-safe full tunnel** — full tunnel adds split-tunnel excludes for the current SSH IP and arms rollback
 🌀 **WARP full tunnel** — route all outgoing VPS traffic through Cloudflare WARP with `warp` / `warp+doh`
 🧭 **WARP protocol picker** — `auto`, `MASQUE`, or `WireGuard`; auto tries MASQUE first, then WireGuard
@@ -176,7 +179,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 🔍 **Separate WARP diagnostics** — local proxy test and full tunnel test are checked independently
 ⏱ **Local Proxy limitation note** — local proxy mode is not ideal for long-running connections
 🧬 **Xray user creation in menu 23** — add a VLESS/REALITY user without reinstalling Xray
-🔗 **Unified subscription page** — Naive + Xray links are generated together for the same user
+🔗 **Unified subscription page** — Yurich Proxy + Xray links are generated together for the same user
 🛠 **xray-add-user USER** — direct CLI provisioning with config rebuild and subscription page
 🤖 **Russian Telegram menu** — persistent reply keyboard for the main admin actions
 🧭 **/menu command** — reopen the Telegram button menu at any time
@@ -190,7 +193,7 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 🤖 **Telegram bot v2** — `/sub`, `/devices`, `/xray`, `/diagfix`, `/privatepage`
 🌀 **Cloudflare WARP proxy mode** — local `127.0.0.1:40000`
 🧬 **Xray Modern** — VLESS/Trojan/REALITY + 443 fallback hub
-📱 **Device limit** — Naive + Xray, up to 5 IPs per user
+📱 **Device limit** — Yurich Proxy + Xray, up to 5 IPs per user
 🛠 **Diagnose --fix** — terminal auto-fix for common issues
 ⚡ **Hysteria 2** — separate UDP/8443 without conflicting with Caddy
 📱 **hy2:// configs** + QR for mobile clients
@@ -215,18 +218,18 @@ NaiveProxy disguises traffic as regular Chrome — invisible to censors
 
 ## 🤔 What is this and how does it work?
 
-**NaiveProxy** disguises traffic as Chrome browser using the real Chromium network stack. DPI systems and censors see legitimate HTTPS/2 — and let it through.
+**Yurich Proxy** is the branded proxy transport in Yurich Panel. Today it uses a Naive-compatible transport, so existing clients keep using the standard `naive+https://` URI while Yurich pages can also show a branded `yurich://proxy?...` alias for future Yurich apps.
 
 **Yurich Panel** — a single bash script that turns a bare VPS into a protected proxy server with private DNS and Telegram management.
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌───────────────────────────┐     ┌──────────┐
 │   Your      │     │  Censor/DPI  │     │      Your VPS             │     │          │
-│   phone     │────▶│              │────▶│  Caddy + NaiveProxy       │────▶│ Internet │
+│   phone     │────▶│              │────▶│  Caddy + Yurich Proxy     │────▶│ Internet │
 │   laptop    │     │ Sees Chrome  │     │  DNS / Unbound            │     │          │
 └─────────────┘     │  HTTPS/2 ✓   │     │  probe_resistance         │     └──────────┘
-  Naive client       └──────────────┘     └───────────────────────────┘
-  Chromium stack      Passes through        DNSSEC + cache
+  compatible client   └──────────────┘     └───────────────────────────┘
+  naive transport       TLS/HTTP stack        DNSSEC + cache
 ```
 
 ### 🎯 Who needs this:
@@ -380,12 +383,12 @@ No `0.0.0.0` bind and no public port 53 rule
 
 ```
 ──────────────────────────────────────────────────────
-   Yurich Panel v5.6.3  [ENG]
+   Yurich Panel v5.6.4  [ENG]
    Status: ● running  │  Domain: proxy.example.com
    Telegram: connected  │  Users: 3  │  SSH: 52847
 ──────────────────────────────────────────────────────
-   1)  📦 Install NaiveProxy        10) 📄 Logs
-   2)  📊 Status + certificate      11) 🗑  Remove NaiveProxy
+   1)  📦 Install Yurich Proxy      10) 📄 Logs
+   2)  📊 Status + certificate      11) 🗑  Remove Yurich Proxy
    3)  📱 Client config + QR        16) 🔍 Diagnostics
    4)  👥 Users                     17) 🛡️ DNS (Unbound)
    5)  🌍 Domains                   18) 💛 Support project
@@ -584,7 +587,7 @@ sudo bash yurich-panel.sh subscription-reset ivan
 ```
 
 The page is created under a secret URL like `https://domain/s/<token>/`, with raw import links available as `links.txt`.
-It includes NaiveProxy URI, naive-client JSON, Xray/VLESS/Trojan links and setup hints for Windows, Android, iOS/macOS and Linux.
+It includes a Yurich Proxy alias, compatible `naive+https://` URI, naive-client JSON, Xray/VLESS/Trojan links and setup hints for Windows, Android, iOS/macOS and Linux.
 
 ### 🔐 Multi-admin:
 
@@ -690,7 +693,7 @@ sudo bash yurich-panel.sh diagnose
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  🔍 Diagnostics Yurich Panel v5.6.3               │
+│  🔍 Diagnostics Yurich Panel v5.6.4               │
 │  2026-05-23 14:32:18 · proxy.example.com               │
 └─────────────────────────────────────────────────────────┘
 
@@ -730,7 +733,7 @@ sudo bash yurich-panel.sh diagnose
   ✅ journald: no critical errors
 
 [7/7] Version and updates
-  ✅ Script up to date: v5.6.3
+  ✅ Script up to date: v5.6.4
   ✅ SSH Hardening done
 
 ══════════════════════════════════════════════════════════
@@ -810,7 +813,13 @@ ssh -i ~/.ssh/id_naiveproxy -p NEW_PORT user@YOUR_IP
 
 ## 📱 Client Apps
 
-### 🔗 URI format:
+### 🔗 Yurich Proxy alias for future Yurich clients:
+
+```
+yurich://proxy?transport=naive&server=YOUR_DOMAIN&port=443&username=USERNAME&password=PASSWORD
+```
+
+### 🔗 Compatible URI for current clients:
 
 ```
 naive+https://USERNAME:PASSWORD@YOUR_DOMAIN:443
@@ -911,7 +920,7 @@ For servers
 </tr>
 </table>
 
-> ⚠️ **v2rayNG does NOT support NaiveProxy.** Use NekoBox or Hiddify.
+> ⚠️ **v2rayNG does not support Yurich Proxy/native naive transport.** Use NekoBox or Hiddify.
 
 ---
 
@@ -1070,7 +1079,7 @@ journalctl -u caddy -n 30 --no-pager
 3. **Streisand** — free
 
 **How to connect:**
-1. Copy URI: `naive+https://user:pass@domain:443`
+1. Copy the compatible URI: `naive+https://user:pass@domain:443`
 2. Open Hiddify → Import from clipboard
 
 </details>
@@ -1249,7 +1258,7 @@ systemctl restart caddy
 </details>
 
 <details>
-<summary><b>How to completely remove NaiveProxy</b></summary>
+<summary><b>How to completely remove Yurich Proxy</b></summary>
 
 ```bash
 sudo bash yurich-panel.sh remove
@@ -1364,7 +1373,19 @@ for donors
 ## 📜 Changelog
 
 <details>
-<summary><b>v5.6.3</b> — Yurich Panel branding ← CURRENT</summary>
+<summary><b>v5.6.4</b> — Yurich Proxy alias ← CURRENT</summary>
+
+**🧭 Yurich Proxy branding:**
+- Added public transport brand `Yurich Proxy`
+- Kept the technical `naive+https://` URI unchanged for compatibility with current clients
+- Added branded `yurich://proxy?...` alias in CLI output, Telegram `/adduser`/`/qr`, and subscription pages
+- Kept `links.txt` as a clean compatible import file without the experimental `yurich://` alias
+- Subscription pages now show a dedicated `Yurich Proxy` card
+
+</details>
+
+<details>
+<summary><b>v5.6.3</b> — Yurich Panel branding</summary>
 
 **🧭 Brand refresh:**
 - Simplified the public product name to `Yurich Panel`
@@ -1490,7 +1511,7 @@ for donors
 
 **🧩 Modules and safety:**
 - Added `unbound`, `unbound-install`, `unbound-status`, `unbound-update` aliases
-- Hysteria 2 now uses `userpass` auth for NaiveProxy users
+- Hysteria 2 now uses `userpass` auth for Yurich Proxy users
 - Hysteria 2 install now lets you choose default UDP/8443 or a custom UDP port
 - New users automatically get personal Hysteria 2 links and QR when Hysteria is installed
 - Subscription pages now include Hysteria 2 URI and sing-box outbound
@@ -1517,7 +1538,7 @@ for donors
 **🧬 Xray users and subscriptions:**
 - Added menu 23 option to create an Xray user without reinstalling Xray
 - Added `xray-add-user USER` CLI command
-- Adding a Naive user can also create the matching Xray/VLESS profile
+- Adding a Yurich Proxy user can also create the matching Xray/VLESS profile
 - Personal `/s/<token>/` pages now combine Naive and Xray links for the same user
 - Telegram `/adduser` can provision Xray too when Xray is active
 - Added Telegram `/xrayadduser USER`
@@ -1540,7 +1561,7 @@ for donors
 <summary><b>v5.5.4</b> — Auto QR + Subscription Pages</summary>
 
 **📱 User provisioning:**
-- Adding a Naive user now prints URI, JSON and QR immediately
+- Adding a Yurich Proxy user now prints URI, JSON and QR immediately
 - A `/s/<token>/` subscription page is created automatically for new Naive and Xray users
 - Telegram `/adduser` sends URI, QR image and the subscription page URL
 - Telegram `/deluser` removes the user and cleans the subscription page
@@ -1617,7 +1638,7 @@ for donors
 - VLESS REALITY TCP support
 - mKCP, WebSocket, gRPC, HTTPUpgrade and XHTTP support
 - Trojan WebSocket through fallback
-- Optional `443` fallback hub: Xray listens on 443 while Caddy/NaiveProxy moves to a local fallback port
+- Optional `443` fallback hub: Xray listens on 443 while Caddy/Yurich Proxy moves to a local fallback port
 - `xray-remove` returns Caddy back to 443
 
 </details>
@@ -1649,10 +1670,10 @@ for donors
 </details>
 
 <details>
-<summary><b>v5.0.0</b> — Hysteria 2 + NaiveProxy</summary>
+<summary><b>v5.0.0</b> — Hysteria 2 + Yurich Proxy</summary>
 
-**⚡ Hysteria 2 added without conflicting with NaiveProxy:**
-- NaiveProxy stays on `TCP/443` through Caddy
+**⚡ Hysteria 2 added without conflicting with Yurich Proxy:**
+- Yurich Proxy stays on `TCP/443` through Caddy
 - Hysteria 2 runs separately on `UDP/8443`
 - Added install, status, logs, removal and client `hy2://` config
 - Hysteria 2 reuses the Caddy TLS certificate for the current domain
@@ -1667,7 +1688,7 @@ for donors
 - The server stack is shown explicitly: `Caddy 2 + klzgrad/forwardproxy@naive`
 - sing-box now uses `type: naive` as the primary outbound
 - Added a complete sing-box Android VPN/TUN example
-- HTTPS proxy is kept as a fallback for clients without native NaiveProxy
+- HTTPS proxy is kept as a fallback for clients without native naive transport
 
 </details>
 

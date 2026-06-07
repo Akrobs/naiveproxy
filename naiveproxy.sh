@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.6.3 — by Иван Юрьевич
+#   Yurich Panel v5.6.4 — by Иван Юрьевич
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-VERSION="5.6.3"
+VERSION="5.6.4"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -2225,6 +2225,13 @@ aurum_dns_client_ip() {
     fi
 }
 
+yurich_proxy_uri() {
+    local user="$1" pass="$2" tag="${3:-}"
+    printf 'yurich://proxy?transport=naive&server=%s&port=443&username=%s&password=%s' "$DOMAIN" "$user" "$pass"
+    [[ -n "$tag" ]] && printf '#%s' "$tag"
+    printf '\n'
+}
+
 singbox_naive_tun_json() {
     local user="$1" pass="$2" dns_ip
     dns_ip=$(aurum_dns_client_ip)
@@ -2305,7 +2312,7 @@ EOF
 print_client_config() {
     load_config
     hr
-    echo -e "${BOLD}${GREEN}  Клиентский конфиг Yurich Panel (NaiveProxy)${RESET}"
+    echo -e "${BOLD}${GREEN}  Клиентский конфиг Yurich Proxy${RESET}"
     hr
 
     local first_user first_pass selected_user
@@ -2328,15 +2335,20 @@ print_client_config() {
     fi
 
     echo -e "${CYAN}  Стек сервера:${RESET}"
-    echo -e "  Caddy 2 + klzgrad/forwardproxy@naive"
+    echo -e "  Yurich Proxy (Naive-compatible transport) + Caddy 2 + klzgrad/forwardproxy@naive"
     echo -e "  Пользователь: ${BOLD}${first_user}${RESET} | срок: ${CYAN}$(user_expiry_label "$first_user")${RESET}"
     echo
     echo -e "${YELLOW}  Важно для приложений:${RESET}"
-    echo -e "  Выбирай тип ${BOLD}NaiveProxy / naive${RESET}, а не VLESS/Trojan/Shadowsocks."
-    echo -e "  Если в приложении нет NaiveProxy, используй HTTPS proxy fallback ниже."
+    echo -e "  Yurich Proxy сейчас использует совместимый transport ${BOLD}naive${RESET}."
+    echo -e "  В обычных приложениях выбирай тип ${BOLD}NaiveProxy / naive${RESET}, а не VLESS/Trojan/Shadowsocks."
+    echo -e "  Фирменная ссылка ${BOLD}yurich://...${RESET} — задел под будущий Yurich-клиент."
+    echo -e "  Если в приложении нет native naive support, используй HTTPS proxy fallback ниже."
     echo -e "  Для телефона включай VPN/TUN mode, иначе не весь трафик пойдёт через прокси."
     echo
-    echo -e "${CYAN}  URI (NaiveProxy):${RESET}"
+    echo -e "${CYAN}  Yurich link (для будущего Yurich-клиента):${RESET}"
+    echo -e "  $(yurich_proxy_uri "$first_user" "$first_pass" "${first_user}-yurich")"
+    echo
+    echo -e "${CYAN}  Совместимый URI (naive, для текущих клиентов):${RESET}"
     echo -e "  naive+https://${first_user}:${first_pass}@${DOMAIN}:443"
     echo
     echo -e "${CYAN}  JSON (naive-client):${RESET}"
@@ -2347,7 +2359,7 @@ print_client_config() {
   }
 EOF
     echo
-    echo -e "${CYAN}  JSON (sing-box outbound, native NaiveProxy):${RESET}"
+    echo -e "${CYAN}  JSON (sing-box outbound, native naive):${RESET}"
     cat <<EOF
   {
     "type": "naive",
@@ -2413,7 +2425,8 @@ EOF
         echo
         info "Все пользователи ($count):"
         while IFS=: read -r u p; do
-            echo -e "  👤 ${BOLD}$u${RESET} : naive+https://${u}:${p}@${DOMAIN}:443"
+            echo -e "  👤 ${BOLD}$u${RESET} : Yurich $(yurich_proxy_uri "$u" "$p" "${u}-yurich")"
+            echo -e "     native: naive+https://${u}:${p}@${DOMAIN}:443"
         done < <(get_users)
     fi
     # QR код для быстрого подключения
@@ -2428,7 +2441,7 @@ EOF
         info "Устанавливаю qrencode для QR кода..."
         apt-get install -y -q qrencode 2>/dev/null &&         echo && qrencode -t ANSIUTF8 "$uri" && echo ||         warn "qrencode недоступен — установи вручную: apt install qrencode"
     fi
-    ok "Отсканируй QR в NekoBox / Shadowrocket"
+    ok "QR содержит совместимый naive+https URI для NekoBox / Shadowrocket / Hiddify"
     hr
 }
 
@@ -3424,7 +3437,7 @@ generate_subscription_page() {
 
     ensure_web_privacy_files
 
-    local token token_file page_dir links_file naive_pass naive_uri naive_json naive_singbox_tun_json hy2_uri hy2_json expiry_label expiry_tag
+    local token token_file page_dir links_file naive_pass naive_uri yurich_uri naive_json naive_singbox_tun_json hy2_uri hy2_json expiry_label expiry_tag
     token_file="${SUBS_DIR}/${user}.token"
     token=$(get_or_create_token_file "$token_file")
     page_dir="${SUBS_WEB_DIR}/${token}"
@@ -3436,10 +3449,12 @@ generate_subscription_page() {
 
     naive_pass=$(get_user_pass "$user" 2>/dev/null || true)
     naive_uri=""
+    yurich_uri=""
     naive_json=""
     naive_singbox_tun_json=""
     if [[ -n "$naive_pass" ]]; then
         naive_uri="naive+https://${user}:${naive_pass}@${DOMAIN}:443#${user}-naive-${expiry_tag}"
+        yurich_uri=$(yurich_proxy_uri "$user" "$naive_pass" "${user}-yurich-${expiry_tag}")
         naive_json=$(cat <<EOF
 {
   "listen": "socks://127.0.0.1:1080",
@@ -3514,7 +3529,7 @@ EOF
     } > "$links_file"
     chmod 644 "$links_file"
 
-    local sub_url links_url title safe_user safe_domain safe_expiry_label safe_naive_uri safe_naive_json safe_naive_singbox_tun_json safe_hy2_uri safe_hy2_json
+    local sub_url links_url title safe_user safe_domain safe_expiry_label safe_naive_uri safe_yurich_uri safe_naive_json safe_naive_singbox_tun_json safe_hy2_uri safe_hy2_json
     sub_url="https://${DOMAIN}/s/${token}/"
     links_url="${sub_url}links.txt"
     title="Yurich Panel subscription for ${user}"
@@ -3522,6 +3537,7 @@ EOF
     safe_domain=$(html_escape_text "$DOMAIN")
     safe_expiry_label=$(html_escape_text "$expiry_label")
     safe_naive_uri=$(html_escape_text "$naive_uri")
+    safe_yurich_uri=$(html_escape_text "$yurich_uri")
     safe_naive_json=$(html_escape_text "$naive_json")
     safe_naive_singbox_tun_json=$(html_escape_text "$naive_singbox_tun_json")
     safe_hy2_uri=$(html_escape_text "$hy2_uri")
@@ -3566,16 +3582,19 @@ EOF
     <h2>Быстрый импорт</h2>
     <a class="btn" href="${safe_links_url}">links.txt</a>
     <button class="btn copy" data-copy="${safe_links_url}">Скопировать URL подписки</button>
-    <p class="muted">Импортируй ссылку подписки в Hiddify, NekoBox, v2rayN, Streisand или другой клиент с поддержкой URI.</p>
+    <p class="muted">Импортируй ссылку подписки в Hiddify, NekoBox, v2rayN, Streisand или другой клиент с поддержкой URI. Raw links остаются совместимыми и не содержат экспериментальный yurich:// alias.</p>
   </section>
 
   <section class="grid">
     <div class="card">
-      <h2>NaiveProxy</h2>
-      <p class="muted">Подходит для официального naive-client и клиентов с поддержкой naive URI.</p>
-      <pre>${safe_naive_uri:-Naive пользователь не найден}</pre>
+      <h2>Yurich Proxy</h2>
+      <p class="muted">Фирменное имя сервиса. Сейчас работает поверх Naive-compatible transport, поэтому обычным клиентам нужен совместимый URI ниже.</p>
+      <h3>Yurich link</h3>
+      <pre>${safe_yurich_uri:-Yurich Proxy пользователь не найден}</pre>
+      <h3>Совместимый URI для текущих клиентов</h3>
+      <pre>${safe_naive_uri:-Yurich Proxy пользователь не найден}</pre>
       <h3>naive-client JSON</h3>
-      <pre>${safe_naive_json:-Naive конфиг недоступен}</pre>
+      <pre>${safe_naive_json:-Yurich Proxy конфиг недоступен}</pre>
       <h3>sing-box Android VPN/TUN + DNS (Unbound)</h3>
       <pre>${safe_naive_singbox_tun_json:-sing-box TUN конфиг недоступен}</pre>
       <h2>Hysteria 2</h2>
@@ -3602,7 +3621,7 @@ EOF
     <h2>Настройки под системы</h2>
     <div class="os">
       <div><b>Windows</b><br><span class="muted">v2rayN, NekoRay или Hiddify. Импортируй links.txt или вставь нужную URI.</span></div>
-      <div><b>Android</b><br><span class="muted">Hiddify, NekoBox, v2rayNG. Для Naive лучше Hiddify/NekoBox с поддержкой naive.</span></div>
+      <div><b>Android</b><br><span class="muted">Hiddify, NekoBox, v2rayNG. Для Yurich Proxy пока нужен клиент с поддержкой native naive transport.</span></div>
       <div><b>iOS/macOS</b><br><span class="muted">Streisand, FoXray, Shadowrocket. Импортируй подписку или отдельную ссылку.</span></div>
       <div><b>Linux</b><br><span class="muted">naive-client JSON для SOCKS 127.0.0.1:1080 или sing-box/v2rayN GUI.</span></div>
     </div>
@@ -6368,7 +6387,7 @@ tg_send_naive_qr() {
     if command -v qrencode &>/dev/null; then
         local qr_file="/tmp/naiveproxy_qr_${user}_$$.png"
         if qrencode -o "${qr_file}" -s 8 "${uri}" 2>/dev/null && [[ -s "${qr_file}" ]]; then
-            tg_send_photo "${chat_id}" "${qr_file}" "📱 QR для ${user}@${DOMAIN}"
+            tg_send_photo "${chat_id}" "${qr_file}" "📱 Yurich Proxy QR для ${user}@${DOMAIN}"
             rm -f "${qr_file}"
             return 0
         fi
@@ -6713,8 +6732,9 @@ ${user_list}"
 
             if rewrite_caddyfile_current 2>/dev/null; then
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null
-                local uri="naive+https://${new_user}:${new_pass}@${DOMAIN}:443"
-                local sub_url sub_links xray_note xray_tmp xray_ok hy_note hy_uri hy_ok
+                local uri branded_uri sub_url sub_links xray_note xray_tmp xray_ok hy_note hy_uri hy_ok
+                uri="naive+https://${new_user}:${new_pass}@${DOMAIN}:443"
+                branded_uri=$(yurich_proxy_uri "${new_user}" "${new_pass}" "${new_user}-yurich")
                 xray_note=""
                 xray_ok=0
                 hy_note=""
@@ -6746,7 +6766,10 @@ ${user_list}"
 📅 Срок: <code>$(user_expiry_label "${new_user}")</code>
 ${hy_note}
 ${xray_note}
-🌐 URI:
+🌐 Yurich Proxy:
+<code>${branded_uri}</code>
+
+Совместимый URI:
 <code>${uri}</code>
 
 ⚡ Hysteria 2:
@@ -6830,7 +6853,9 @@ Raw links:
                 return
             fi
 
-            local uri="naive+https://${qr_user}:${qr_pass}@${DOMAIN}:443"
+            local uri branded_uri
+            uri="naive+https://${qr_user}:${qr_pass}@${DOMAIN}:443"
+            branded_uri=$(yurich_proxy_uri "${qr_user}" "${qr_pass}" "${qr_user}-yurich")
 
             # Авто-установка qrencode если нет
             if ! command -v qrencode &>/dev/null; then
@@ -6841,17 +6866,24 @@ Raw links:
             if command -v qrencode &>/dev/null; then
                 local qr_file="/tmp/naiveproxy_qr_${qr_user}_$$.png"
                 if qrencode -o "${qr_file}" -s 8 "${uri}" 2>/dev/null && [[ -s "${qr_file}" ]]; then
-                    tg_send_photo "${chat_id}" "${qr_file}" "📱 QR для ${qr_user}@${DOMAIN}"
+                    tg_send_photo "${chat_id}" "${qr_file}" "📱 Yurich Proxy QR для ${qr_user}@${DOMAIN}"
                     # Дополнительно отправляем URI текстом
-                    tg_reply "${chat_id}" "🔗 <b>URI:</b>
+                    tg_reply "${chat_id}" "🔗 <b>Yurich Proxy:</b>
+<code>${branded_uri}</code>
+
+<b>Совместимый URI:</b>
 <code>${uri}</code>"
                     rm -f "${qr_file}"
                 else
                     tg_reply "${chat_id}" "⚠️ Ошибка генерации QR
-🔗 URI: <code>${uri}</code>"
+Yurich Proxy: <code>${branded_uri}</code>
+Совместимый URI: <code>${uri}</code>"
                 fi
             else
-                tg_reply "${chat_id}" "📱 <b>URI для ${qr_user}:</b>
+                tg_reply "${chat_id}" "📱 <b>Yurich Proxy для ${qr_user}:</b>
+<code>${branded_uri}</code>
+
+<b>Совместимый URI:</b>
 <code>${uri}</code>
 (установи qrencode на сервере для QR картинки)"
             fi
