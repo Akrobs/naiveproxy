@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.6.56-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.6.57-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -101,7 +101,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ## 🎉 What's new in the current 5.6.x branch
 
-> v5.6.56 is the current audited release: protocol roles are explicit, Hysteria 2.10.0 is checksum-pinned, server hardening is staged with rollback, and TCP/UDP/DNS auditing avoids false positives from outbound UDP sockets.
+> v5.6.57 is the current audited release: protocol benchmark now retries transient Hysteria startup failures, allocates a free local SOCKS port and reports a sanitized client error instead of a generic timeout.
 
 <table>
 <tr>
@@ -1415,7 +1415,19 @@ for donors
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.6.56</b> — Protocol roles and fleet hardening ← CURRENT</summary>
+<summary><b>v5.6.57</b> — Reliable Hysteria benchmark startup ← CURRENT</summary>
+
+**Monitoring reliability:**
+- Allocates a free dynamic SOCKS port for each local benchmark client
+- Retries Hysteria startup once after a transient QUIC or bind failure
+- Extends the local SOCKS readiness timeout to eight seconds
+- Quotes generated Hysteria YAML scalar values safely
+- Includes a sanitized client-log reason in failed benchmark reports
+
+</details>
+
+<details>
+<summary><b>v5.6.56</b> — Protocol roles and fleet hardening</summary>
 
 **Runtime and security:**
 - Added explicit `XRAY_REALITY_ENABLED` and `HYSTERIA_ENABLED` role flags

@@ -6,7 +6,7 @@
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-[![Version](https://img.shields.io/badge/version-5.6.56-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.6.57-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -48,7 +48,7 @@ Yurich Panel — это единый установочный и админис�
 
 ## Что нового в текущей ветке 5.6.x
 
-Релиз `5.6.56` добавляет безопасные роли протоколов, обновление Hysteria 2.10.0 с проверкой SHA256, усиление Ubuntu-серверов и точный аудит TCP/UDP/DNS без ложных срабатываний на исходящие UDP-сокеты.
+Релиз `5.6.57` повышает надёжность protocol benchmark: Hysteria получает повтор запуска, динамический локальный SOCKS-порт и безопасную диагностику причины вместо ложного `local socks not ready`.
 
 Ветка `5.6.x` добавляет базовое мультисерверное управление: главный сервер может хранить список node-серверов, проверять их по SSH, отправлять на них текущий скрипт, синхронизировать пользователей и добавлять дополнительные node-ссылки в страницы подписки.
 
@@ -652,6 +652,14 @@ sudo bash yurich-panel.sh ssh-rescue
 ```
 
 ## Changelog
+
+### v5.6.57
+
+- Hysteria benchmark использует свободный динамический SOCKS-порт вместо фиксированного диапазона;
+- запуск локального Hysteria-клиента повторяется один раз после краткой сетевой ошибки;
+- время ожидания локального SOCKS увеличено до 8 секунд;
+- временный Hysteria YAML формируется с безопасным quoting значений;
+- при ошибке Telegram-отчёт показывает очищенную причину из клиентского лога без паролей и токенов.
 
 ### v5.6.56
 

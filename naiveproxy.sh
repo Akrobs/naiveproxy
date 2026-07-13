@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.6.56
+#   Yurich Panel v5.6.57
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="5.6.56"
+VERSION="5.6.57"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -5128,6 +5128,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -5161,7 +5162,7 @@ for line in lines:
         "qs": {k: v[0] for k, v in qs.items()},
     })
 
-def wait_port(port, timeout=5.0):
+def wait_port(port, timeout=8.0):
     end = time.time() + timeout
     while time.time() < end:
         try:
@@ -5170,6 +5171,117 @@ def wait_port(port, timeout=5.0):
         except Exception:
             time.sleep(0.1)
     return False
+
+def allocate_local_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+def stop_process(proc):
+    if not proc:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=2)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+
+def safe_client_log(log_path):
+    try:
+        text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return "client log unavailable"
+    text = re.sub(r"(?i)(hy2|hysteria2)://[^@\s]+@", r"\1://[redacted]@", text)
+    text = re.sub(r"(?i)\b(auth|password|token)\b(\s*[:=]\s*)\S+", r"\1\2[redacted]", text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return " | ".join(lines[-3:])[-240:] if lines else "client exited without log"
+
+def start_local_client(profile, socks_port, log_path):
+    scheme = profile["scheme"]
+    if scheme in ("hy2", "hysteria2"):
+        qs = profile["qs"]
+        auth = profile["username"] + ((":" + profile["password"]) if profile["password"] else "")
+        auth = auth or qs.get("auth", "")
+        yaml_string = lambda value: json.dumps(str(value), ensure_ascii=False)
+        server_address = f"{profile['host']}:{profile['port']}"
+        socks_address = f"127.0.0.1:{socks_port}"
+        text = (
+            f"server: {yaml_string(server_address)}\n"
+            f"auth: {yaml_string(auth)}\n"
+            "tls:\n"
+            f"  sni: {yaml_string(qs.get('sni', profile['host']))}\n"
+            "  insecure: false\n"
+            "obfs:\n"
+            f"  type: {yaml_string(qs.get('obfs', 'salamander'))}\n"
+            "  salamander:\n"
+            f"    password: {yaml_string(qs.get('obfs-password', ''))}\n"
+            "socks5:\n"
+            f"  listen: {yaml_string(socks_address)}\n"
+        )
+        suffix = ".yaml"
+        command = lambda cfg: ["hysteria", "client", "-c", cfg]
+    elif scheme == "vless":
+        qs = profile["qs"]
+        user = {"id": profile["username"], "encryption": "none"}
+        network = qs.get("type", "tcp")
+        security = qs.get("security", "reality")
+        if qs.get("flow") and network != "xhttp":
+            user["flow"] = qs.get("flow")
+        stream_settings = {
+            "network": network,
+            "security": security,
+        }
+        if network == "xhttp":
+            alpn = [x for x in qs.get("alpn", "h2").split(",") if x]
+            stream_settings["tlsSettings"] = {
+                "serverName": qs.get("sni", profile["host"]),
+                "fingerprint": qs.get("fp", "chrome"),
+                "alpn": alpn or ["h2"],
+                "allowInsecure": False,
+            }
+            stream_settings["xhttpSettings"] = {
+                "path": qs.get("path", "/xhttp"),
+                "mode": qs.get("mode", "packet-up"),
+                "host": qs.get("host", profile["host"]),
+            }
+        else:
+            stream_settings["security"] = "reality"
+            stream_settings["realitySettings"] = {
+                "serverName": qs.get("sni", ""),
+                "fingerprint": qs.get("fp", "chrome"),
+                "publicKey": qs.get("pbk", ""),
+                "shortId": qs.get("sid", ""),
+                "spiderX": qs.get("spx", "/"),
+            }
+        text = json.dumps({
+            "log": {"loglevel": "warning"},
+            "inbounds": [{"listen": "127.0.0.1", "port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
+            "outbounds": [{
+                "protocol": "vless",
+                "settings": {"vnext": [{"address": profile["host"], "port": profile["port"], "users": [user]}]},
+                "streamSettings": stream_settings,
+            }],
+        })
+        suffix = ".json"
+        command = lambda cfg: ["xray", "run", "-config", cfg]
+    else:
+        raise ValueError(f"unsupported scheme {scheme}")
+
+    fd, cfg = tempfile.mkstemp(prefix=f"{scheme}_benchmark_", suffix=suffix)
+    os.close(fd)
+    Path(cfg).write_text(text, encoding="utf-8")
+    log_handle = open(log_path, "w", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(command(cfg), stdout=log_handle, stderr=subprocess.STDOUT)
+    except Exception:
+        log_handle.close()
+        os.remove(cfg)
+        raise
+    return proc, cfg, log_handle
 
 def run_curl(cmd, timeout=18):
     try:
@@ -5226,8 +5338,8 @@ def bench_profile(index, profile):
     scheme = profile["scheme"]
     proc = None
     cfg = None
-    log_path = f"/tmp/yurich-benchmark-{os.getpid()}-{index}.log"
-    socks_port = 19600 + index
+    log_handle = None
+    log_path = None
     try:
         if scheme == "naive+https":
             values = []
@@ -5240,78 +5352,44 @@ def bench_profile(index, profile):
                     errors.append(err)
             return values, errors
 
-        if scheme in ("hy2", "hysteria2"):
-            qs = profile["qs"]
-            auth = profile["username"] + (( ":" + profile["password"]) if profile["password"] else "")
-            auth = auth or qs.get("auth", "")
-            text = (
-                f"server: {profile['host']}:{profile['port']}\n"
-                f"auth: {auth}\n"
-                "tls:\n"
-                f"  sni: {qs.get('sni', profile['host'])}\n"
-                "  insecure: false\n"
-                "obfs:\n"
-                f"  type: {qs.get('obfs', 'salamander')}\n"
-                "  salamander:\n"
-                f"    password: {qs.get('obfs-password', '')}\n"
-                "socks5:\n"
-                f"  listen: 127.0.0.1:{socks_port}\n"
-            )
-            fd, cfg = tempfile.mkstemp(prefix="hy2_benchmark_", suffix=".yaml")
-            os.close(fd)
-            Path(cfg).write_text(text, encoding="utf-8")
-            proc = subprocess.Popen(["hysteria", "client", "-c", cfg], stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
-        elif scheme == "vless":
-            qs = profile["qs"]
-            user = {"id": profile["username"], "encryption": "none"}
-            network = qs.get("type", "tcp")
-            security = qs.get("security", "reality")
-            if qs.get("flow") and network != "xhttp":
-                user["flow"] = qs.get("flow")
-            stream_settings = {
-                "network": network,
-                "security": security,
-            }
-            if network == "xhttp":
-                alpn = [x for x in qs.get("alpn", "h2").split(",") if x]
-                stream_settings["tlsSettings"] = {
-                    "serverName": qs.get("sni", profile["host"]),
-                    "fingerprint": qs.get("fp", "chrome"),
-                    "alpn": alpn or ["h2"],
-                    "allowInsecure": False,
-                }
-                stream_settings["xhttpSettings"] = {
-                    "path": qs.get("path", "/xhttp"),
-                    "mode": qs.get("mode", "packet-up"),
-                    "host": qs.get("host", profile["host"]),
-                }
+        startup_attempts = 2 if scheme in ("hy2", "hysteria2") else 1
+        startup_errors = []
+        socks_port = None
+        for attempt in range(1, startup_attempts + 1):
+            socks_port = allocate_local_port()
+            log_path = f"/tmp/yurich-benchmark-{os.getpid()}-{index}-{attempt}.log"
+            try:
+                proc, cfg, log_handle = start_local_client(profile, socks_port, log_path)
+            except Exception as exc:
+                startup_errors.append(f"client start failed ({attempt}/{startup_attempts}): {exc!r}"[-240:])
             else:
-                stream_settings["security"] = "reality"
-                stream_settings["realitySettings"] = {
-                    "serverName": qs.get("sni", ""),
-                    "fingerprint": qs.get("fp", "chrome"),
-                    "publicKey": qs.get("pbk", ""),
-                    "shortId": qs.get("sid", ""),
-                    "spiderX": qs.get("spx", "/"),
-                }
-            conf = {
-                "log": {"loglevel": "warning"},
-                "inbounds": [{"listen": "127.0.0.1", "port": socks_port, "protocol": "socks", "settings": {"udp": True}}],
-                "outbounds": [{
-                    "protocol": "vless",
-                    "settings": {"vnext": [{"address": profile["host"], "port": profile["port"], "users": [user]}]},
-                    "streamSettings": stream_settings,
-                }],
-            }
-            fd, cfg = tempfile.mkstemp(prefix="xray_benchmark_", suffix=".json")
-            os.close(fd)
-            Path(cfg).write_text(json.dumps(conf), encoding="utf-8")
-            proc = subprocess.Popen(["xray", "run", "-config", cfg], stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
+                if wait_port(socks_port):
+                    break
+                stop_process(proc)
+                proc = None
+                if log_handle:
+                    log_handle.close()
+                    log_handle = None
+                startup_errors.append(
+                    f"local socks not ready ({attempt}/{startup_attempts}): {safe_client_log(log_path)}"
+                )
+            if cfg:
+                try:
+                    os.remove(cfg)
+                except Exception:
+                    pass
+                cfg = None
+            if log_path:
+                try:
+                    os.remove(log_path)
+                except Exception:
+                    pass
+                log_path = None
+            if attempt < startup_attempts:
+                time.sleep(0.5)
         else:
-            return [], [f"unsupported scheme {scheme}"]
+            return [], [startup_errors[-1] if startup_errors else "local socks not ready"]
 
-        if not wait_port(socks_port):
-            return [], ["local socks not ready"]
         values = []
         errors = []
         for _ in range(rounds):
@@ -5322,24 +5400,22 @@ def bench_profile(index, profile):
                 errors.append(err)
         return values, errors
     finally:
-        if proc:
+        stop_process(proc)
+        if log_handle:
             try:
-                proc.terminate()
-                proc.wait(timeout=2)
+                log_handle.close()
             except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+                pass
         if cfg:
             try:
                 os.remove(cfg)
             except Exception:
                 pass
-        try:
-            os.remove(log_path)
-        except Exception:
-            pass
+        if log_path:
+            try:
+                os.remove(log_path)
+            except Exception:
+                pass
 
 print(f"{'STATUS':<6} {'PROTO':<12} {'HOST':<22} {'OK':<5} {'BEST':>8} {'AVG':>8} {'MEDIAN':>8} {'P95':>8} {'WORST':>8} {'SLOW':>7}  NAME")
 print("-" * 128)
