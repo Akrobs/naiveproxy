@@ -6,7 +6,7 @@
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-[![Version](https://img.shields.io/badge/version-5.6.52-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.6.56-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -48,7 +48,7 @@ Yurich Panel — это единый установочный и админис�
 
 ## Что нового в текущей ветке 5.6.x
 
-Релиз `5.6.52` закрывает аудит релизной гигиены: основной и legacy-скрипт синхронизированы, SHA256-файлы обновлены, PingTunnel закреплён на проверяемый релиз, а `ssh-rescue` получил автоотключение.
+Релиз `5.6.56` добавляет безопасные роли протоколов, обновление Hysteria 2.10.0 с проверкой SHA256, усиление Ubuntu-серверов и точный аудит TCP/UDP/DNS без ложных срабатываний на исходящие UDP-сокеты.
 
 Ветка `5.6.x` добавляет базовое мультисерверное управление: главный сервер может хранить список node-серверов, проверять их по SSH, отправлять на них текущий скрипт, синхронизировать пользователей и добавлять дополнительные node-ссылки в страницы подписки.
 
@@ -111,6 +111,7 @@ Yurich Panel — это единый установочный и админис�
 | Production menu | Новое меню 27: health-check, safe apply, encrypted backup, export/import и bridge builder |
 | DNS safety | Запрещена любая маска `/0` для VPN DNS CIDR, чтобы не получить open resolver |
 | DNS (Unbound) CLI | `yurich-dns-status` и uninstall читают env только при владельце `root` |
+| DNS external audit | Добавлены `dns-open-check` и `dns-latency-report` для внешней проверки open resolver и latency/cache-warm по локациям |
 | Watchdog Telegram | Исправлена отправка monitor-уведомлений через `--data-urlencode` |
 | Bot install | `bot-install` синхронизирует текущий валидный скрипт в `/usr/local/bin/yurich-panel.sh` |
 | Telegram polling | Исправлен `getUpdates`: `allowed_updates` отправляется как JSON-массив, поэтому `/menu` снова обрабатывается |
@@ -354,6 +355,8 @@ sudo bash yurich-panel.sh dns
 sudo bash yurich-panel.sh dns-install
 sudo bash yurich-panel.sh dns-status
 sudo bash yurich-panel.sh dns-restart
+sudo bash yurich-panel.sh dns-open-check
+sudo bash yurich-panel.sh dns-latency-report
 sudo bash yurich-panel.sh unbound
 sudo bash yurich-panel.sh unbound-install
 sudo bash yurich-panel.sh unbound-vpn
@@ -369,6 +372,10 @@ DNS (Unbound) поднимает собственный recursive Unbound resolv
 - без open resolver;
 - с UFW allowlist только для VPN CIDR;
 - с отдельным standalone-проектом `yurich-dns/`.
+
+Команда `dns-open-check` проверяет текущий сервер снаружи через включённые node-серверы из `/etc/naiveproxy/nodes.conf`. Если node-серверов нет, скрипт делает только локальный self-probe и предупреждает, что полноценная внешняя проверка невозможна.
+
+Команда `dns-latency-report` строит отдельный отчёт по DNS latency и cache-warm: сначала локально, затем по каждой доступной node, где установлен `/usr/local/bin/yurich-panel.sh`.
 
 Для VPN-клиентов DNS открывается только по указанным CIDR. Если gateway IP, например `10.0.0.1`, ещё не назначен интерфейсу сервера, скрипт предложит создать безопасный локальный gateway `10.0.0.1/32` на `lo`. Полный sing-box Android VPN/TUN конфиг на странице подписки автоматически получит DNS (Unbound).
 
@@ -645,6 +652,18 @@ sudo bash yurich-panel.sh ssh-rescue
 ```
 
 ## Changelog
+
+### v5.6.56
+
+- Добавлены ролевые флаги `XRAY_REALITY_ENABLED` и `HYSTERIA_ENABLED` с безопасными значениями по умолчанию;
+- XHTTP-нода может работать без Reality backend и без автоматического повторного запуска Hysteria при синхронизации;
+- XHTTP и временный Reality Mobile Alt по умолчанию отключены на обычных серверах;
+- Caddy backend в режиме HAProxy SNI mux привязывается к `127.0.0.1`;
+- добавлен поэтапный security rollout с backup и rollback;
+- Hysteria обновлена до `v2.10.0` с закреплённой SHA256-проверкой бинарного файла;
+- добавлены auditd, безопасные sysctl и ограниченное systemd hardening для сетевых служб;
+- security-audit проверяет опасные порты только среди TCP LISTEN и отдельно контролирует публичный bind DNS/53;
+- основной и legacy-скрипт повторно синхронизированы и проверены через `bash -n`.
 
 ### v5.6.52
 

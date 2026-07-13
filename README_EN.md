@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.6.52-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.6.56-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -101,7 +101,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ## 🎉 What's new in the current 5.6.x branch
 
-> v5.6.52 is the current audited release: the main and legacy scripts are synchronized, SHA256 sidecars are refreshed, PingTunnel is pinned with checksum verification, and temporary SSH rescue mode now auto-disables.
+> v5.6.56 is the current audited release: protocol roles are explicit, Hysteria 2.10.0 is checksum-pinned, server hardening is staged with rollback, and TCP/UDP/DNS auditing avoids false positives from outbound UDP sockets.
 
 <table>
 <tr>
@@ -754,7 +754,7 @@ sudo bash yurich-panel.sh diagnose
   ✅ Caddyfile valid
 
 [3/7] TLS and network
-  ✅ DNS: proxy.example.com → 78.17.134.110
+  ✅ DNS: proxy.example.com → 203.0.113.10
   ✅ Port 80 listening (ACME)
   ✅ Port 443 listening
   ✅ ALPN: h2 ✓ (HTTP/2 working)
@@ -1415,7 +1415,23 @@ for donors
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.6.52</b> — Security hardening and release cleanup ← CURRENT</summary>
+<summary><b>v5.6.56</b> — Protocol roles and fleet hardening ← CURRENT</summary>
+
+**Runtime and security:**
+- Added explicit `XRAY_REALITY_ENABLED` and `HYSTERIA_ENABLED` role flags
+- Added an XHTTP-only role without a Reality backend or Hysteria auto-restart
+- Disabled XHTTP and temporary Reality Mobile Alt by default on standard nodes
+- Bound the Caddy backend to `127.0.0.1` in HAProxy SNI mux mode
+- Added staged fleet hardening with verified backups and rollback
+- Updated Hysteria to checksum-pinned `v2.10.0`
+- Added auditd, hardened network sysctl values and conservative systemd restrictions
+- Fixed security port checks and added public DNS/53 bind detection
+- Re-synchronized and syntax-checked both script entry points
+
+</details>
+
+<details>
+<summary><b>v5.6.52</b> — Security hardening and release cleanup</summary>
 
 **Security and release hygiene:**
 - Synced `yurich-panel.sh` and `naiveproxy.sh` before publishing
