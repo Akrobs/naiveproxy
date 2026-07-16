@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.6.57-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.6.62-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -101,7 +101,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ## 🎉 What's new in the current 5.6.x branch
 
-> v5.6.57 is the current audited release: protocol benchmark now retries transient Hysteria startup failures, allocates a free local SOCKS port and reports a sanitized client error instead of a generic timeout.
+> v5.6.62 hardens state imports and node SSH trust, makes DNS and SNI-mux changes transactional, and adds rollback-safe user expiry, blocking, and credential rotation.
 
 <table>
 <tr>
@@ -119,7 +119,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 ✅ Subscription `links.txt` can include additional `naive+https` links for enabled node domains
 ✅ CLI commands: `nodes`, `nodes-add`, `nodes-test`, `nodes-deploy`, `nodes-sync`, `nodes-subscriptions`
 ✅ Subscription pages include Yurich Connect Android and Windows release links
-✅ Project contacts are shown on subscription pages: Telegram, VK and email
+✅ Subscription pages show the Telegram channel and notification bot
 ✅ Windows/Android setup cards link to the official client releases
 ✅ REALITY target presets for RU/Global candidate domains
 ✅ Live TLS/SNI check before applying the selected target
@@ -155,7 +155,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 ✅ SSH panel language selector: Russian / English
 ✅ `language` CLI command and menu item 28
 ✅ Main SSH panel labels and statuses translated
-✅ Pinned defaults for `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27` and `Hysteria app/v2.9.2`
+✅ Pinned defaults for `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27` and `Hysteria app/v2.10.0`
 ✅ One-shot `health` report for Caddy, DNS (Unbound), Telegram bot, WARP, Xray and Hysteria
 ✅ `safe-apply` validates enabled configs and rolls Caddyfile back on failure
 ✅ Encrypted `/etc/naiveproxy` backup via OpenSSL
@@ -1415,7 +1415,73 @@ for donors
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.6.57</b> — Reliable Hysteria benchmark startup ← CURRENT</summary>
+<summary><b>v5.6.62</b> — Security audit and transactional operations ← CURRENT</summary>
+
+**Security and reliability:**
+- Sanitizes imported nodes, aliases, metadata, protocol users, paths and URLs before privileged use
+- Applies bounded semantic validation to imported numbers, plans, CIDRs, ports and operating modes
+- Validates runtime ports, timers and state values as canonical decimal integers without Bash octal ambiguity
+- Parses HTTPS download URLs portably, validates host/port boundaries and passes URLs to `curl` after `--`
+- Rejects SSH option injection and requires explicit fingerprint trust for previously unknown nodes
+- Restricts Unbound access CIDRs, validates the global configuration and rolls back failed DNS changes
+- Adds rollback for SSH hardening, WARP full tunnel and HAProxy/Caddy mode transitions
+- Makes `ssh-rescue` fail closed unless a systemd auto-disable timer is confirmed, with state restoration on failure
+- Keeps suspended subscription URLs stable while removing expired or blocked users from active protocol configs
+- Makes password/UUID rotation and device blocking rollback-safe and revokes aliases on token reset
+- Restricts Telegram bots to private chats and adds order throttling, locking and idempotent approval
+- Hardens Xray/Hysteria systemd services, adds Xray log rotation and installs the daily expiry job
+- Prevents the Windows Caddy E2E test from binding port 80 and bounds temporary CA installation with a timeout
+
+</details>
+
+<details>
+<summary><b>v5.6.61</b> — Secure updates, imports and rollback</summary>
+
+**Security and reliability:**
+- Sanitizes imported shell data and enforces archive size, entry and path limits
+- Requires a pre-import export on non-empty installations
+- Uses same-directory staging, atomic replacement and verified rollback for self-update and Caddy
+- Pins Caddy `v2.11.4`, xcaddy `v0.4.6`, the full forwardproxy commit and Go `1.26.5`
+- Validates Hysteria/Xray binaries and versions before atomic installation
+- Validates canonical Xray UUIDs and fixes Poland location detection
+- Adds staged systemd hardening rollback and safe Windows E2E extraction
+
+</details>
+
+<details>
+<summary><b>v5.6.60</b> — XHTTP additional node for all users</summary>
+
+**All-user rollout:**
+- Treats `SUBSCRIPTION_XHTTP_CANARY_USERS=*` as every current and future user
+- Keeps XHTTP-only nodes separate, so an additional node retains HTTPS, Turbo, and Reality profiles
+- Preserves explicit per-user canary lists
+
+</details>
+
+<details>
+<summary><b>v5.6.59</b> — Per-user XHTTP canary rollout</summary>
+
+**Controlled rollout:**
+- Adds `SUBSCRIPTION_XHTTP_CANARY_NODE_NAMES` and `SUBSCRIPTION_XHTTP_CANARY_USERS`
+- Adds `XRAY_XHTTP_ALLOWED_USERS` for an inbound-specific client allowlist
+- Rejects an empty or invalid XHTTP allowlist before Xray is restarted
+- Preserves the existing default behavior for regular XHTTP nodes and subscriptions
+
+</details>
+
+<details>
+<summary><b>v5.6.58</b> — XHTTP streaming and logging stability</summary>
+
+**XHTTP stability:**
+- Keeps XHTTP streaming requests alive for up to five minutes during Caddy reloads
+- Skips `/xhttp` requests in regular access logs to reduce disk I/O and transient session metadata retention
+- Samples repeated Caddy runtime warnings while retaining the first events of each type
+- Preserves TLS, HTTP/2 and the broadly compatible `packet-up` client mode
+
+</details>
+
+<details>
+<summary><b>v5.6.57</b> — Reliable Hysteria benchmark startup</summary>
 
 **Monitoring reliability:**
 - Allocates a free dynamic SOCKS port for each local benchmark client

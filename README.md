@@ -6,7 +6,7 @@
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-[![Version](https://img.shields.io/badge/version-5.6.57-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.6.62-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -48,7 +48,7 @@ Yurich Panel — это единый установочный и админис�
 
 ## Что нового в текущей ветке 5.6.x
 
-Релиз `5.6.57` повышает надёжность protocol benchmark: Hysteria получает повтор запуска, динамический локальный SOCKS-порт и безопасную диагностику причины вместо ложного `local socks not ready`.
+Релиз `5.6.62` закрывает риски импорта и SSH node-управления, делает DNS и смену SNI-mux транзакционными, а блокировку, истечение и ротацию credentials пользователя атомарными с rollback.
 
 Ветка `5.6.x` добавляет базовое мультисерверное управление: главный сервер может хранить список node-серверов, проверять их по SSH, отправлять на них текущий скрипт, синхронизировать пользователей и добавлять дополнительные node-ссылки в страницы подписки.
 
@@ -70,12 +70,13 @@ Yurich Panel — это единый установочный и админис�
 | Multi-server guide | Добавлена подробная инструкция [MULTISERVER_GUIDE_RU.md](MULTISERVER_GUIDE_RU.md) |
 | CLI commands | Добавлены `nodes`, `nodes-add`, `nodes-test`, `nodes-deploy`, `nodes-sync`, `nodes-subscriptions` |
 | Yurich Connect | Кнопки скачивания Android и Windows клиента на странице подписки |
-| Contacts | Telegram, VK и email поддержки на странице подписки |
+| Contacts | Telegram-канал и бот уведомлений на странице подписки |
 | Subscription UX | Ссылки на приложения добавлены в быстрый импорт и карточки ОС |
 | REALITY target presets | Список RU/Global кандидатов для `REALITY target` |
 | Live TLS check | Скрипт проверяет DNS/TLS/SNI выбранного target с сервера |
 | Xray menu | Новый пункт `REALITY target presets / test` и CLI-команда `xray-target` |
 | XHTTP standalone | Новый VLESS XHTTP TLS inbound на `8448/tcp` |
+| XHTTP/Caddy stability | `stream_close_delay 5m`, исключение XHTTP из access-log и сэмплирование повторяющихся runtime-сообщений |
 | Subscription page | Личная страница теперь показывает XHTTP standalone отдельно от fallback-only ссылок |
 | UFW / Diagnose | Скрипт автоматически открывает и проверяет `8448/tcp` для XHTTP |
 | Installer hotfix | Исправлен скрытый prompt `Срок пользователя 1-12 месяцев` после генерации пароля |
@@ -100,7 +101,7 @@ Yurich Panel — это единый установочный и админис�
 | SSH panel language | Новая команда `language` и пункт меню `28` для выбора Русский / English |
 | Config persistence | Выбранный язык сохраняется в `/etc/naiveproxy/naive.conf` |
 | Self-update | Проверка `yurich-panel.sh.sha256` перед установкой обновления; строгий режим через `NAIVEPROXY_REQUIRE_SHA=1` |
-| Pin versions | По умолчанию закреплены `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27`, `Hysteria app/v2.9.2`; можно переопределить через `NAIVEPROXY_*` |
+| Pin versions | По умолчанию закреплены `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27`, `Hysteria app/v2.10.0`; можно переопределить через `NAIVEPROXY_*` |
 | Health-check | Команда `health` проверяет Caddy, DNS, Telegram bot service, WARP, Xray и Hysteria одним отчётом |
 | Safe apply | Команда `safe-apply` валидирует включённые конфиги и откатывает Caddyfile при ошибке |
 | Backups | Команда `backup` создаёт encrypted archive `/etc/naiveproxy` и связанных конфигов через OpenSSL |
@@ -652,6 +653,54 @@ sudo bash yurich-panel.sh ssh-rescue
 ```
 
 ## Changelog
+
+### v5.6.62
+
+- импорт очищает `nodes.conf`, aliases, metadata, protocol users и опасные path/URL до попадания в root-конфигурацию;
+- числовые параметры, тарифы, CIDR, порты и режимы импорта проходят семантическую проверку с безопасными границами;
+- runtime-параметры портов, таймеров и state-файлов используют канонические десятичные значения без восьмеричной неоднозначности Bash;
+- HTTPS download URL разбираются без непереносимой regex-конструкции, проверяют домен/порт и передаются `curl` после `--`;
+- node SSH запрещает option injection и незаметный TOFU: новый host key требует ручного `TRUST` после показа fingerprint;
+- Unbound принимает только разрешённые private/CGNAT CIDR, проверяет глобальный config и откатывает неудачное изменение;
+- SSH hardening, WARP full tunnel и переключение HAProxy/Caddy получили проверяемый rollback;
+- `ssh-rescue` не включает root/password без подтверждённого systemd-таймера и восстанавливает SSH socket, Fail2Ban и UFW при ошибке;
+- истекшие и заблокированные учётки сохраняют URL подписки, но не попадают в рабочие Caddy/Hysteria/Xray конфиги;
+- reset token отзывает alias URL, а ротация password/UUID и device lock выполняются транзакционно;
+- Telegram-боты игнорируют group chats; sales orders получили rate/cap limits, file locks и idempotent approval;
+- systemd-службы Xray/Hysteria усилены, добавлен logrotate Xray и ежедневный expiry job.
+- Windows E2E-тест Caddy больше не занимает `80/tcp`, а операция с временным CA ограничена таймаутом.
+
+### v5.6.61
+
+- import принимает только allowlist-файлы, ограничивает размер/число записей и очищает shell-конфиги перед `source`;
+- pre-import export стал обязательным для непустой установки;
+- self-update и обновление Caddy используют same-directory staging, атомарную замену и проверяемый rollback;
+- сборка Naive-compatible Caddy закреплена на `Caddy v2.11.4`, `xcaddy v0.4.6`, полном SHA `forwardproxy` и `Go 1.26.5`;
+- Hysteria 2 закреплена на `v2.10.0`, а Hysteria/Xray проверяют версию скачанного бинарника до атомарной установки;
+- UUID Xray проверяется строгим каноническим шаблоном;
+- исправлен флаг польской локации и удалена неиспользуемая логика старого Mobile Test;
+- rollout hardening получил поэтапную проверку systemd-служб и восстановление бинарника/конфигов при ошибке;
+- Windows Naive E2E отклоняет небезопасные version/path значения и распаковывает клиент в уникальный временный каталог.
+
+### v5.6.60
+
+- `SUBSCRIPTION_XHTTP_CANARY_USERS=*` публикует дополнительную XHTTP-ноду всем текущим и будущим пользователям;
+- XHTTP-only ноды остаются в `SUBSCRIPTION_XHTTP_NODE_NAMES`, поэтому дополнительная нода не теряет свои HTTPS, Turbo и Reality профили;
+- поведение списков с конкретными именами пользователей полностью сохранено.
+
+### v5.6.59
+
+- добавлены `SUBSCRIPTION_XHTTP_CANARY_NODE_NAMES` и `SUBSCRIPTION_XHTTP_CANARY_USERS` для тестовой публикации XHTTP выбранным пользователям;
+- добавлен `XRAY_XHTTP_ALLOWED_USERS`, ограничивающий список клиентов отдельного XHTTP inbound;
+- пустой или ошибочный XHTTP allowlist блокирует генерацию конфига до перезапуска Xray;
+- основная XHTTP-нода и существующие подписки сохраняют прежнее поведение по умолчанию.
+
+### v5.6.58
+
+- XHTTP streaming-сессии сохраняются до пяти минут при reload Caddy;
+- запросы `/xhttp` исключены из обычного access-log, чтобы не хранить временные идентификаторы сессий и не создавать лишний дисковый I/O;
+- повторяющиеся runtime-предупреждения Caddy сэмплируются, при этом первые события каждого типа остаются в журнале;
+- параметры XHTTP-клиента не меняются: TLS, HTTP/2 и совместимый режим `packet-up` сохранены.
 
 ### v5.6.57
 

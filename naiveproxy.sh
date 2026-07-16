@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.6.57
+#   Yurich Panel v5.6.62
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="5.6.57"
+VERSION="5.6.62"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -29,7 +29,6 @@ KARING_APP_URL="https://apps.apple.com/us/app/karing/id6472431552?l=ru"
 TELEGRAM_COMMUNITY_URL="${YURICH_TELEGRAM_COMMUNITY_URL:-https://t.me/your_channel}"
 TELEGRAM_BOT_URL="${YURICH_TELEGRAM_BOT_URL:-https://t.me/your_notification_bot}"
 TELEGRAM_ID_BOT_URL="${YURICH_TELEGRAM_ID_BOT_URL:-https://t.me/getmyid_bot}"
-VK_COMMUNITY_URL="${YURICH_VK_COMMUNITY_URL:-https://vk.com/your_community}"
 SUPPORT_EMAIL="${YURICH_SUPPORT_EMAIL:-support@example.com}"
 SALES_BOT_CHANNEL_URL_DEFAULT="${YURICH_SALES_BOT_CHANNEL_URL:-https://t.me/your_channel}"
 SALES_BOT_PLANS_DEFAULT="1d:50,1m:250,3m:700,6m:1300,12m:2400"
@@ -42,10 +41,11 @@ SALES_BOT_CAPTCHA_TTL_SECONDS_DEFAULT="86400"
 EXPIRED_DELETE_GRACE_DAYS_DEFAULT="5"
 SCRIPT_PATH="/usr/local/bin/yurich-panel.sh"
 LEGACY_SCRIPT_PATH="/usr/local/bin/naiveproxy.sh"
+CADDY_VERSION_PIN="${NAIVEPROXY_CADDY_VERSION:-v2.11.4}"
 XCADDY_VERSION_PIN="${NAIVEPROXY_XCADDY_VERSION:-v0.4.6}"
 FORWARDPROXY_REF_PIN="${NAIVEPROXY_FORWARDPROXY_REF:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
 XRAY_VERSION_PIN="${NAIVEPROXY_XRAY_VERSION:-v26.3.27}"
-HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.9.3}"
+HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.10.0}"
 PINGTUNNEL_DEFAULT_VERSION="master-2c83808a81b56784d639c952b70baada6601e2d7"
 PINGTUNNEL_VERSION_PIN="${NAIVEPROXY_PINGTUNNEL_VERSION:-$PINGTUNNEL_DEFAULT_VERSION}"
 PINGTUNNEL_SHA256_AMD64="5d5847a17099b9359c55a959f85a1994232cf8a089642bd632bfa64e5bdfe8af"
@@ -56,7 +56,6 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-BLUE='\033[0;34m'
 GOLD='\033[0;33m'
 BOLD='\033[1m'
 DIM='\033[2m'
@@ -119,6 +118,7 @@ XRAY_BIN="/usr/local/bin/xray"
 XRAY_SERVICE="/etc/systemd/system/xray.service"
 XRAY_CONFIG_DIR="/etc/xray"
 XRAY_CONFIG="/etc/xray/config.json"
+XRAY_LOGROTATE_CONF="/etc/logrotate.d/yurich-xray"
 XRAY_ASSETS_DIR="/usr/local/share/xray"
 XRAY_ZAPRET_DAT_DEFAULT="${XRAY_ASSETS_DIR}/zapret.dat"
 XRAY_ZAPRET_URL_DEFAULT="https://github.com/kutovoys/ru_gov_zapret/releases/latest/download/zapret.dat"
@@ -145,6 +145,8 @@ BACKUP_DIR="/etc/naiveproxy/backups"
 EXPORT_DIR="/etc/naiveproxy/exports"
 BRIDGE_CONFIG="/etc/naiveproxy/bridge.conf"
 NODES_FILE="/etc/naiveproxy/nodes.conf"
+NODES_KNOWN_HOSTS_FILE="/etc/naiveproxy/nodes_known_hosts"
+NODES_PENDING_SYNC_FILE="/etc/naiveproxy/.nodes-sync-pending"
 MONITOR_SCRIPT="/etc/naiveproxy/monitor.sh"
 SSH_HARDENING_DONE="/etc/naiveproxy/.ssh_hardened"
 SYSUPDATE_DONE="/etc/naiveproxy/.sysupdate_done"
@@ -160,6 +162,9 @@ SALES_BOT_DIR="/etc/naiveproxy/sales-bot"
 SALES_BOT_ORDERS_DIR="${SALES_BOT_DIR}/orders"
 SALES_BOT_CAPTCHA_DIR="${SALES_BOT_DIR}/captcha"
 SALES_BOT_VERIFIED_DIR="${SALES_BOT_DIR}/verified"
+SALES_BOT_ORDER_MIN_INTERVAL_SECONDS_DEFAULT="60"
+SALES_BOT_MAX_PENDING_PER_CHAT_DEFAULT="2"
+SALES_BOT_MAX_ORDER_FILES_DEFAULT="10000"
 XRAY_REALITY_PORT_DEFAULT="8444"
 XRAY_MOBILE_ALT_PORT_DEFAULT="8445"
 XRAY_MOBILE_ALT_TARGET_DEFAULT="www.cloudflare.com:443"
@@ -279,7 +284,7 @@ cmd_ssh_hardening() {
     hr
 
     local sshd_config="/etc/ssh/sshd_config"
-    local current_port
+    local current_port ssh_dropin_backup_dir=""
     current_port=$(current_ssh_port)
 
     echo -e "  Текущий SSH порт: ${CYAN}${current_port}${RESET}"
@@ -407,7 +412,7 @@ cmd_ssh_hardening() {
             while true; do
                 echo -ne "${CYAN}Новый SSH порт (1024-65535): ${RESET}"
                 read -r new_ssh_port
-                if [[ "$new_ssh_port" =~ ^[0-9]+$ ]] &&                    [[ "$new_ssh_port" -ge 1024 ]] &&                    [[ "$new_ssh_port" -le 65535 ]]; then
+                if is_valid_local_proxy_port "$new_ssh_port"; then
                     break
                 fi
                 err "Неверный порт. Введи число от 1024 до 65535"
@@ -438,6 +443,12 @@ cmd_ssh_hardening() {
     local sshd_backup
     sshd_backup="${sshd_config}.bak.$(date +%Y%m%d_%H%M%S)"
     cp "$sshd_config" "$sshd_backup"
+    ssh_dropin_backup_dir=$(mktemp -d /tmp/yurich-ssh-dropins.XXXXXX)
+    chmod 700 "$ssh_dropin_backup_dir"
+    for cfg in /etc/ssh/sshd_config.d/*.conf; do
+        [[ -f "$cfg" ]] || continue
+        cp -a "$cfg" "$ssh_dropin_backup_dir/$(basename "$cfg")"
+    done
     ok "Бэкап sshd_config создан: $sshd_backup"
 
     # Безопасные значения по умолчанию: не отключаем текущие способы входа без явного согласия.
@@ -507,6 +518,10 @@ cmd_ssh_hardening() {
     if ! sshd -t 2>/dev/null; then
         err "Ошибка в sshd_config! Откатываю из $sshd_backup..."
         cp "$sshd_backup" "$sshd_config" 2>/dev/null || true
+        for cfg in "$ssh_dropin_backup_dir"/*.conf; do
+            [[ -f "$cfg" ]] && cp -a "$cfg" "/etc/ssh/sshd_config.d/$(basename "$cfg")" 2>/dev/null || true
+        done
+        rm -rf -- "$ssh_dropin_backup_dir"
         return 1
     fi
 
@@ -546,14 +561,22 @@ cmd_ssh_hardening() {
     else
         err "Не удалось перезапустить ssh/sshd. Откатываю sshd_config..."
         cp "$sshd_backup" "$sshd_config" 2>/dev/null || true
+        for cfg in "$ssh_dropin_backup_dir"/*.conf; do
+            [[ -f "$cfg" ]] && cp -a "$cfg" "/etc/ssh/sshd_config.d/$(basename "$cfg")" 2>/dev/null || true
+        done
         if [[ "$ssh_socket_was_enabled" == "yes" ]]; then
             systemctl enable --now ssh.socket --quiet 2>/dev/null || true
         fi
         restart_ssh_service || true
+        rm -rf -- "$ssh_dropin_backup_dir"
         return 1
     fi
 
-    setup_fail2ban "$new_ssh_port" || return 1
+    if ! setup_fail2ban "$new_ssh_port"; then
+        rm -rf -- "$ssh_dropin_backup_dir"
+        return 1
+    fi
+    rm -rf -- "$ssh_dropin_backup_dir"
 
     # Маркер
     mkdir -p "$CONFIG_DIR"
@@ -589,53 +612,110 @@ EOF
 }
 
 cmd_ssh_rescue() {
+    local rescue_conf="/etc/ssh/sshd_config.d/99-naiveproxy-rescue.conf"
+    local rescue_script="/usr/local/sbin/yurich-disable-ssh-rescue.sh"
+    local rescue_state="/run/yurich-ssh-rescue.state"
+    local rescue_ttl="${NAIVEPROXY_SSH_RESCUE_TTL_SECONDS:-1800}"
+    local rescue_unit socket_enabled=0 socket_active=0 fail2ban_active=0 ufw_22_preexisting=0 candidate
+
     hr
     echo -e "${BOLD}${YELLOW}  SSH Rescue Mode${RESET}"
     hr
     warn "Включаю временный аварийный SSH-доступ на 22 порту."
     warn "После восстановления зайди по SSH и заново настрой hardening."
 
+    command -v systemd-run >/dev/null 2>&1 || { err "systemd-run недоступен: безопасный автооткат SSH rescue невозможен"; return 1; }
+    is_canonical_uint_in_range "$rescue_ttl" 300 86400 || { err "SSH rescue TTL должен быть 300-86400 секунд"; return 1; }
+    [[ ! -e "$rescue_conf" && ! -L "$rescue_conf" ]] || { err "SSH rescue уже активен: $rescue_conf"; return 1; }
+
     mkdir -p /etc/ssh/sshd_config.d
-    cat > /etc/ssh/sshd_config.d/99-naiveproxy-rescue.conf <<'EOF'
+    candidate=$(mktemp /etc/ssh/sshd_config.d/.99-naiveproxy-rescue.XXXXXX)
+    cat > "$candidate" <<'EOF'
 Port 22
 PermitRootLogin yes
 PasswordAuthentication yes
 PubkeyAuthentication yes
 EOF
+    install -m 600 "$candidate" "$rescue_conf"
+    rm -f "$candidate"
 
-    systemctl disable --now ssh.socket >/dev/null 2>&1 || true
-    ufw allow 22/tcp comment "SSH rescue" >/dev/null 2>&1 || true
-    ufw allow 80/tcp comment "Yurich Panel ACME" >/dev/null 2>&1 || true
-    ufw allow 443/tcp comment "Yurich Panel HTTPS" >/dev/null 2>&1 || true
-    ufw allow 443/udp comment "Yurich Panel HTTP3" >/dev/null 2>&1 || true
-    systemctl stop fail2ban >/dev/null 2>&1 || true
-
-    local rescue_ttl="${NAIVEPROXY_SSH_RESCUE_TTL_SECONDS:-1800}"
-    cat > /usr/local/sbin/yurich-disable-ssh-rescue.sh <<'EOF'
-#!/bin/bash
-set -euo pipefail
-rm -f /etc/ssh/sshd_config.d/99-naiveproxy-rescue.conf
-# Do not delete the UFW 22/tcp rule automatically: on some servers it can be a legitimate admin rule.
-systemctl start fail2ban >/dev/null 2>&1 || true
-if sshd -t; then
-    systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
-fi
-EOF
-    chmod 700 /usr/local/sbin/yurich-disable-ssh-rescue.sh
-    if command -v systemd-run >/dev/null 2>&1; then
-        systemd-run --unit=yurich-ssh-rescue-autodisable --on-active="${rescue_ttl}s" /usr/local/sbin/yurich-disable-ssh-rescue.sh >/dev/null 2>&1 \
-            && warn "SSH rescue автоматически отключится через ${rescue_ttl} сек."
-    fi
-
-    if sshd -t; then
-        restart_ssh_service
-        ok "SSH rescue включён: порт 22, root/password временно разрешены"
-        warn "Если пароль root неизвестен, задай его командой: passwd root"
-        ss -tlnp | grep -E ':(22)\s' || true
-    else
-        err "sshd_config не прошёл проверку"
+    if ! sshd -t; then
+        rm -f "$rescue_conf"
+        err "sshd_config не прошёл проверку; rescue отменён"
         return 1
     fi
+
+    systemctl is-enabled --quiet ssh.socket 2>/dev/null && socket_enabled=1
+    systemctl is-active --quiet ssh.socket 2>/dev/null && socket_active=1
+    systemctl is-active --quiet fail2ban 2>/dev/null && fail2ban_active=1
+    ufw show added 2>/dev/null | grep -Eq '^ufw allow 22/tcp([[:space:]]|$)' && ufw_22_preexisting=1
+    {
+        printf 'SSH_SOCKET_ENABLED=%s\n' "$socket_enabled"
+        printf 'SSH_SOCKET_ACTIVE=%s\n' "$socket_active"
+        printf 'FAIL2BAN_ACTIVE=%s\n' "$fail2ban_active"
+        printf 'UFW_22_PREEXISTED=%s\n' "$ufw_22_preexisting"
+    } > "$rescue_state"
+    chmod 600 "$rescue_state"
+
+    cat > "$rescue_script" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+state=/run/yurich-ssh-rescue.state
+state_value() { awk -F= -v key="$1" '$1 == key {print $2; exit}' "$state" 2>/dev/null || true; }
+socket_enabled=$(state_value SSH_SOCKET_ENABLED)
+socket_active=$(state_value SSH_SOCKET_ACTIVE)
+fail2ban_active=$(state_value FAIL2BAN_ACTIVE)
+ufw_22_preexisting=$(state_value UFW_22_PREEXISTED)
+
+rm -f /etc/ssh/sshd_config.d/99-naiveproxy-rescue.conf
+if [[ "$ufw_22_preexisting" != "1" ]]; then
+    ufw --force delete allow 22/tcp >/dev/null 2>&1 || true
+fi
+if [[ "$fail2ban_active" == "1" ]]; then
+    systemctl start fail2ban >/dev/null 2>&1 || true
+fi
+if [[ "$socket_enabled" == "1" ]]; then
+    systemctl enable ssh.socket >/dev/null 2>&1 || true
+else
+    systemctl disable ssh.socket >/dev/null 2>&1 || true
+fi
+if [[ "$socket_active" == "1" ]]; then
+    systemctl stop ssh >/dev/null 2>&1 || systemctl stop sshd >/dev/null 2>&1 || true
+    systemctl start ssh.socket >/dev/null 2>&1 || true
+elif sshd -t; then
+    systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
+fi
+rm -f "$state" /usr/local/sbin/yurich-disable-ssh-rescue.sh
+EOF
+    chmod 700 "$rescue_script"
+    rescue_unit="yurich-ssh-rescue-autodisable-$(date +%s)"
+    if ! systemd-run --unit="$rescue_unit" --on-active="${rescue_ttl}s" "$rescue_script" >/dev/null 2>&1; then
+        rm -f "$rescue_conf" "$rescue_state" "$rescue_script"
+        err "Не удалось поставить обязательный автооткат; SSH rescue не включён"
+        return 1
+    fi
+    warn "SSH rescue автоматически отключится через ${rescue_ttl} сек."
+
+    systemctl disable --now ssh.socket >/dev/null 2>&1 || true
+    if command -v ufw >/dev/null 2>&1 && ! ufw allow 22/tcp comment "SSH rescue" >/dev/null 2>&1; then
+        "$rescue_script" >/dev/null 2>&1 || true
+        err "Не удалось открыть 22/tcp в UFW; rescue отменён"
+        return 1
+    fi
+    systemctl stop fail2ban >/dev/null 2>&1 || true
+    if ! restart_ssh_service; then
+        "$rescue_script" >/dev/null 2>&1 || true
+        err "Не удалось перезапустить SSH; rescue отменён и прежнее состояние восстановлено"
+        return 1
+    fi
+    if ! ss -tln 2>/dev/null | grep -Eq ':(22)([[:space:]]|$)'; then
+        "$rescue_script" >/dev/null 2>&1 || true
+        err "SSH не начал слушать 22/tcp; rescue отменён и прежнее состояние восстановлено"
+        return 1
+    fi
+    ok "SSH rescue включён: порт 22, root/password временно разрешены"
+    warn "Если пароль root неизвестен, задай его командой: passwd root"
+    ss -tlnp | grep -E ':(22)([[:space:]]|$)' || true
 }
 
 
@@ -696,8 +776,7 @@ is_valid_host_port() {
     host="${value%:*}"
     port="${value##*:}"
     is_valid_domain "$host" || return 1
-    [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
-    (( port >= 1 && port <= 65535 ))
+    is_valid_port "$port"
 }
 
 public_dns_ipv4() {
@@ -772,7 +851,7 @@ is_valid_proxy_pass() {
 current_ssh_port() {
     local port
     port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}' || true)
-    [[ -n "$port" ]] || port="22"
+    is_valid_port "$port" || port="22"
     printf '%s\n' "$port"
 }
 
@@ -811,11 +890,19 @@ find_caddy_key() {
 }
 
 is_valid_port() {
-    [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "$1" -ge 1 ]] && [[ "$1" -le 65535 ]]
+    local value="${1:-}"
+    [[ "$value" =~ ^[1-9][0-9]{0,4}$ ]] && (( 10#$value <= 65535 ))
 }
 
 is_valid_local_proxy_port() {
-    [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "$1" -ge 1024 ]] && [[ "$1" -le 65535 ]]
+    local value="${1:-}"
+    is_valid_port "$value" && (( 10#$value >= 1024 ))
+}
+
+is_canonical_uint_in_range() {
+    local value="${1:-}" min="${2:-0}" max="${3:-2147483647}"
+    [[ "$value" =~ ^(0|[1-9][0-9]{0,9})$ ]] || return 1
+    (( 10#$value >= min && 10#$value <= max ))
 }
 
 warp_cli() {
@@ -829,7 +916,7 @@ random_safe_token() {
     local chunk
     local attempts=0
 
-    if ! [[ "$len" =~ ^[0-9]+$ ]] || [[ "$len" -lt 8 || "$len" -gt 128 ]]; then
+    if ! is_canonical_uint_in_range "$len" 8 128; then
         err "Некорректная длина токена: $len"
         return 1
     fi
@@ -1005,6 +1092,9 @@ save_config() {
         printf 'SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE=%q\n' "${SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE:-0}"
         printf '# 1 = публиковать XHTTP в основных клиентских подписках, 0 = держать XHTTP отдельно/для тестов\n'
         printf 'SUBSCRIPTION_XHTTP_MAIN_ENABLED=%q\n' "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}"
+        printf '# Canary XHTTP: дополнительные nodes публикуются только указанным пользователям\n'
+        printf 'SUBSCRIPTION_XHTTP_CANARY_NODE_NAMES=%q\n' "${SUBSCRIPTION_XHTTP_CANARY_NODE_NAMES:-}"
+        printf 'SUBSCRIPTION_XHTTP_CANARY_USERS=%q\n' "${SUBSCRIPTION_XHTTP_CANARY_USERS:-}"
         printf '# Новый дизайн страниц подписок: all, * или список пользователей через пробел\n'
         printf 'SUBSCRIPTION_REMWAVE_USERS=%q\n' "${SUBSCRIPTION_REMWAVE_USERS:-all}"
         printf 'SUBSCRIPTION_REMWAVE_PREVIEW_USERS=%q\n' "${SUBSCRIPTION_REMWAVE_PREVIEW_USERS:-all}"
@@ -1041,6 +1131,9 @@ save_config() {
         printf 'SALES_BOT_WELCOME_ANIMATION_PATH=%q\n' "${SALES_BOT_WELCOME_ANIMATION_PATH:-$SALES_BOT_WELCOME_ANIMATION_PATH_DEFAULT}"
         printf 'SALES_BOT_WELCOME_IMAGE_PATH=%q\n' "${SALES_BOT_WELCOME_IMAGE_PATH:-$SALES_BOT_WELCOME_IMAGE_PATH_DEFAULT}"
         printf 'SALES_BOT_CAPTCHA_TTL_SECONDS=%q\n' "${SALES_BOT_CAPTCHA_TTL_SECONDS:-$SALES_BOT_CAPTCHA_TTL_SECONDS_DEFAULT}"
+        printf 'SALES_BOT_ORDER_MIN_INTERVAL_SECONDS=%q\n' "${SALES_BOT_ORDER_MIN_INTERVAL_SECONDS:-$SALES_BOT_ORDER_MIN_INTERVAL_SECONDS_DEFAULT}"
+        printf 'SALES_BOT_MAX_PENDING_PER_CHAT=%q\n' "${SALES_BOT_MAX_PENDING_PER_CHAT:-$SALES_BOT_MAX_PENDING_PER_CHAT_DEFAULT}"
+        printf 'SALES_BOT_MAX_ORDER_FILES=%q\n' "${SALES_BOT_MAX_ORDER_FILES:-$SALES_BOT_MAX_ORDER_FILES_DEFAULT}"
         printf '# 1 = Hysteria 2 включена для роли сервера, 0 = не запускать её при синхронизации пользователей\n'
         printf 'HYSTERIA_ENABLED=%q\n' "${HYSTERIA_ENABLED:-1}"
         printf 'HYSTERIA_PORT=%q\n' "${HYSTERIA_PORT:-8443}"
@@ -1084,6 +1177,8 @@ save_config() {
         printf '# 1 = включить VLESS XHTTP inbound на сервере, 0 = убрать inbound из Xray\n'
         printf 'XRAY_XHTTP_ENABLED=%q\n' "${XRAY_XHTTP_ENABLED:-0}"
         printf 'XRAY_XHTTP_PORT=%q\n' "${XRAY_XHTTP_PORT:-$XRAY_XHTTP_PORT_DEFAULT}"
+        printf '# all/* или список пользователей, разрешённых на XHTTP inbound\n'
+        printf 'XRAY_XHTTP_ALLOWED_USERS=%q\n' "${XRAY_XHTTP_ALLOWED_USERS:-all}"
         printf 'XRAY_MOBILE_ALT_ENABLED=%q\n' "${XRAY_MOBILE_ALT_ENABLED:-0}"
         printf 'XRAY_WS_PORT=%q\n' "${XRAY_WS_PORT:-$XRAY_WS_PORT_DEFAULT}"
         printf 'XRAY_HTTPUPGRADE_PORT=%q\n' "${XRAY_HTTPUPGRADE_PORT:-$XRAY_HTTPUPGRADE_PORT_DEFAULT}"
@@ -1104,10 +1199,11 @@ save_config() {
         printf 'XRAY_ZAPRET_ENABLED=%q\n' "${XRAY_ZAPRET_ENABLED:-0}"
         printf 'XRAY_ZAPRET_DAT=%q\n' "${XRAY_ZAPRET_DAT:-$XRAY_ZAPRET_DAT_DEFAULT}"
         printf 'XRAY_ZAPRET_URL=%q\n' "${XRAY_ZAPRET_URL:-$XRAY_ZAPRET_URL_DEFAULT}"
+        printf 'CADDY_VERSION_PIN=%q\n' "${CADDY_VERSION_PIN:-v2.11.4}"
         printf 'XCADDY_VERSION_PIN=%q\n' "${XCADDY_VERSION_PIN:-v0.4.6}"
         printf 'FORWARDPROXY_REF_PIN=%q\n' "${FORWARDPROXY_REF_PIN:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
         printf 'XRAY_VERSION_PIN=%q\n' "${XRAY_VERSION_PIN:-v26.3.27}"
-        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.9.2}"
+        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.10.0}"
         printf 'BRIDGE_ENABLED=%q\n' "${BRIDGE_ENABLED:-0}"
         printf 'BRIDGE_NAME=%q\n' "${BRIDGE_NAME:-}"
         printf 'BRIDGE_ENTRY_PROTOCOL=%q\n' "${BRIDGE_ENTRY_PROTOCOL:-naive}"
@@ -1314,7 +1410,13 @@ get_user_expiry() {
     printf '%s\n' "$expires"
 }
 
-user_is_expired() {
+user_is_blocked() {
+    local user="$1" blocked
+    blocked=$(user_meta_get "$user" ACCESS_BLOCKED 2>/dev/null || true)
+    [[ "$blocked" == "1" ]]
+}
+
+user_is_time_expired() {
     local user="$1" expires today
     expires=$(get_user_expiry "$user" 2>/dev/null || true)
     [[ -n "$expires" ]] || return 1
@@ -1322,8 +1424,18 @@ user_is_expired() {
     [[ "$expires" < "$today" ]]
 }
 
+user_is_expired() {
+    local user="$1"
+    user_is_blocked "$user" && return 0
+    user_is_time_expired "$user"
+}
+
 user_expiry_label() {
     local user="$1" expires today
+    if user_is_blocked "$user"; then
+        printf 'приостановлен администратором'
+        return
+    fi
     expires=$(get_user_expiry "$user" 2>/dev/null || true)
     if [[ -z "$expires" ]]; then
         printf 'без срока'
@@ -1457,7 +1569,8 @@ is_valid_tg_chat_id() {
 tg_api_with_token() {
     local token="$1" method="$2"
     shift 2
-    [[ -n "$token" && -n "$method" ]] || return 1
+    [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || return 1
+    [[ "$method" =~ ^[A-Za-z][A-Za-z0-9]*(\?[A-Za-z0-9_.%=&-]+)?$ ]] || return 1
 
     local cfg rc
     cfg=$(mktemp /tmp/yurich_tg_api_XXXXXX) || return 1
@@ -1736,15 +1849,19 @@ cmd_notify_expiry_run() {
 }
 
 cmd_enforce_expired_users() {
-    local user expired=0 deleted=0 kept=0 failed=0 days grace
+    local user expired=0 deleted=0 kept=0 failed=0 days grace apply_failed=0
     load_config; load_users
     grace="${EXPIRED_DELETE_GRACE_DAYS:-$EXPIRED_DELETE_GRACE_DAYS_DEFAULT}"
-    if ! [[ "$grace" =~ ^[0-9]+$ ]]; then grace="$EXPIRED_DELETE_GRACE_DAYS_DEFAULT"; fi
+    if ! is_canonical_uint_in_range "$grace" 0 3650; then grace="$EXPIRED_DELETE_GRACE_DAYS_DEFAULT"; fi
 
     while IFS= read -r user; do
         [[ -z "$user" ]] && continue
-        if user_is_expired "$user"; then
+        if user_is_time_expired "$user"; then
             expired=$((expired + 1))
+            if ! suspend_subscription_page "$user" >/dev/null 2>&1; then
+                warn "Не удалось приостановить публичную страницу $user"
+                failed=$((failed + 1))
+            fi
             days=$(user_expired_days "$user" 2>/dev/null || echo 0)
             if [[ "$days" -ge "$grace" ]]; then
                 if delete_subscription_user_everywhere "$user" >/dev/null 2>&1; then
@@ -1758,17 +1875,24 @@ cmd_enforce_expired_users() {
         fi
     done < <(list_subscription_users)
 
-    if [[ "$expired" -lt 1 ]]; then
+    if [[ "$expired" -lt 1 && ! -f "$NODES_PENDING_SYNC_FILE" ]]; then
         printf 'expiry enforce: expired=0\n'
         return 0
     fi
 
     if [[ -x "$CADDY_BIN" && -f "$CADDYFILE" ]]; then
-        safe_apply_caddy_current >/dev/null 2>&1 || warn "Не удалось применить Caddy после истечения подписок"
+        safe_apply_caddy_current >/dev/null 2>&1 || { warn "Не удалось применить Caddy после истечения подписок"; apply_failed=1; }
     fi
-    sync_hysteria_users_if_active >/dev/null 2>&1 || true
+    sync_hysteria_users_if_active >/dev/null 2>&1 || { warn "Не удалось применить Hysteria после истечения подписок"; apply_failed=1; }
     if [[ -x "$XRAY_BIN" && -s "$XRAY_USERS_FILE" ]]; then
-        cmd_xray_rebuild >/dev/null 2>&1 || warn "Не удалось пересобрать Xray после истечения подписок"
+        cmd_xray_rebuild >/dev/null 2>&1 || { warn "Не удалось пересобрать Xray после истечения подписок"; apply_failed=1; }
+    fi
+    apply_subscription_aliases >/dev/null 2>&1 || { warn "Не удалось обновить alias URL после истечения подписок"; apply_failed=1; }
+    if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 || -f "$NODES_PENDING_SYNC_FILE" ]]; then
+        cmd_nodes_sync_users all >/dev/null 2>&1 || { warn "Не удалось синхронизировать истечение подписок на nodes"; apply_failed=1; }
+    fi
+    if [[ "$apply_failed" -ne 0 ]]; then
+        failed=$((failed + 1))
     fi
     printf 'expiry enforce: expired=%s kept=%s deleted=%s grace_days=%s failed=%s\n' "$expired" "$kept" "$deleted" "$grace" "$failed"
     [[ "$failed" -eq 0 ]]
@@ -1991,12 +2115,22 @@ setup_telegram() {
     echo
 
     echo -ne "${CYAN}Bot Token (Enter чтобы пропустить): ${RESET}"
-    read -r input_token
+    read -rs input_token
+    echo
     [[ -z "$input_token" ]] && { warn "Telegram пропущен"; return; }
 
     echo -ne "${CYAN}Chat ID: ${RESET}"
     read -r input_chat_id
     [[ -z "$input_chat_id" ]] && { warn "Telegram пропущен"; return; }
+
+    if [[ ! "$input_token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
+        err "Bot Token имеет некорректный формат"
+        return 1
+    fi
+    if ! is_valid_tg_chat_id "$input_chat_id"; then
+        err "Chat ID имеет некорректный формат"
+        return 1
+    fi
 
     info "Проверяю токен..."
     local response
@@ -2044,13 +2178,26 @@ CONFIG_FILE="/etc/naiveproxy/naive.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     _owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || echo "unknown")
     _perms=$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null || echo "000")
-    [[ "$_owner" == "root" && "$_perms" == "600" ]] && source "$CONFIG_FILE"
+    if [[ "$_owner" == "root" && "$_perms" == "600" ]]; then
+        _config_value() {
+            local key="$1"
+            awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$CONFIG_FILE" 2>/dev/null
+        }
+        TG_TOKEN=$(_config_value TG_TOKEN)
+        TG_CHAT_ID=$(_config_value TG_CHAT_ID)
+        DOMAIN=$(_config_value DOMAIN)
+        [[ "$TG_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || TG_TOKEN=""
+        [[ "$TG_CHAT_ID" =~ ^-?[0-9]{5,20}$ ]] || TG_CHAT_ID=""
+        [[ "$DOMAIN" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]] || DOMAIN="unknown"
+        unset -f _config_value
+    fi
 fi
 
 tg_api() {
     local method="$1"
     shift
-    [[ -z "${TG_TOKEN:-}" || -z "$method" ]] && return 1
+    [[ "${TG_TOKEN:-}" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || return 1
+    [[ "$method" =~ ^[A-Za-z][A-Za-z0-9]*(\?[A-Za-z0-9_.%=&-]+)?$ ]] || return 1
     local cfg rc
     cfg=$(mktemp /tmp/yurich_tg_api_XXXXXX) || return 1
     chmod 600 "$cfg" 2>/dev/null || true
@@ -2162,28 +2309,29 @@ check_domain() {
 install_deps() {
     info "Обновляю пакеты и ставлю зависимости..."
     apt-get update -qq
-    apt-get install -y -qq curl wget unzip tar ufw openssl dnsutils 2>/dev/null || true
+    if ! apt-get install -y -qq curl wget unzip tar ufw openssl dnsutils ca-certificates python3 jq 2>/dev/null; then
+        err "Не удалось установить обязательные системные зависимости"
+        return 1
+    fi
 
     export PATH="/usr/local/go/bin:$PATH"
-    local go_ver go_major go_minor
+    local go_ver go_min="1.25.1"
     go_ver=$(go version 2>/dev/null | grep -oP 'go\K[\d.]+' || echo "0.0")
-    go_major=$(echo "$go_ver" | cut -d. -f1)
-    go_minor=$(echo "$go_ver" | cut -d. -f2)
 
-    if [[ "$go_major" -lt 1 ]] || [[ "$go_major" -eq 1 && "$go_minor" -lt 21 ]]; then
-        warn "Go $go_ver устарел, ставлю свежий..."
+    if version_gt "$go_min" "$go_ver"; then
+        warn "Go $go_ver не подходит для Caddy ${CADDY_VERSION_PIN:-v2.11.4}, ставлю закреплённую версию..."
         local arch
         arch=$(dpkg --print-architecture)
         [[ "$arch" == "arm64" ]] || arch="amd64"
-        local go_ver_pin="1.22.4"
+        local go_ver_pin="1.26.5"
         local go_url="https://go.dev/dl/go${go_ver_pin}.linux-${arch}.tar.gz"
-        local go_sha256_amd64="ba79d4526102575196273416239cca418a651e049c2b099f3159db85e7bade7d"
-        local go_sha256_arm64="a8e177c354d2e4a1b61020aca3c6f61bfba9a2e8f52c8dcef2b87abe86bd8fc0"
+        local go_sha256_amd64="5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
+        local go_sha256_arm64="fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49"
         local expected_sha go_tmp
         [[ "$arch" == "arm64" ]] && expected_sha="$go_sha256_arm64" || expected_sha="$go_sha256_amd64"
 
         go_tmp=$(mktemp /tmp/go_XXXXXX.tar.gz)
-        if ! wget -q "$go_url" -O "$go_tmp"; then
+        if ! wget -q --tries=3 --timeout=30 "$go_url" -O "$go_tmp"; then
             rm -f "$go_tmp"
             err "Не удалось скачать Go: $go_url"
             exit 1
@@ -2207,10 +2355,21 @@ install_deps() {
 }
 
 # ─── Сборка Caddy ────────────────────────────────────────────
-build_caddy() {
+build_caddy() (
     info "Собираю Caddy с forwardproxy (naive)..."
     info "Занимает 5-15 минут, не прерывай..."
     local output_bin="${1:-$CADDY_BIN}"
+    local caddy_ver="${CADDY_VERSION_PIN:-v2.11.4}"
+    local fp_ref="${FORWARDPROXY_REF_PIN:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
+
+    [[ "$caddy_ver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+        err "Некорректный Caddy pin: $caddy_ver"
+        return 1
+    }
+    [[ "$fp_ref" =~ ^[a-fA-F0-9]{40}$ ]] || {
+        err "Forwardproxy должен быть закреплён полным commit SHA"
+        return 1
+    }
 
     export PATH="/usr/local/go/bin:$PATH"
     export GOPATH="/root/go"
@@ -2225,36 +2384,48 @@ build_caddy() {
     # Клонируем naive ветку напрямую — единственный надёжный способ
     local fp_dir
     fp_dir=$(mktemp -d /tmp/naiveproxy_forwardproxy_XXXXXX)
-    trap 'rm -rf "${fp_dir:-}" 2>/dev/null' RETURN
-    info "Клонирую klzgrad/forwardproxy@${FORWARDPROXY_REF_PIN:-naive}..."
+    trap 'rm -rf "${fp_dir:-}" 2>/dev/null' EXIT
+    info "Клонирую klzgrad/forwardproxy@${fp_ref}..."
     if ! git clone -b naive --depth 1         https://github.com/klzgrad/forwardproxy.git "$fp_dir" 2>/dev/null; then
         err "Не удалось клонировать forwardproxy. Проверь интернет."
-        exit 1
+        return 1
     fi
-    if [[ "${FORWARDPROXY_REF_PIN:-naive}" != "naive" ]]; then
-        local current_fp_commit
-        current_fp_commit=$(git -C "$fp_dir" rev-parse HEAD 2>/dev/null || true)
-        if [[ "$current_fp_commit" == "${FORWARDPROXY_REF_PIN}" ]]; then
-            git -C "$fp_dir" checkout --detach HEAD >/dev/null 2>&1 || true
-        elif ! git -C "$fp_dir" fetch --depth 1 origin "${FORWARDPROXY_REF_PIN}" >/dev/null 2>&1 \
-            || ! git -C "$fp_dir" checkout --detach FETCH_HEAD >/dev/null 2>&1; then
-            err "Не удалось закрепить forwardproxy на ${FORWARDPROXY_REF_PIN}"
-            return 1
-        fi
+    local current_fp_commit
+    current_fp_commit=$(git -C "$fp_dir" rev-parse HEAD 2>/dev/null || true)
+    if [[ "$current_fp_commit" == "$fp_ref" ]]; then
+        git -C "$fp_dir" checkout --detach HEAD >/dev/null 2>&1 || true
+    elif ! git -C "$fp_dir" fetch --depth 1 origin "$fp_ref" >/dev/null 2>&1 \
+        || ! git -C "$fp_dir" checkout --detach FETCH_HEAD >/dev/null 2>&1; then
+        err "Не удалось закрепить forwardproxy на ${fp_ref}"
+        return 1
     fi
-    info "Forwardproxy ref: $(git -C "$fp_dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    current_fp_commit=$(git -C "$fp_dir" rev-parse HEAD 2>/dev/null || true)
+    [[ "$current_fp_commit" == "$fp_ref" ]] || {
+        err "Forwardproxy commit mismatch: ожидался $fp_ref, получен ${current_fp_commit:-unknown}"
+        return 1
+    }
+    info "Forwardproxy ref: ${current_fp_commit:0:12}"
+    info "Caddy release pin: $caddy_ver"
 
-    # Читаем точную версию Caddy из go.mod forwardproxy
-    local caddy_ver
-    caddy_ver=$(grep 'github.com/caddyserver/caddy/v2 ' "$fp_dir/go.mod"         | awk '{print $2}' | head -1)
-    info "Forwardproxy требует Caddy: $caddy_ver"
-
-    # Собираем именно эту версию Caddy с локальным forwardproxy
-    "$GOPATH/bin/xcaddy" build "${caddy_ver}" \
-        --with github.com/caddyserver/forwardproxy="$fp_dir" \
+    # Сборка из неизменяемого commit SHA сохраняет происхождение модуля в build metadata.
+    "$GOPATH/bin/xcaddy" build "$caddy_ver" \
+        --with "github.com/caddyserver/forwardproxy=github.com/klzgrad/forwardproxy@${fp_ref}" \
         --output "$output_bin"
 
     chmod +x "$output_bin"
+
+    local built_ver
+    built_ver=$("$output_bin" version 2>/dev/null | head -1 || true)
+    if [[ "$built_ver" != *"${caddy_ver#v}"* ]]; then
+        err "Собран неожиданный Caddy: ${built_ver:-unknown}, ожидался $caddy_ver"
+        rm -f "$output_bin"
+        return 1
+    fi
+    if ! "$output_bin" list-modules 2>/dev/null | grep -Fxq 'http.handlers.forward_proxy'; then
+        err "В собранном Caddy отсутствует http.handlers.forward_proxy"
+        rm -f "$output_bin"
+        return 1
+    fi
 
     # Проверяем наличие naive padding в бинарнике
     if command -v strings &>/dev/null; then
@@ -2268,8 +2439,8 @@ build_caddy() {
         fi
     fi
 
-    ok "Caddy собран: $("$output_bin" version 2>/dev/null | head -1)"
-}
+    ok "Caddy собран: $built_ver"
+)
 
 
 # ── Мультидомен: генерация Caddyfile ─────────────────────────
@@ -2308,18 +2479,28 @@ write_caddyfile_multi() {
     if [[ "${WARP_PROXY_ENABLED:-0}" == "1" ]]; then
         caddy_upstream="    upstream socks5://127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"$'\n'
     fi
-    local caddy_protocols="h1 h2" xhttp_block=""
+    local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling=""
     if [[ "${HYSTERIA_PORT:-8443}" == "443" ]]; then
         caddy_protocols="h1 h2"
     fi
     if [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" ]]; then
         xhttp_block=$(cat <<EOF
   @xhttp path /xhttp /xhttp/*
+  log_skip @xhttp
   reverse_proxy @xhttp 127.0.0.1:${XRAY_XHTTP_PORT:-$XRAY_XHTTP_PORT_DEFAULT} {
+    stream_close_delay 5m
     transport http {
       versions h2c 1.1
     }
   }
+EOF
+)
+        caddy_runtime_sampling=$(cat <<'EOF'
+    sampling {
+      interval 1m
+      first 2
+      thereafter 1000
+    }
 EOF
 )
     fi
@@ -2336,6 +2517,7 @@ EOF
       roll_size 50mb
       roll_keep 3
     }
+${caddy_runtime_sampling}
   }
 }
 
@@ -2678,7 +2860,7 @@ write_caddyfile() {
     if [[ "${WARP_PROXY_ENABLED:-0}" == "1" ]]; then
         caddy_upstream="        upstream socks5://127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"$'\n'
     fi
-    local caddy_protocols="h1 h2" xhttp_block="" caddy_bind_line=""
+    local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling="" caddy_bind_line=""
     local caddy_server_port="443"
     if [[ "${HYSTERIA_PORT:-8443}" == "443" ]]; then
         caddy_protocols="h1 h2"
@@ -2686,11 +2868,21 @@ write_caddyfile() {
     if [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" ]]; then
         xhttp_block=$(cat <<EOF
     @xhttp path /xhttp /xhttp/*
+    log_skip @xhttp
     reverse_proxy @xhttp 127.0.0.1:${XRAY_XHTTP_PORT:-$XRAY_XHTTP_PORT_DEFAULT} {
+        stream_close_delay 5m
         transport http {
             versions h2c 1.1
         }
     }
+EOF
+)
+        caddy_runtime_sampling=$(cat <<'EOF'
+        sampling {
+            interval 1m
+            first 2
+            thereafter 1000
+        }
 EOF
 )
     fi
@@ -2732,6 +2924,7 @@ EOF
             roll_size 50mb
             roll_keep 3
         }
+${caddy_runtime_sampling}
     }
 }
 
@@ -2847,7 +3040,7 @@ setup_firewall() {
 
     local ssh_port
     ssh_port=$(current_ssh_port)
-    if [[ ! "$ssh_port" =~ ^[0-9]+$ ]]; then
+    if ! is_valid_port "$ssh_port"; then
         ssh_port="22"
     fi
 
@@ -2885,8 +3078,8 @@ setup_firewall() {
 
 setup_fail2ban() {
     local ssh_port="${1:-}"
-    [[ "$ssh_port" =~ ^[0-9]+$ ]] || ssh_port=$(current_ssh_port)
-    [[ "$ssh_port" =~ ^[0-9]+$ ]] || ssh_port="22"
+    is_valid_port "$ssh_port" || ssh_port=$(current_ssh_port)
+    is_valid_port "$ssh_port" || ssh_port="22"
 
     info "Настраиваю Fail2Ban..."
     apt-get update -qq 2>/dev/null || true
@@ -3140,7 +3333,7 @@ cmd_health_check() {
         fi
         local ssh_port
         ssh_port=$(current_ssh_port)
-        [[ "$ssh_port" =~ ^[0-9]+$ ]] || ssh_port="22"
+        is_valid_port "$ssh_port" || ssh_port="22"
         ufw_has_port_rule "${ssh_port}/tcp" && health_line "UFW SSH ${ssh_port}/tcp" ok "open" || health_line "UFW SSH ${ssh_port}/tcp" warn "нет правила"
         ufw_has_port_rule "80/tcp" && health_line "UFW 80/tcp" ok "open/limit" || health_line "UFW 80/tcp" warn "нет правила"
         ufw_has_port_rule "443/tcp" && health_line "UFW 443/tcp" ok "open" || health_line "UFW 443/tcp" warn "нет правила"
@@ -3290,7 +3483,8 @@ cmd_egress_prefer_ipv4() {
     echo -e "${BOLD}  Force IPv4 egress${RESET}"
     hr
 
-    local backup_dir="${BACKUP_DIR}/egress-ipv4-before-$(date '+%Y%m%d_%H%M%S')" svc failed=0
+    local backup_dir svc failed=0
+    backup_dir="${BACKUP_DIR}/egress-ipv4-before-$(date '+%Y%m%d_%H%M%S')"
     install -d -m 700 "$backup_dir"
     [[ -f "$EGRESS_GAI_CONF" ]] && cp -a "$EGRESS_GAI_CONF" "$backup_dir/" 2>/dev/null || true
     [[ -f "$EGRESS_SYSCTL_CONF" ]] && cp -a "$EGRESS_SYSCTL_CONF" "$backup_dir/" 2>/dev/null || true
@@ -3346,7 +3540,8 @@ cmd_egress_dualstack() {
     echo -e "${BOLD}  Restore dual-stack egress${RESET}"
     hr
 
-    local backup_dir="${BACKUP_DIR}/egress-dualstack-before-$(date '+%Y%m%d_%H%M%S')" svc failed=0
+    local backup_dir svc failed=0
+    backup_dir="${BACKUP_DIR}/egress-dualstack-before-$(date '+%Y%m%d_%H%M%S')"
     install -d -m 700 "$backup_dir"
     [[ -f "$EGRESS_GAI_CONF" ]] && cp -a "$EGRESS_GAI_CONF" "$backup_dir/" 2>/dev/null || true
     [[ -f "$EGRESS_SYSCTL_CONF" ]] && cp -a "$EGRESS_SYSCTL_CONF" "$backup_dir/" 2>/dev/null || true
@@ -3393,6 +3588,46 @@ detect_pingtunnel_arch() {
     esac
 }
 
+validate_zip_archive_safe() {
+    local archive="$1" max_entries="${2:-10000}" max_unpacked_bytes="${3:-536870912}"
+    [[ -f "$archive" && ! -L "$archive" ]] || return 1
+    command -v python3 >/dev/null 2>&1 || { err "Для безопасной проверки ZIP нужен python3"; return 1; }
+    python3 - "$archive" "$max_entries" "$max_unpacked_bytes" <<'PY'
+import pathlib
+import stat
+import sys
+import zipfile
+
+archive = pathlib.Path(sys.argv[1])
+max_entries = int(sys.argv[2])
+max_unpacked = int(sys.argv[3])
+total = 0
+
+try:
+    with zipfile.ZipFile(archive) as zf:
+        infos = zf.infolist()
+        if not infos or len(infos) > max_entries:
+            raise ValueError(f"unsafe ZIP entry count: {len(infos)}")
+        for info in infos:
+            name = info.filename
+            path = pathlib.PurePosixPath(name)
+            if not name or "\\" in name or path.is_absolute() or ".." in path.parts:
+                raise ValueError(f"unsafe ZIP path: {name!r}")
+            mode = (info.external_attr >> 16) & 0xFFFF
+            kind = stat.S_IFMT(mode)
+            if kind not in (0, stat.S_IFREG, stat.S_IFDIR):
+                raise ValueError(f"unsafe ZIP entry type: {name!r}")
+            if info.flag_bits & 0x1:
+                raise ValueError(f"encrypted ZIP entry is not supported: {name!r}")
+            total += info.file_size
+            if total > max_unpacked:
+                raise ValueError(f"ZIP unpacked size exceeds {max_unpacked} bytes")
+except (OSError, ValueError, zipfile.BadZipFile) as exc:
+    print(f"ZIP validation failed: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 random_pingtunnel_key() {
     local raw
     raw=$(od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d '[:space:]')
@@ -3421,9 +3656,10 @@ EOF
 }
 
 download_pingtunnel_binary() {
-    local arch version url tmp zip extracted expected_sha actual_sha
+    local arch version url tmp zip extracted expected_sha actual_sha archive_size help_output staging_bin=""
     arch=$(detect_pingtunnel_arch) || return 1
     version="${PINGTUNNEL_VERSION:-$PINGTUNNEL_VERSION_PIN}"
+    [[ "$version" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]{0,95}$ ]] || { err "Некорректный PingTunnel version pin"; return 1; }
     if [[ "$version" == "latest" ]]; then
         if [[ "${YURICH_ALLOW_UNVERIFIED_DOWNLOADS:-0}" != "1" ]]; then
             err "PingTunnel latest запрещён без явного YURICH_ALLOW_UNVERIFIED_DOWNLOADS=1"
@@ -3442,11 +3678,21 @@ download_pingtunnel_binary() {
         url="https://github.com/esrrhs/pingtunnel/releases/download/${version}/pingtunnel_linux_${arch}.zip"
     fi
     [[ -n "${url:-}" ]] || { err "Не найден download URL для PingTunnel (${version}, ${arch})"; return 1; }
+    [[ "$url" == "https://github.com/esrrhs/pingtunnel/releases/download/"*"/pingtunnel_linux_${arch}.zip" ]] || {
+        err "PingTunnel download URL не прошёл проверку источника"
+        return 1
+    }
     tmp=$(mktemp -d)
     zip="${tmp}/pingtunnel.zip"
     install -d -m 755 "$PINGTUNNEL_DIR"
     info "Скачиваю PingTunnel ${version}: ${url}"
-    curl -fsSL -o "$zip" "$url" || { rm -rf "$tmp"; err "Не удалось скачать PingTunnel"; return 1; }
+    curl -fsSL -o "$zip" -- "$url" || { rm -rf "$tmp"; err "Не удалось скачать PingTunnel"; return 1; }
+    archive_size=$(stat -c '%s' "$zip" 2>/dev/null || echo 0)
+    if [[ ! "$archive_size" =~ ^[0-9]+$ || "$archive_size" -gt 268435456 ]]; then
+        rm -rf "$tmp"
+        err "PingTunnel archive превышает лимит 256 MiB"
+        return 1
+    fi
     expected_sha="${NAIVEPROXY_PINGTUNNEL_SHA256:-}"
     if [[ -z "$expected_sha" && "$version" == "$PINGTUNNEL_DEFAULT_VERSION" ]]; then
         case "$arch" in
@@ -3455,6 +3701,8 @@ download_pingtunnel_binary() {
         esac
     fi
     if [[ -n "$expected_sha" ]]; then
+        [[ "$expected_sha" =~ ^[a-fA-F0-9]{64}$ ]] || { rm -rf "$tmp"; err "Некорректный PingTunnel SHA256"; return 1; }
+        expected_sha="${expected_sha,,}"
         actual_sha=$(sha256sum "$zip" | awk '{print $1}')
         if [[ "$actual_sha" != "$expected_sha" ]]; then
             rm -rf "$tmp"
@@ -3470,11 +3718,25 @@ download_pingtunnel_binary() {
         err "Задай NAIVEPROXY_PINGTUNNEL_SHA256=<sha256> или YURICH_ALLOW_UNVERIFIED_DOWNLOADS=1"
         return 1
     fi
+    if ! validate_zip_archive_safe "$zip" 10000 536870912; then
+        rm -rf "$tmp"
+        err "PingTunnel ZIP не прошёл безопасную проверку"
+        return 1
+    fi
     unzip -q "$zip" -d "$tmp/unpack" || { rm -rf "$tmp"; err "Не удалось распаковать PingTunnel"; return 1; }
     extracted=$(find "$tmp/unpack" -type f -name 'pingtunnel' -perm /111 2>/dev/null | head -1)
     [[ -n "$extracted" ]] || extracted=$(find "$tmp/unpack" -type f -name 'pingtunnel' 2>/dev/null | head -1)
     [[ -n "$extracted" ]] || { rm -rf "$tmp"; err "Бинарник pingtunnel не найден в архиве"; return 1; }
-    install -m 755 "$extracted" "$PINGTUNNEL_BIN"
+    chmod 755 "$extracted"
+    help_output=$(timeout 10s "$extracted" -h 2>&1 || true)
+    [[ -n "$help_output" ]] || { rm -rf "$tmp"; err "Скачанный PingTunnel binary не запускается"; return 1; }
+    staging_bin=$(mktemp "${PINGTUNNEL_BIN}.install.XXXXXX") || { rm -rf "$tmp"; return 1; }
+    if ! install -m 755 "$extracted" "$staging_bin" || ! mv -f -- "$staging_bin" "$PINGTUNNEL_BIN"; then
+        rm -f "$staging_bin"
+        rm -rf "$tmp"
+        err "Не удалось атомарно установить PingTunnel"
+        return 1
+    fi
     rm -rf "$tmp"
     ok "PingTunnel установлен: $PINGTUNNEL_BIN"
 }
@@ -3595,6 +3857,11 @@ cmd_pingtunnel_config() {
 write_pingtunnel_subscription_file() {
     local out_file="$1" domain="$2" user="$3" key encrypt encrypt_key
     [[ -n "$out_file" && -n "$domain" && -f "$PINGTUNNEL_ENV" ]] || return 1
+    if [[ -L "$PINGTUNNEL_ENV" || "$(stat -c '%u' "$PINGTUNNEL_ENV" 2>/dev/null || echo -1)" != "0" ]]; then
+        err "PingTunnel env должен быть обычным root-owned файлом: $PINGTUNNEL_ENV"
+        return 1
+    fi
+    chmod 600 "$PINGTUNNEL_ENV" 2>/dev/null || return 1
     # shellcheck source=/dev/null
     source "$PINGTUNNEL_ENV"
     key="${PINGTUNNEL_KEY:-}"
@@ -4048,7 +4315,88 @@ cmd_haproxy_logs() {
     hr
 }
 
+edge_routing_snapshot_file() {
+    local snapshot="$1" label="$2" path="$3"
+    if [[ -e "$path" || -L "$path" ]]; then
+        cp -a -- "$path" "$snapshot/$label"
+    else
+        : > "$snapshot/$label.absent"
+    fi
+}
+
+edge_routing_snapshot() {
+    local snapshot unit enabled active
+    snapshot=$(mktemp -d /tmp/yurich-edge-routing.XXXXXX) || return 1
+    chmod 700 "$snapshot"
+    edge_routing_snapshot_file "$snapshot" naive.conf "$CONFIG_FILE" || { rm -rf -- "$snapshot"; return 1; }
+    edge_routing_snapshot_file "$snapshot" Caddyfile "$CADDYFILE" || { rm -rf -- "$snapshot"; return 1; }
+    edge_routing_snapshot_file "$snapshot" xray.json "$XRAY_CONFIG" || { rm -rf -- "$snapshot"; return 1; }
+    edge_routing_snapshot_file "$snapshot" haproxy.cfg "$HAPROXY_CFG" || { rm -rf -- "$snapshot"; return 1; }
+    edge_routing_snapshot_file "$snapshot" haproxy.rsyslog "$HAPROXY_RSYSLOG_CONF" || { rm -rf -- "$snapshot"; return 1; }
+    edge_routing_snapshot_file "$snapshot" haproxy.logrotate "$HAPROXY_LOGROTATE_CONF" || { rm -rf -- "$snapshot"; return 1; }
+    edge_routing_snapshot_file "$snapshot" haproxy.sysctl "$HAPROXY_SYSCTL_CONF" || { rm -rf -- "$snapshot"; return 1; }
+    : > "$snapshot/services.state"
+    for unit in caddy.service haproxy.service xray.service; do
+        enabled="no"; active="no"
+        systemctl is-enabled --quiet "$unit" 2>/dev/null && enabled="yes"
+        systemctl is-active --quiet "$unit" 2>/dev/null && active="yes"
+        printf '%s|%s|%s\n' "$unit" "$enabled" "$active" >> "$snapshot/services.state"
+    done
+    printf '%s\n' "$snapshot"
+}
+
+edge_routing_restore_file() {
+    local snapshot="$1" label="$2" path="$3"
+    if [[ -f "$snapshot/$label.absent" ]]; then
+        rm -f -- "$path"
+    elif [[ -e "$snapshot/$label" || -L "$snapshot/$label" ]]; then
+        mkdir -p "$(dirname "$path")"
+        cp -a -- "$snapshot/$label" "$path"
+    fi
+}
+
+edge_routing_restore() {
+    local snapshot="$1" unit enabled active failed=0
+    [[ -n "$snapshot" && "$snapshot" == /tmp/yurich-edge-routing.* && -d "$snapshot" ]] || return 1
+    edge_routing_restore_file "$snapshot" naive.conf "$CONFIG_FILE" || failed=1
+    edge_routing_restore_file "$snapshot" Caddyfile "$CADDYFILE" || failed=1
+    edge_routing_restore_file "$snapshot" xray.json "$XRAY_CONFIG" || failed=1
+    edge_routing_restore_file "$snapshot" haproxy.cfg "$HAPROXY_CFG" || failed=1
+    edge_routing_restore_file "$snapshot" haproxy.rsyslog "$HAPROXY_RSYSLOG_CONF" || failed=1
+    edge_routing_restore_file "$snapshot" haproxy.logrotate "$HAPROXY_LOGROTATE_CONF" || failed=1
+    edge_routing_restore_file "$snapshot" haproxy.sysctl "$HAPROXY_SYSCTL_CONF" || failed=1
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    while IFS='|' read -r unit enabled active; do
+        [[ -n "$unit" ]] || continue
+        if [[ "$enabled" == "yes" ]]; then systemctl enable "$unit" >/dev/null 2>&1 || failed=1
+        else systemctl disable "$unit" >/dev/null 2>&1 || true
+        fi
+        if [[ "$active" == "yes" ]]; then systemctl restart "$unit" >/dev/null 2>&1 || failed=1
+        else systemctl stop "$unit" >/dev/null 2>&1 || true
+        fi
+    done < "$snapshot/services.state"
+    rm -rf -- "$snapshot"
+    [[ "$failed" -eq 0 ]]
+}
+
+edge_routing_discard_snapshot() {
+    local snapshot="$1"
+    [[ -n "$snapshot" && "$snapshot" == /tmp/yurich-edge-routing.* ]] && rm -rf -- "$snapshot"
+}
+
+edge_routing_transition_failed() {
+    local snapshot="$1" message="$2"
+    err "$message"
+    if edge_routing_restore "$snapshot"; then
+        warn "Предыдущий режим 443 восстановлен"
+    else
+        err "Автоматический rollback режима 443 выполнен не полностью. Проверь Caddy/HAProxy/Xray вручную."
+    fi
+    return 1
+}
+
 apply_haproxy_sni_mux_runtime() {
+    local routing_snapshot
     load_config
     check_installed || { err "Сначала установи Yurich Panel"; return 1; }
     if ! is_valid_domain "${DOMAIN:-}"; then
@@ -4057,47 +4405,56 @@ apply_haproxy_sni_mux_runtime() {
     fi
 
     ensure_haproxy_packages || return 1
-    write_haproxy_logging_config
+    routing_snapshot=$(edge_routing_snapshot) || { err "Не удалось создать rollback-снимок режима 443"; return 1; }
+    write_haproxy_logging_config || { edge_routing_transition_failed "$routing_snapshot" "Не удалось настроить HAProxy logging"; return 1; }
 
-    set_edge_routing_mode "haproxy" || return 1
-    save_config
+    set_edge_routing_mode "haproxy" || { edge_routing_transition_failed "$routing_snapshot" "Не удалось выбрать HAProxy mode"; return 1; }
+    save_config || { edge_routing_transition_failed "$routing_snapshot" "Не удалось сохранить HAProxy mode"; return 1; }
 
     info "Пересобираю Caddy для внутреннего TLS порта ${XRAY_CADDY_FALLBACK_PORT}"
-    rewrite_caddyfile_current || return 1
+    rewrite_caddyfile_current || { edge_routing_transition_failed "$routing_snapshot" "Caddy fallback-конфиг не собран"; return 1; }
     if ! systemctl reload caddy 2>/dev/null && ! systemctl restart caddy; then
         err "Caddy не применил fallback-конфиг для HAProxy"
+        edge_routing_transition_failed "$routing_snapshot" "Caddy не применил fallback-конфиг для HAProxy"
         return 1
     fi
 
     if [[ -x "$XRAY_BIN" && -s "$XRAY_USERS_FILE" ]]; then
         info "Проверяю Xray Reality на TCP/${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
-        write_xray_config || return 1
+        write_xray_config || { edge_routing_transition_failed "$routing_snapshot" "Xray config не собран"; return 1; }
         write_xray_service
-        systemctl restart xray || return 1
+        systemctl restart xray || { edge_routing_transition_failed "$routing_snapshot" "Xray не перезапустился"; return 1; }
     else
         warn "Xray не установлен или нет пользователей. HAProxy применится, но Reality backend будет DOWN до настройки Xray."
     fi
 
-    write_haproxy_sni_mux_config || return 1
-    systemctl enable haproxy --quiet
-    systemctl reload haproxy 2>/dev/null || systemctl restart haproxy
+    write_haproxy_sni_mux_config || { edge_routing_transition_failed "$routing_snapshot" "HAProxy config не собран"; return 1; }
+    systemctl enable haproxy --quiet || { edge_routing_transition_failed "$routing_snapshot" "HAProxy не включён"; return 1; }
+    if ! systemctl reload haproxy 2>/dev/null && ! systemctl restart haproxy; then
+        edge_routing_transition_failed "$routing_snapshot" "HAProxy не применил конфигурацию"
+        return 1
+    fi
     sleep 1
     if ! systemctl is-active --quiet haproxy; then
         err "HAProxy не запустился"
         journalctl -u haproxy -n 50 --no-pager
+        edge_routing_transition_failed "$routing_snapshot" "HAProxy не запустился"
         return 1
     fi
 
     apply_xray_reality_firewall
+    edge_routing_discard_snapshot "$routing_snapshot"
     ok "HAProxy SNI mux применён: ${DOMAIN}:443 -> Caddy, default SNI -> Xray Reality"
 }
 
 apply_caddy_only_runtime() {
+    local routing_snapshot
     load_config
     check_installed || { err "Сначала установи Yurich Panel"; return 1; }
 
-    set_edge_routing_mode "caddy" || return 1
-    save_config
+    routing_snapshot=$(edge_routing_snapshot) || { err "Не удалось создать rollback-снимок режима 443"; return 1; }
+    set_edge_routing_mode "caddy" || { edge_routing_transition_failed "$routing_snapshot" "Не удалось выбрать Caddy-only mode"; return 1; }
+    save_config || { edge_routing_transition_failed "$routing_snapshot" "Не удалось сохранить Caddy-only mode"; return 1; }
 
     info "Останавливаю HAProxy, чтобы освободить TCP/443 для Caddy"
     systemctl disable --now haproxy >/dev/null 2>&1 || true
@@ -4105,20 +4462,22 @@ apply_caddy_only_runtime() {
     pkill -x haproxy >/dev/null 2>&1 || true
 
     info "Пересобираю Caddyfile для прямого Caddy-only режима на 443"
-    rewrite_caddyfile_current || return 1
+    rewrite_caddyfile_current || { edge_routing_transition_failed "$routing_snapshot" "Caddy-only конфиг не собран"; return 1; }
     if ! systemctl reload caddy 2>/dev/null && ! systemctl restart caddy; then
         err "Caddy не применил Caddy-only конфиг"
+        edge_routing_transition_failed "$routing_snapshot" "Caddy не применил Caddy-only конфиг"
         return 1
     fi
 
     if [[ -x "$XRAY_BIN" && -s "$XRAY_USERS_FILE" ]]; then
         info "Пересобираю Xray Reality для прямого TCP-порта ${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
-        write_xray_config || return 1
+        write_xray_config || { edge_routing_transition_failed "$routing_snapshot" "Xray config не собран"; return 1; }
         write_xray_service
-        systemctl restart xray || return 1
+        systemctl restart xray || { edge_routing_transition_failed "$routing_snapshot" "Xray не перезапустился"; return 1; }
     fi
 
     apply_xray_reality_firewall
+    edge_routing_discard_snapshot "$routing_snapshot"
     ok "Caddy-only применён: Caddy держит 443, Reality использует отдельный TCP-порт"
 }
 
@@ -4352,52 +4711,566 @@ cmd_export_state() {
     ok "Export создан: $out"
 }
 
-cmd_import_state() {
-    local archive="${1:-}" tmp name
-    [[ -n "$archive" ]] || { echo -ne "${CYAN}Путь к export .tar.gz: ${RESET}"; read -r archive; }
-    [[ -f "$archive" ]] || { err "Файл не найден: $archive"; return 1; }
-    if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
-        err "Архив содержит небезопасные пути"
+import_shell_word_is_safe() {
+    local word="${1-}" inner char
+    local i escaped=0
+
+    [[ -z "$word" || "$word" == "''" ]] && return 0
+
+    if [[ "${word:0:2}" == "\$'" && "${word: -1}" == "'" && ${#word} -ge 3 ]]; then
+        inner="${word:2:${#word}-3}"
+        for ((i = 0; i < ${#inner}; i++)); do
+            char="${inner:i:1}"
+            if [[ "$escaped" -eq 1 ]]; then
+                escaped=0
+                continue
+            fi
+            if [[ "$char" == '\\' ]]; then
+                escaped=1
+            elif [[ "$char" == "'" ]]; then
+                return 1
+            fi
+        done
+        [[ "$escaped" -eq 0 ]]
+        return
+    fi
+
+    for ((i = 0; i < ${#word}; i++)); do
+        char="${word:i:1}"
+        if [[ "$escaped" -eq 1 ]]; then
+            escaped=0
+            continue
+        fi
+        if [[ "$char" == '\\' ]]; then
+            escaped=1
+            continue
+        fi
+        case "$char" in
+            [[:space:]]|'$'|'`'|"'"|'"'|';'|'&'|'|'|'('|')'|'<'|'>') return 1 ;;
+        esac
+    done
+    [[ "$escaped" -eq 0 ]]
+}
+
+is_valid_import_chat_id_list() {
+    local raw="${1:-}" item count=0
+    local -a items=()
+    [[ -z "$raw" ]] && return 0
+    raw="${raw// /}"
+    [[ "$raw" != ,* && "$raw" != *, && "$raw" != *,,* ]] || return 1
+    IFS=',' read -r -a items <<< "$raw"
+    for item in "${items[@]}"; do
+        count=$((count + 1))
+        (( count <= 32 )) || return 1
+        [[ "$item" =~ ^[0-9]{5,20}$ ]] || return 1
+    done
+    (( count > 0 ))
+}
+
+is_valid_sales_plans_value() {
+    local raw="${1:-}" item term price normalized count=0
+    local -A seen_terms=()
+    local -a items=()
+    [[ -n "$raw" ]] || return 1
+    [[ "$raw" != ,* && "$raw" != *, && "$raw" != *,,* ]] || return 1
+    IFS=',' read -r -a items <<< "$raw"
+    for item in "${items[@]}"; do
+        count=$((count + 1))
+        (( count <= 24 )) || return 1
+        [[ "$item" =~ ^([^:]+):([^:]+)$ ]] || return 1
+        term="${BASH_REMATCH[1]}"
+        price="${BASH_REMATCH[2]}"
+        normalized=$(normalize_user_term "$term" 2>/dev/null || true)
+        [[ -n "$normalized" && -z "${seen_terms[$normalized]+x}" ]] || return 1
+        is_canonical_uint_in_range "$price" 1 1000000000 || return 1
+        seen_terms[$normalized]=1
+    done
+    (( count > 0 ))
+}
+
+sanitize_imported_shell_data_file() {
+    local source_file="$1" output_file="$2" mode="${3:-naive}"
+    local max_size=1048576 file_size allowed_keys line key value line_no=0 safe_tmp import_value dom
+    local -a imported_keys=()
+    local -A seen_keys=()
+
+    [[ -f "$source_file" && ! -L "$source_file" ]] || {
+        err "Импортируемый data-файл не является обычным файлом: $source_file"
+        return 1
+    }
+    file_size=$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)
+    [[ "$file_size" =~ ^[0-9]+$ && "$file_size" -le "$max_size" ]] || {
+        err "Импортируемый data-файл слишком большой: $source_file"
+        return 1
+    }
+
+    case "$mode" in
+        naive)
+            allowed_keys=$(declare -f save_config | sed -nE "s/.*printf '([A-Z][A-Z0-9_]*)=%q\\\\n'.*/\\1/p")
+            ;;
+        bridge)
+            allowed_keys=$'BRIDGE_ENABLED\nBRIDGE_NAME\nBRIDGE_ENTRY_PROTOCOL\nBRIDGE_EXIT_PROTOCOL\nBRIDGE_EXIT_URI\nUPDATED_AT'
+            ;;
+        *)
+            err "Неизвестный тип import data-файла: $mode"
+            return 1
+            ;;
+    esac
+    [[ -n "$allowed_keys" ]] || { err "Не удалось построить allowlist import-конфига"; return 1; }
+
+    safe_tmp="${output_file}.tmp"
+    : > "$safe_tmp"
+    chmod 600 "$safe_tmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line_no=$((line_no + 1))
+        line="${line%$'\r'}"
+        [[ ${#line} -le 65536 ]] || { err "Слишком длинная строка ${line_no} в $source_file"; rm -f "$safe_tmp"; return 1; }
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if [[ ! "$line" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]]; then
+            err "Небезопасная строка ${line_no} в import-конфиге"
+            rm -f "$safe_tmp"
+            return 1
+        fi
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+        if ! grep -Fxq -- "$key" <<< "$allowed_keys"; then
+            warn "Import: неизвестный ключ $key пропущен"
+            continue
+        fi
+        if [[ -n "${seen_keys[$key]+x}" ]]; then
+            err "Import: ключ $key указан несколько раз"
+            rm -f "$safe_tmp"
+            return 1
+        fi
+        if ! import_shell_word_is_safe "$value"; then
+            err "Import: небезопасное значение ключа $key"
+            rm -f "$safe_tmp"
+            return 1
+        fi
+        seen_keys[$key]=1
+        imported_keys+=("$key")
+        printf '%s=%s\n' "$key" "$value" >> "$safe_tmp"
+    done < "$source_file"
+
+    [[ -s "$safe_tmp" ]] || { err "Import data-файл не содержит поддерживаемых ключей"; rm -f "$safe_tmp"; return 1; }
+    mv -f "$safe_tmp" "$output_file"
+    chmod 600 "$output_file"
+
+    if ! (
+        local bool_key port_key range_spec min_value max_value cidr_item hop_start hop_end
+        local -a cidr_items=()
+        for key in "${imported_keys[@]}"; do unset "$key"; done
+        # Файл уже прошёл строгую проверку shell-слов и allowlist ключей.
+        # shellcheck source=/dev/null
+        source "$output_file"
+        for key in "${imported_keys[@]}"; do
+            import_value="${!key-}"
+            if [[ "$import_value" == *$'\n'* || "$import_value" == *$'\r'* || "$import_value" == *$'\t'* ]]; then
+                err "Import: управляющие символы запрещены в $key"
+                exit 1
+            fi
+        done
+
+        if [[ "$mode" == "naive" ]]; then
+            for bool_key in \
+                SUBSCRIPTION_LOCAL_ENABLED SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE SUBSCRIPTION_XHTTP_MAIN_ENABLED \
+                PROTOCOL_BENCHMARK_RECOVERY_ALERT PROTOCOL_MONITOR_RECOVERY_ALERT HYSTERIA_ENABLED \
+                HYSTERIA_WARP_ENABLED HYSTERIA_PORT_HOP_ENABLED UNBOUND_ENABLED UNBOUND_ADBLOCK \
+                UNBOUND_MANAGED_GATEWAY UNBOUND_VPN_ENABLED UNBOUND_FILTER_ENABLED WARP_PROXY_ENABLED \
+                XRAY_WARP_ENABLED DEVICE_LIMIT_ENABLED XRAY_ENABLED XRAY_FALLBACK_ENABLED \
+                XRAY_REALITY_ENABLED XRAY_REALITY_SNI_MUX_ENABLED XRAY_XHTTP_ENABLED \
+                XRAY_MOBILE_ALT_ENABLED XRAY_GITHUB_TEST_ENABLED XRAY_ZAPRET_ENABLED BRIDGE_ENABLED; do
+                [[ -n "${seen_keys[$bool_key]+x}" ]] || continue
+                import_value="${!bool_key}"
+                [[ "$import_value" =~ ^[01]$ ]] || { err "Import: $bool_key должен быть 0 или 1"; exit 1; }
+            done
+
+            for port_key in HYSTERIA_PORT WARP_PROXY_PORT XRAY_REALITY_PORT XRAY_REALITY_PUBLIC_PORT \
+                XRAY_MKCP_PORT XRAY_VISION_PORT XRAY_XHTTP_PORT XRAY_WS_PORT XRAY_HTTPUPGRADE_PORT \
+                XRAY_CADDY_FALLBACK_PORT XRAY_GITHUB_TEST_PORT; do
+                [[ -n "${seen_keys[$port_key]+x}" ]] || continue
+                import_value="${!port_key}"
+                is_valid_port "$import_value" || { err "Import: некорректный порт $port_key"; exit 1; }
+            done
+
+            for range_spec in \
+                PROTOCOL_BENCHMARK_ROUNDS:1:20 PROTOCOL_BENCHMARK_MAX_AVG_MS:100:600000 \
+                PROTOCOL_BENCHMARK_MONITOR_MIN_ROUNDS:1:20 PROTOCOL_BENCHMARK_SLOW_MIN_HITS:1:20 \
+                PROTOCOL_BENCHMARK_WARN_MIN_OK_HITS:1:20 PROTOCOL_BENCHMARK_ALERT_REPEAT:1:100 \
+                PROTOCOL_BENCHMARK_ALERT_COOLDOWN_MINUTES:1:10080 PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:1:10080 \
+                SALES_BOT_CAPTCHA_TTL_SECONDS:300:2592000 SALES_BOT_ORDER_MIN_INTERVAL_SECONDS:10:3600 \
+                SALES_BOT_MAX_PENDING_PER_CHAT:1:10 SALES_BOT_MAX_ORDER_FILES:100:50000 \
+                UNBOUND_FILTER_MAX_DOMAINS:1000:500000 DEVICE_LIMIT:1:50 DEVICE_WINDOW_HOURS:1:168 \
+                EXPIRED_DELETE_GRACE_DAYS:0:3650; do
+                IFS=':' read -r key min_value max_value <<< "$range_spec"
+                [[ -n "${seen_keys[$key]+x}" ]] || continue
+                import_value="${!key}"
+                is_canonical_uint_in_range "$import_value" "$min_value" "$max_value" \
+                    || { err "Import: $key вне безопасного диапазона $min_value..$max_value"; exit 1; }
+            done
+
+            if [[ -n "${seen_keys[LANG_UI]+x}" ]]; then
+                [[ "${LANG_UI}" == "ru" || "${LANG_UI}" == "en" ]] || { err "Import: некорректный LANG_UI"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[SUBSCRIPTION_LOCAL_POSITION]+x}" ]]; then
+                [[ "${SUBSCRIPTION_LOCAL_POSITION}" == "first" || "${SUBSCRIPTION_LOCAL_POSITION}" == "last" ]] || { err "Import: некорректный SUBSCRIPTION_LOCAL_POSITION"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[EDGE_ROUTING_MODE]+x}" ]]; then
+                [[ "${EDGE_ROUTING_MODE}" == "caddy" || "${EDGE_ROUTING_MODE}" == "haproxy" ]] || { err "Import: некорректный EDGE_ROUTING_MODE"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[UNBOUND_MODE]+x}" ]]; then
+                [[ "${UNBOUND_MODE}" == "recursive" || "${UNBOUND_MODE}" == "forward" ]] || { err "Import: некорректный UNBOUND_MODE"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[WARP_MODE]+x}" ]]; then
+                case "${WARP_MODE}" in off|proxy|warp|warp+doh) ;; *) err "Import: некорректный WARP_MODE"; exit 1 ;; esac
+            fi
+            if [[ -n "${seen_keys[WARP_PROTOCOL]+x}" ]]; then
+                case "${WARP_PROTOCOL}" in auto|MASQUE|WireGuard) ;; *) err "Import: некорректный WARP_PROTOCOL"; exit 1 ;; esac
+            fi
+            if [[ -n "${seen_keys[DEVICE_LIMIT_MODE]+x}" ]]; then
+                case "${DEVICE_LIMIT_MODE}" in alert|lock-user) ;; *) err "Import: некорректный DEVICE_LIMIT_MODE"; exit 1 ;; esac
+            fi
+            if [[ -n "${seen_keys[PROTOCOL_BENCHMARK_USER]+x}" && -n "${PROTOCOL_BENCHMARK_USER}" ]]; then
+                is_valid_proxy_user "${PROTOCOL_BENCHMARK_USER}" || { err "Import: некорректный PROTOCOL_BENCHMARK_USER"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[TG_ADMINS]+x}" ]]; then
+                is_valid_import_chat_id_list "${TG_ADMINS}" || { err "Import: некорректный TG_ADMINS"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[SALES_BOT_ADMINS]+x}" ]]; then
+                is_valid_import_chat_id_list "${SALES_BOT_ADMINS}" || { err "Import: некорректный SALES_BOT_ADMINS"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[SALES_BOT_PLANS]+x}" ]]; then
+                is_valid_sales_plans_value "${SALES_BOT_PLANS}" || { err "Import: некорректный SALES_BOT_PLANS"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[SALES_BOT_CURRENCY]+x}" ]]; then
+                [[ "${SALES_BOT_CURRENCY}" =~ ^[A-Z]{3,8}$ ]] || { err "Import: некорректный SALES_BOT_CURRENCY"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[HYSTERIA_PORT_HOP_PORTS]+x}" ]]; then
+                [[ "${HYSTERIA_PORT_HOP_PORTS}" =~ ^([1-9][0-9]{0,4})-([1-9][0-9]{0,4})$ ]] || { err "Import: некорректный HYSTERIA_PORT_HOP_PORTS"; exit 1; }
+                hop_start="${BASH_REMATCH[1]}"; hop_end="${BASH_REMATCH[2]}"
+                is_valid_local_proxy_port "$hop_start" && is_valid_local_proxy_port "$hop_end" \
+                    && (( 10#$hop_start < 10#$hop_end && 10#$hop_end - 10#$hop_start <= 1000 )) \
+                    || { err "Import: небезопасный диапазон Hysteria port hopping"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[UNBOUND_GATEWAY_IP]+x}" && -n "${UNBOUND_GATEWAY_IP}" ]]; then
+                is_private_vpn_ipv4 "${UNBOUND_GATEWAY_IP}" || { err "Import: UNBOUND_GATEWAY_IP должен быть private/CGNAT адресом"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[UNBOUND_VPN_CIDRS]+x}" ]]; then
+                normalize_cidr_list "${UNBOUND_VPN_CIDRS}" >/dev/null || { err "Import: некорректный UNBOUND_VPN_CIDRS"; exit 1; }
+            fi
+            if [[ -n "${seen_keys[WARP_SSH_ALLOW_CIDRS]+x}" && -n "${WARP_SSH_ALLOW_CIDRS}" ]]; then
+                read -r -a cidr_items <<< "${WARP_SSH_ALLOW_CIDRS//,/ }"
+                (( ${#cidr_items[@]} <= 32 )) || { err "Import: слишком много WARP SSH CIDR"; exit 1; }
+                for cidr_item in "${cidr_items[@]}"; do
+                    is_valid_cidr4 "$cidr_item" || { err "Import: некорректный WARP SSH CIDR"; exit 1; }
+                    is_canonical_uint_in_range "${cidr_item#*/}" 8 32 || { err "Import: WARP SSH CIDR шире /8 запрещён"; exit 1; }
+                done
+            fi
+            if [[ -n "${DOMAIN:-}" ]] && ! is_valid_domain "$DOMAIN"; then err "Import: некорректный DOMAIN"; exit 1; fi
+            if [[ -n "${SUBSCRIPTION_DOMAIN:-}" ]] && ! is_valid_domain "$SUBSCRIPTION_DOMAIN"; then err "Import: некорректный SUBSCRIPTION_DOMAIN"; exit 1; fi
+            if [[ -n "${DOMAINS:-}" ]]; then
+                while IFS= read -r dom; do
+                    dom="${dom//[[:space:]]/}"
+                    [[ -z "$dom" ]] && continue
+                    is_valid_domain "$dom" || { err "Import: некорректный домен $dom"; exit 1; }
+                done < <(printf '%s\n' "$DOMAINS" | tr ',' '\n')
+            fi
+            [[ -z "${TG_TOKEN:-}" || "$TG_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || { err "Import: некорректный TG_TOKEN"; exit 1; }
+            [[ -z "${SALES_BOT_TOKEN:-}" || "$SALES_BOT_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || { err "Import: некорректный SALES_BOT_TOKEN"; exit 1; }
+            [[ -z "${TG_CHAT_ID:-}" || "$TG_CHAT_ID" =~ ^-?[0-9]{5,20}$ ]] || { err "Import: некорректный TG_CHAT_ID"; exit 1; }
+            [[ -z "${SALES_BOT_ADMIN_ID:-}" || "$SALES_BOT_ADMIN_ID" =~ ^-?[0-9]{5,20}$ ]] || { err "Import: некорректный SALES_BOT_ADMIN_ID"; exit 1; }
+            [[ -z "${CADDY_VERSION_PIN:-}" || "$CADDY_VERSION_PIN" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { err "Import: некорректный CADDY_VERSION_PIN"; exit 1; }
+            [[ -z "${XCADDY_VERSION_PIN:-}" || "$XCADDY_VERSION_PIN" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { err "Import: некорректный XCADDY_VERSION_PIN"; exit 1; }
+            [[ -z "${FORWARDPROXY_REF_PIN:-}" || "$FORWARDPROXY_REF_PIN" =~ ^[a-fA-F0-9]{40}$ ]] || { err "Import: FORWARDPROXY_REF_PIN должен быть полным commit SHA"; exit 1; }
+            [[ -z "${XRAY_VERSION_PIN:-}" || "$XRAY_VERSION_PIN" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { err "Import: некорректный XRAY_VERSION_PIN"; exit 1; }
+            [[ -z "${HYSTERIA_VERSION_PIN:-}" || "$HYSTERIA_VERSION_PIN" =~ ^app/v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { err "Import: некорректный HYSTERIA_VERSION_PIN"; exit 1; }
+            [[ -z "${PROTOCOL_BENCHMARK_LOG:-}" || "$PROTOCOL_BENCHMARK_LOG" == "$PROTOCOL_BENCHMARK_LOG_DEFAULT" ]] || { err "Import: PROTOCOL_BENCHMARK_LOG должен использовать управляемый путь"; exit 1; }
+            [[ -z "${PROTOCOL_BENCHMARK_ALERT_STATE:-}" || "$PROTOCOL_BENCHMARK_ALERT_STATE" == "$CONFIG_DIR/protocol-benchmark-alert.state" ]] || { err "Import: некорректный PROTOCOL_BENCHMARK_ALERT_STATE"; exit 1; }
+            [[ -z "${PROTOCOL_MONITOR_ALERT_STATE:-}" || "$PROTOCOL_MONITOR_ALERT_STATE" == "$CONFIG_DIR/protocol-health-alert.state" ]] || { err "Import: некорректный PROTOCOL_MONITOR_ALERT_STATE"; exit 1; }
+            import_path_is_within "${SALES_BOT_PAYMENT_QR_PATH:-$SALES_BOT_PAYMENT_QR_PATH_DEFAULT}" "$SALES_BOT_DIR" || { err "Import: QR оплаты должен находиться в $SALES_BOT_DIR"; exit 1; }
+            import_path_is_within "${SALES_BOT_WELCOME_ANIMATION_PATH:-$SALES_BOT_WELCOME_ANIMATION_PATH_DEFAULT}" "$SALES_BOT_DIR" || { err "Import: welcome animation должна находиться в $SALES_BOT_DIR"; exit 1; }
+            import_path_is_within "${SALES_BOT_WELCOME_IMAGE_PATH:-$SALES_BOT_WELCOME_IMAGE_PATH_DEFAULT}" "$SALES_BOT_DIR" || { err "Import: welcome image должна находиться в $SALES_BOT_DIR"; exit 1; }
+            [[ -z "${XRAY_ZAPRET_DAT:-}" || "$XRAY_ZAPRET_DAT" == "$XRAY_ZAPRET_DAT_DEFAULT" ]] || { err "Import: XRAY_ZAPRET_DAT должен использовать управляемый путь"; exit 1; }
+            import_https_url_list_is_safe "${XRAY_ZAPRET_URL:-}" || { err "Import: XRAY_ZAPRET_URL должен быть безопасным HTTPS URL"; exit 1; }
+            import_https_url_list_is_safe "${UNBOUND_FILTER_URLS:-}" || { err "Import: UNBOUND_FILTER_URLS содержит небезопасный URL"; exit 1; }
+        else
+            [[ "${BRIDGE_ENABLED:-0}" =~ ^[01]$ ]] || { err "Import: некорректный BRIDGE_ENABLED"; exit 1; }
+            [[ -z "${BRIDGE_EXIT_URI:-}" || "$BRIDGE_EXIT_URI" =~ ^(vless|trojan|hysteria2|hy2|socks|socks5|http|https):// ]] || { err "Import: некорректный BRIDGE_EXIT_URI"; exit 1; }
+        fi
+    ); then
+        rm -f "$output_file"
         return 1
     fi
-    if tar -tzf "$archive" | grep -Ev '^(naive\.conf|users\.conf|users\.disabled|xray-users\.conf|xray-compat-users\.conf|xray-users\.disabled|bridge\.conf|nodes\.conf|subscription-aliases\.conf|users\.d/|users\.d/[A-Za-z0-9_-]+\.env|subscriptions/|subscriptions/[A-Za-z0-9_-]+\.token)$' >/dev/null; then
+}
+
+import_path_is_within() {
+    local path="$1" base="$2" normalized normalized_base
+    [[ "$path" == /* && "$base" == /* ]] || return 1
+    normalized=$(readlink -m -- "$path" 2>/dev/null) || return 1
+    normalized_base=$(readlink -m -- "$base" 2>/dev/null) || return 1
+    [[ "$normalized" == "$normalized_base" || "$normalized" == "$normalized_base"/* ]]
+}
+
+import_https_url_list_is_safe() {
+    local raw="${1:-}" url count=0 remainder authority host port
+    [[ -z "$raw" ]] && return 0
+    for url in $raw; do
+        count=$((count + 1))
+        (( count <= 16 )) || return 1
+        [[ "$url" == https://* && "$url" != *"@"* && "$url" != *\\* ]] || return 1
+        [[ "$url" != *$'\r'* && "$url" != *$'\n'* && "$url" != *$'\t'* ]] || return 1
+        remainder="${url#https://}"
+        [[ "$remainder" == */* ]] || return 1
+        authority="${remainder%%/*}"
+        [[ -n "$authority" ]] || return 1
+        if [[ "$authority" == *:* ]]; then
+            host="${authority%:*}"
+            port="${authority##*:}"
+            is_valid_port "$port" || return 1
+        else
+            host="$authority"
+        fi
+        is_valid_domain "$host" || return 1
+    done
+}
+
+sanitize_imported_colon_file() {
+    local source_file="$1" output_file="$2" mode="$3"
+    local line record user secret extra count=0 tmp
+    [[ -f "$source_file" && ! -L "$source_file" ]] || return 1
+    [[ "$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)" -le 1048576 ]] || { err "Import: слишком большой credentials-файл"; return 1; }
+    tmp="${output_file}.tmp"
+    : > "$tmp"
+    chmod 600 "$tmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        count=$((count + 1))
+        (( count <= 10000 )) || { err "Import: слишком много credentials-записей"; rm -f "$tmp"; return 1; }
+        record="${line%%$'\t'#*}"
+        record="${record%% #*}"
+        IFS=':' read -r user secret extra <<< "$record"
+        if ! is_valid_proxy_user "$user" || [[ -n "$extra" ]]; then
+            err "Import: некорректная credentials-запись для $user"
+            rm -f "$tmp"
+            return 1
+        fi
+        case "$mode" in
+            proxy) is_valid_proxy_pass "$secret" || { err "Import: некорректный пароль для $user"; rm -f "$tmp"; return 1; } ;;
+            xray) is_valid_xray_uuid "$secret" || { err "Import: некорректный Xray UUID для $user"; rm -f "$tmp"; return 1; } ;;
+            *) rm -f "$tmp"; return 1 ;;
+        esac
+        printf '%s:%s\n' "$user" "$secret" >> "$tmp"
+    done < "$source_file"
+    install -m 600 "$tmp" "$output_file"
+    rm -f "$tmp"
+}
+
+sanitize_imported_nodes_file() {
+    local source_file="$1" output_file="$2" line name count=0 tmp
+    local -A seen=()
+    [[ -f "$source_file" && ! -L "$source_file" ]] || return 1
+    [[ "$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)" -le 1048576 ]] || { err "Import: nodes.conf слишком большой"; return 1; }
+    tmp="${output_file}.tmp"
+    {
+        echo "# Yurich Panel nodes"
+        echo "# format: name|host|ssh_port|ssh_user|domain|role|weight|enabled"
+    } > "$tmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        count=$((count + 1))
+        (( count <= 128 )) || { err "Import: слишком много nodes (максимум 128)"; rm -f "$tmp"; return 1; }
+        nodes_validate_line "$line" || { err "Import: некорректная node-запись"; rm -f "$tmp"; return 1; }
+        name="${line%%|*}"
+        [[ -z "${seen[$name]+x}" ]] || { err "Import: node $name указана несколько раз"; rm -f "$tmp"; return 1; }
+        seen[$name]=1
+        printf '%s\n' "$line" >> "$tmp"
+    done < "$source_file"
+    install -m 600 "$tmp" "$output_file"
+    rm -f "$tmp"
+}
+
+sanitize_imported_aliases_file() {
+    local source_file="$1" output_file="$2" line alias target user extra count=0 tmp
+    local -A seen=()
+    [[ -f "$source_file" && ! -L "$source_file" ]] || return 1
+    [[ "$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)" -le 1048576 ]] || { err "Import: aliases-файл слишком большой"; return 1; }
+    tmp="${output_file}.tmp"
+    : > "$tmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        read -r alias target user extra <<< "$line"
+        [[ "$alias" =~ ^[A-Fa-f0-9]{32,64}$ && "$target" =~ ^[A-Fa-f0-9]{32,64}$ && "$alias" != "$target" && -z "$extra" ]] || { err "Import: некорректный subscription alias"; rm -f "$tmp"; return 1; }
+        [[ -z "$user" ]] || is_valid_proxy_user "$user" || { err "Import: некорректный пользователь alias"; rm -f "$tmp"; return 1; }
+        count=$((count + 1))
+        (( count <= 4096 )) || { err "Import: слишком много aliases"; rm -f "$tmp"; return 1; }
+        [[ -z "${seen[$alias]+x}" ]] || { err "Import: alias $alias указан несколько раз"; rm -f "$tmp"; return 1; }
+        seen[$alias]=1
+        printf '%s %s%s\n' "$alias" "$target" "${user:+ $user}" >> "$tmp"
+    done < "$source_file"
+    install -m 600 "$tmp" "$output_file"
+    rm -f "$tmp"
+}
+
+sanitize_imported_token_file() {
+    local source_file="$1" output_file="$2" token
+    [[ -f "$source_file" && ! -L "$source_file" ]] || return 1
+    [[ "$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)" -le 256 ]] || { err "Import: token-файл слишком большой"; return 1; }
+    token=$(tr -d '\r\n' < "$source_file")
+    [[ "$token" =~ ^[A-Fa-f0-9]{48}$ ]] || { err "Import: некорректный subscription token"; return 1; }
+    printf '%s\n' "$token" > "${output_file}.tmp"
+    install -m 600 "${output_file}.tmp" "$output_file"
+    rm -f "${output_file}.tmp"
+}
+
+sanitize_imported_user_meta_file() {
+    local source_file="$1" output_file="$2" expected_user="$3" line key value count=0
+    [[ -f "$source_file" && ! -L "$source_file" ]] || return 1
+    [[ "$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)" -le 65536 ]] || { err "Import: metadata-файл слишком большой"; return 1; }
+    printf 'USER=%q\n' "$expected_user" > "${output_file}.tmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ "$line" =~ ^([A-Z][A-Z0-9_]*)=(.*)$ ]] || { err "Import: некорректная metadata-строка"; rm -f "${output_file}.tmp"; return 1; }
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+        [[ "$key" == "USER" ]] && continue
+        import_shell_word_is_safe "$value" || { err "Import: небезопасное metadata-значение"; rm -f "${output_file}.tmp"; return 1; }
+        count=$((count + 1))
+        (( count <= 128 )) || { err "Import: слишком много metadata-полей"; rm -f "${output_file}.tmp"; return 1; }
+        printf '%s=%s\n' "$key" "$value" >> "${output_file}.tmp"
+    done < "$source_file"
+    install -m 600 "${output_file}.tmp" "$output_file"
+    rm -f "${output_file}.tmp"
+}
+
+cmd_import_state() {
+    local archive="${1:-}" name import_work_dir import_archive payload archive_size archive_stats entry_count unpacked_size safe_naive safe_bridge safe_nodes safe_aliases state_file
+    local existing_state=0
+    [[ -n "$archive" ]] || { echo -ne "${CYAN}Путь к export .tar.gz: ${RESET}"; read -r archive; }
+    [[ -f "$archive" ]] || { err "Файл не найден: $archive"; return 1; }
+
+    archive_size=$(stat -c '%s' "$archive" 2>/dev/null || echo 0)
+    [[ "$archive_size" =~ ^[0-9]+$ && "$archive_size" -le 52428800 ]] || {
+        err "Import-архив слишком большой (лимит 50 MiB)"
+        return 1
+    }
+    import_work_dir=$(mktemp -d /tmp/naiveproxy_import_XXXXXX)
+    import_archive="${import_work_dir}/state.tar.gz"
+    payload="${import_work_dir}/payload"
+    mkdir -m 700 "$payload"
+    trap '[[ -n "${import_work_dir:-}" && "$import_work_dir" == /tmp/naiveproxy_import_* ]] && rm -rf -- "$import_work_dir" 2>/dev/null; trap - RETURN' RETURN
+    if ! install -m 600 -- "$archive" "$import_archive"; then
+        err "Не удалось создать защищённую копию import-архива"
+        return 1
+    fi
+    archive_size=$(stat -c '%s' "$import_archive" 2>/dev/null || echo 0)
+    [[ "$archive_size" =~ ^[0-9]+$ && "$archive_size" -le 52428800 ]] || { err "Защищённая копия import-архива превышает лимит"; return 1; }
+
+    if ! archive_stats=$(timeout 30s tar --numeric-owner -tvzf "$import_archive" 2>/dev/null | awk '{count++; if ($3 ~ /^[0-9]+$/) total += $3} END {print count+0, total+0}'); then
+        err "Не удалось безопасно прочитать import-архив"
+        return 1
+    fi
+    read -r entry_count unpacked_size <<< "$archive_stats"
+    [[ "$entry_count" =~ ^[0-9]+$ && "$entry_count" -le 10000 ]] || { err "В import-архиве слишком много записей"; return 1; }
+    [[ "$unpacked_size" =~ ^[0-9]+$ && "$unpacked_size" -le 209715200 ]] || { err "Распакованный import-архив превышает 200 MiB"; return 1; }
+
+    if ! timeout 30s tar -tzf "$import_archive" 2>/dev/null \
+        | awk 'BEGIN { bad=0 } /(^\/|(^|\/)\.\.(\/|$))/ { bad=1 } END { exit bad ? 1 : 0 }'; then
+        err "Архив содержит небезопасные пути или не читается"
+        return 1
+    fi
+    if ! timeout 30s tar -tzf "$import_archive" 2>/dev/null \
+        | awk '/^(naive\.conf|users\.conf|users\.disabled|xray-users\.conf|xray-compat-users\.conf|xray-users\.disabled|bridge\.conf|nodes\.conf|subscription-aliases\.conf|users\.d\/|users\.d\/[A-Za-z0-9_-]+\.env|subscriptions\/|subscriptions\/[A-Za-z0-9_-]+\.token)$/ { next } { bad=1 } END { exit bad ? 1 : 0 }'; then
         err "Архив содержит неизвестные файлы. Импорт остановлен."
         return 1
     fi
-    if tar -tvzf "$archive" | awk '{ t=substr($1,1,1); if (t != "-" && t != "d") bad=1 } END { exit bad ? 0 : 1 }'; then
+    if tar -tvzf "$import_archive" | awk '{ t=substr($1,1,1); if (t != "-" && t != "d") bad=1 } END { exit bad ? 0 : 1 }'; then
         err "Архив содержит symlink/hardlink/special-файлы. Импорт остановлен."
         return 1
     fi
+
+    if ! tar --no-same-owner --no-same-permissions -xzf "$import_archive" -C "$payload"; then
+        err "Не удалось распаковать import-архив"
+        return 1
+    fi
+    if [[ -f "$payload/naive.conf" ]]; then
+        safe_naive="${import_work_dir}/naive.conf.safe"
+        sanitize_imported_shell_data_file "$payload/naive.conf" "$safe_naive" naive || return 1
+    fi
+    if [[ -f "$payload/bridge.conf" ]]; then
+        safe_bridge="${import_work_dir}/bridge.conf.safe"
+        sanitize_imported_shell_data_file "$payload/bridge.conf" "$safe_bridge" bridge || return 1
+    fi
+    if [[ -f "$payload/nodes.conf" ]]; then
+        safe_nodes="${import_work_dir}/nodes.conf.safe"
+        sanitize_imported_nodes_file "$payload/nodes.conf" "$safe_nodes" || return 1
+    fi
+    if [[ -f "$payload/subscription-aliases.conf" ]]; then
+        safe_aliases="${import_work_dir}/subscription-aliases.conf.safe"
+        sanitize_imported_aliases_file "$payload/subscription-aliases.conf" "$safe_aliases" || return 1
+    fi
+    for name in users.conf users.disabled; do
+        [[ -f "$payload/$name" ]] || continue
+        sanitize_imported_colon_file "$payload/$name" "${import_work_dir}/${name}.safe" proxy || return 1
+    done
+    for name in xray-users.conf xray-compat-users.conf xray-users.disabled; do
+        [[ -f "$payload/$name" ]] || continue
+        sanitize_imported_colon_file "$payload/$name" "${import_work_dir}/${name}.safe" xray || return 1
+    done
+
     echo -ne "${YELLOW}Импорт перезапишет users/subscriptions/config. Продолжить? [y/N]: ${RESET}"
     read -r ans
     [[ "${ans,,}" == "y" ]] || return 0
-    info "Делаю export текущего состояния перед import..."
-    cmd_export_state >/dev/null 2>&1 || warn "Не удалось создать pre-import export, продолжаю по подтверждению"
+    for state_file in naive.conf users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled bridge.conf nodes.conf; do
+        [[ -e "$CONFIG_DIR/$state_file" ]] && { existing_state=1; break; }
+    done
+    if [[ "$existing_state" -eq 1 ]]; then
+        info "Делаю обязательный export текущего состояния перед import..."
+        if ! cmd_export_state >/dev/null 2>&1; then
+            err "Pre-import export не создан. Импорт отменён без изменений."
+            return 1
+        fi
+    else
+        info "Текущее состояние пустое, pre-import export не требуется"
+    fi
 
-    tmp=$(mktemp -d /tmp/naiveproxy_import_XXXXXX)
-    tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$tmp"
     mkdir -p "$CONFIG_DIR"
     chmod 700 "$CONFIG_DIR"
     for name in naive.conf users.conf users.disabled xray-users.conf xray-compat-users.conf xray-users.disabled bridge.conf nodes.conf subscription-aliases.conf; do
-        [[ -f "$tmp/$name" ]] && install -m 600 "$tmp/$name" "$CONFIG_DIR/$name"
+        case "$name" in
+            naive.conf) [[ -n "${safe_naive:-}" && -f "$safe_naive" ]] && install -m 600 "$safe_naive" "$CONFIG_DIR/$name" ;;
+            bridge.conf) [[ -n "${safe_bridge:-}" && -f "$safe_bridge" ]] && install -m 600 "$safe_bridge" "$CONFIG_DIR/$name" ;;
+            nodes.conf) [[ -n "${safe_nodes:-}" && -f "$safe_nodes" ]] && install -m 600 "$safe_nodes" "$CONFIG_DIR/$name" ;;
+            subscription-aliases.conf) [[ -n "${safe_aliases:-}" && -f "$safe_aliases" ]] && install -m 600 "$safe_aliases" "$CONFIG_DIR/$name" ;;
+            users.conf|users.disabled|xray-users.conf|xray-compat-users.conf|xray-users.disabled)
+                [[ -f "${import_work_dir}/${name}.safe" ]] && install -m 600 "${import_work_dir}/${name}.safe" "$CONFIG_DIR/$name"
+                ;;
+            *) [[ -f "$payload/$name" ]] && install -m 600 "$payload/$name" "$CONFIG_DIR/$name" ;;
+        esac
     done
-    if [[ -d "$tmp/users.d" ]]; then
+    if [[ -d "$payload/users.d" ]]; then
         mkdir -p "$USER_META_DIR"
         chmod 700 "$USER_META_DIR"
-        find "$tmp/users.d" -maxdepth 1 -type f -name '*.env' -print0 2>/dev/null \
+        find "$payload/users.d" -maxdepth 1 -type f -name '*.env' -print0 2>/dev/null \
             | while IFS= read -r -d '' meta_file; do
-                install -m 600 "$meta_file" "$USER_META_DIR/$(basename "$meta_file")"
+                name=$(basename "$meta_file" .env)
+                is_valid_proxy_user "$name" || { err "Import: некорректное имя metadata-файла"; exit 1; }
+                sanitize_imported_user_meta_file "$meta_file" "$USER_META_DIR/${name}.env" "$name" || exit 1
             done
     fi
-    if [[ -d "$tmp/subscriptions" ]]; then
+    if [[ -d "$payload/subscriptions" ]]; then
         mkdir -p "$SUBS_DIR"
         chmod 700 "$SUBS_DIR"
-        find "$tmp/subscriptions" -maxdepth 1 -type f -name '*.token' -print0 2>/dev/null \
+        find "$payload/subscriptions" -maxdepth 1 -type f -name '*.token' -print0 2>/dev/null \
             | while IFS= read -r -d '' token_file; do
-                install -m 600 "$token_file" "$SUBS_DIR/$(basename "$token_file")"
+                name=$(basename "$token_file" .token)
+                is_valid_proxy_user "$name" || { err "Import: некорректное имя token-файла"; exit 1; }
+                sanitize_imported_token_file "$token_file" "$SUBS_DIR/${name}.token" || exit 1
             done
     fi
-    rm -rf "$tmp"
     ok "Import завершён"
     warn "После импорта запусти: sudo bash yurich-panel.sh safe-apply"
 }
@@ -4519,7 +5392,9 @@ is_valid_node_host() {
     [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
     local IFS=. part
     for part in $host; do
-        [[ "$part" =~ ^[0-9]+$ && "$part" -ge 0 && "$part" -le 255 ]] || return 1
+        [[ "$part" =~ ^[0-9]{1,3}$ ]] || return 1
+        [[ "$part" == "0" || "$part" != 0* ]] || return 1
+        (( 10#$part <= 255 )) || return 1
     done
 }
 
@@ -4531,7 +5406,8 @@ is_valid_node_role() {
 }
 
 is_valid_node_weight() {
-    [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "$1" -ge 1 ]] && [[ "$1" -le 999 ]]
+    local value="${1:-}"
+    [[ "$value" =~ ^[1-9][0-9]{0,2}$ ]] && (( 10#$value <= 999 ))
 }
 
 nodes_ensure_file() {
@@ -4546,8 +5422,16 @@ nodes_ensure_file() {
 }
 
 nodes_list_lines() {
+    local line
     [[ -f "$NODES_FILE" ]] || return 0
-    grep -v '^#\|^[[:space:]]*$' "$NODES_FILE" 2>/dev/null || true
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        if nodes_validate_line "$line"; then
+            printf '%s\n' "$line"
+        else
+            warn "Пропускаю некорректную node-запись в $NODES_FILE"
+        fi
+    done < "$NODES_FILE"
 }
 
 nodes_count() {
@@ -4560,6 +5444,7 @@ nodes_get_line() {
     is_valid_node_name "$lookup" || return 1
     line=$(nodes_list_lines | awk -F'|' -v name="$lookup" '$1 == name {print; exit}')
     [[ -n "$line" ]] || return 1
+    nodes_validate_line "$line" || return 1
     printf '%s\n' "$line"
 }
 
@@ -4616,10 +5501,83 @@ nodes_prompt_name() {
     printf '%s\n' "$name"
 }
 
+nodes_known_host_lookup_names() {
+    local host="$1" port="$2"
+    printf '%s\n' "$host"
+    [[ "$port" == "22" ]] || printf '[%s]:%s\n' "$host" "$port"
+}
+
+nodes_known_host_is_trusted() {
+    local host="$1" port="$2" lookup
+    [[ -f "$NODES_KNOWN_HOSTS_FILE" ]] || return 1
+    while IFS= read -r lookup; do
+        ssh-keygen -F "$lookup" -f "$NODES_KNOWN_HOSTS_FILE" >/dev/null 2>&1 && return 0
+    done < <(nodes_known_host_lookup_names "$host" "$port")
+    return 1
+}
+
+nodes_import_existing_host_key() {
+    local host="$1" port="$2" default_file="${HOME:-/root}/.ssh/known_hosts" lookup tmp
+    [[ -f "$default_file" ]] || return 1
+    tmp=$(mktemp)
+    while IFS= read -r lookup; do
+        ssh-keygen -F "$lookup" -f "$default_file" 2>/dev/null | grep -v '^#' >> "$tmp" || true
+    done < <(nodes_known_host_lookup_names "$host" "$port")
+    if [[ -s "$tmp" ]]; then
+        mkdir -p "$(dirname "$NODES_KNOWN_HOSTS_FILE")"
+        touch "$NODES_KNOWN_HOSTS_FILE"
+        chmod 600 "$NODES_KNOWN_HOSTS_FILE"
+        cat "$tmp" >> "$NODES_KNOWN_HOSTS_FILE"
+        sort -u "$NODES_KNOWN_HOSTS_FILE" -o "$NODES_KNOWN_HOSTS_FILE"
+        rm -f "$tmp"
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+nodes_ensure_host_key() {
+    local line="$1" node_name node_host node_port node_user node_domain node_role node_weight node_enabled tmp ans
+    nodes_validate_line "$line" || { err "Небезопасная node-запись"; return 1; }
+    IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
+    mkdir -p "$(dirname "$NODES_KNOWN_HOSTS_FILE")"
+    touch "$NODES_KNOWN_HOSTS_FILE"
+    chmod 600 "$NODES_KNOWN_HOSTS_FILE"
+    nodes_known_host_is_trusted "$node_host" "$node_port" && return 0
+    if nodes_import_existing_host_key "$node_host" "$node_port" && nodes_known_host_is_trusted "$node_host" "$node_port"; then
+        ok "SSH host key для ${node_name} импортирован из существующего known_hosts"
+        return 0
+    fi
+    [[ -t 0 ]] || { err "SSH host key для ${node_name} не доверен. Запусти интерактивно: nodes-test ${node_name}"; return 1; }
+    command -v ssh-keyscan >/dev/null 2>&1 || { err "Не найден ssh-keyscan"; return 1; }
+    tmp=$(mktemp)
+    if ! ssh-keyscan -T 8 -p "$node_port" "$node_host" > "$tmp" 2>/dev/null || [[ ! -s "$tmp" ]]; then
+        rm -f "$tmp"
+        err "Не удалось получить SSH host key: ${node_host}:${node_port}"
+        return 1
+    fi
+    echo -e "${YELLOW}Сверь fingerprint ${node_name} с панелью провайдера:${RESET}"
+    ssh-keygen -lf "$tmp" || { rm -f "$tmp"; return 1; }
+    echo -ne "${YELLOW}Если fingerprint совпадает, введи TRUST: ${RESET}"
+    read -r ans
+    if [[ "$ans" != "TRUST" ]]; then
+        rm -f "$tmp"
+        err "Host key не добавлен"
+        return 1
+    fi
+    cat "$tmp" >> "$NODES_KNOWN_HOSTS_FILE"
+    sort -u "$NODES_KNOWN_HOSTS_FILE" -o "$NODES_KNOWN_HOSTS_FILE"
+    chmod 600 "$NODES_KNOWN_HOSTS_FILE"
+    rm -f "$tmp"
+    ok "SSH host key закреплён: ${node_name}"
+}
+
 nodes_ssh() {
     local line="$1" remote_cmd="$2"
     local node_name node_host node_port node_user node_domain node_role node_weight node_enabled
     local ssh_timeout="${NODES_SSH_TIMEOUT_SECONDS:-180}"
+    nodes_validate_line "$line" || { err "Небезопасная node-запись"; return 1; }
+    nodes_ensure_host_key "$line" || return 1
     IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
     if command -v timeout >/dev/null 2>&1; then
         timeout "${ssh_timeout}s" ssh \
@@ -4628,7 +5586,8 @@ nodes_ssh() {
             -o ConnectTimeout=8 \
             -o ServerAliveInterval=5 \
             -o ServerAliveCountMax=2 \
-            -o StrictHostKeyChecking=accept-new \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$NODES_KNOWN_HOSTS_FILE" \
             -p "$node_port" \
             "${node_user}@${node_host}" \
             "$remote_cmd"
@@ -4640,7 +5599,8 @@ nodes_ssh() {
         -o ConnectTimeout=8 \
         -o ServerAliveInterval=5 \
         -o ServerAliveCountMax=2 \
-        -o StrictHostKeyChecking=accept-new \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$NODES_KNOWN_HOSTS_FILE" \
         -p "$node_port" \
         "${node_user}@${node_host}" \
         "$remote_cmd"
@@ -4649,12 +5609,15 @@ nodes_ssh() {
 nodes_scp_to() {
     local line="$1" src="$2" dest="$3"
     local node_name node_host node_port node_user node_domain node_role node_weight node_enabled
+    nodes_validate_line "$line" || { err "Небезопасная node-запись"; return 1; }
+    nodes_ensure_host_key "$line" || return 1
     IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
     scp \
         -P "$node_port" \
         -o BatchMode=yes \
         -o ConnectTimeout=8 \
-        -o StrictHostKeyChecking=accept-new \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$NODES_KNOWN_HOSTS_FILE" \
         -- "$src" "${node_user}@${node_host}:${dest}"
 }
 
@@ -4797,10 +5760,12 @@ cmd_nodes_deploy_script() {
     echo -ne "${CYAN}Запустить интерактивную установку Yurich Panel на node сейчас? [y/N]: ${RESET}"
     read -r ans
     if [[ "${ans,,}" == "y" ]]; then
+        nodes_ensure_host_key "$line" || return 1
         ssh -tt \
             -o BatchMode=yes \
             -o ConnectTimeout=8 \
-            -o StrictHostKeyChecking=accept-new \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$NODES_KNOWN_HOSTS_FILE" \
             -p "$node_port" \
             "${node_user}@${node_host}" \
             "${sudo_cmd}bash ${SCRIPT_PATH} install"
@@ -4812,7 +5777,7 @@ cmd_nodes_sync_users() {
     load_config
     load_users
     nodes_ensure_file
-    [[ -s "$USERS_FILE" ]] || { err "users.conf пустой, нечего синхронизировать"; return 1; }
+    [[ -f "$USERS_FILE" ]] || { err "users.conf не найден, нечего синхронизировать"; return 1; }
     for item in users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled; do
         [[ -e "$CONFIG_DIR/$item" ]] && items+=("$item")
     done
@@ -4829,6 +5794,7 @@ cmd_nodes_sync_users() {
     fi
     if [[ "${#lines[@]}" -eq 0 ]]; then
         rm -f "$archive"
+        rm -f "$NODES_PENDING_SYNC_FILE"
         warn "Ноды не добавлены"
         return 0
     fi
@@ -4845,7 +5811,7 @@ cmd_nodes_sync_users() {
             failed=1
             continue
         fi
-        if nodes_ssh "$line" "${sudo_cmd}mkdir -p ${CONFIG_DIR} ${BACKUP_DIR} ${USER_META_DIR} ${SUBS_DIR} && ${sudo_cmd}tar -C ${CONFIG_DIR} -czf ${BACKUP_DIR}/node-sync-before-\$(date +%Y%m%d_%H%M%S).tar.gz users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled 2>/dev/null || true; ${sudo_cmd}tar -C ${CONFIG_DIR} -xzf ${remote_tmp}; ${sudo_cmd}chmod 700 ${CONFIG_DIR} ${USER_META_DIR} ${SUBS_DIR} 2>/dev/null || true; ${sudo_cmd}chmod 600 ${USERS_FILE} ${DISABLED_USERS_FILE} ${XRAY_USERS_FILE} ${XRAY_COMPAT_USERS_FILE} ${XRAY_DISABLED_USERS_FILE} ${SUBS_ALIASES_FILE} ${USER_META_DIR}/*.env ${SUBS_DIR}/*.token 2>/dev/null || true; sync_status=0; if [ -x ${SCRIPT_PATH} ]; then if [ -x ${CADDY_BIN} ] && [ -f ${CADDYFILE} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} safe-apply || sync_status=20; fi; ${sudo_cmd}bash ${SCRIPT_PATH} hysteria-sync >/dev/null 2>&1 || true; ${sudo_cmd}bash ${SCRIPT_PATH} xray-rebuild >/dev/null 2>&1 || true; ${sudo_cmd}bash ${SCRIPT_PATH} nodes-subscriptions >/dev/null 2>&1 || true; fi; ${sudo_cmd}rm -f ${remote_tmp}; exit \$sync_status"; then
+        if nodes_ssh "$line" "${sudo_cmd}mkdir -p ${CONFIG_DIR} ${BACKUP_DIR} ${USER_META_DIR} ${SUBS_DIR} && ${sudo_cmd}tar -C ${CONFIG_DIR} -czf ${BACKUP_DIR}/node-sync-before-\$(date +%Y%m%d_%H%M%S).tar.gz users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled 2>/dev/null || true; ${sudo_cmd}tar -C ${CONFIG_DIR} -xzf ${remote_tmp}; ${sudo_cmd}chmod 700 ${CONFIG_DIR} ${USER_META_DIR} ${SUBS_DIR} 2>/dev/null || true; ${sudo_cmd}chmod 600 ${USERS_FILE} ${DISABLED_USERS_FILE} ${XRAY_USERS_FILE} ${XRAY_COMPAT_USERS_FILE} ${XRAY_DISABLED_USERS_FILE} ${SUBS_ALIASES_FILE} ${USER_META_DIR}/*.env ${SUBS_DIR}/*.token 2>/dev/null || true; sync_status=0; if [ -x ${SCRIPT_PATH} ]; then if [ -x ${CADDY_BIN} ] && [ -f ${CADDYFILE} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} safe-apply || sync_status=20; fi; if [ -x ${HYSTERIA_BIN} ] || [ -f ${HYSTERIA_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} hysteria-sync >/dev/null 2>&1 || sync_status=21; fi; if [ -x ${XRAY_BIN} ] || [ -f ${XRAY_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} xray-rebuild >/dev/null 2>&1 || sync_status=22; fi; ${sudo_cmd}bash ${SCRIPT_PATH} nodes-subscriptions >/dev/null 2>&1 || sync_status=23; else sync_status=24; fi; ${sudo_cmd}rm -f ${remote_tmp}; exit \$sync_status"; then
             ok "Users synced: ${node_name}"
         else
             err "Sync failed: ${node_name}"
@@ -4853,6 +5819,12 @@ cmd_nodes_sync_users() {
         fi
     done
     rm -f "$archive"
+    if [[ "$failed" -eq 0 ]]; then
+        rm -f "$NODES_PENDING_SYNC_FILE"
+    else
+        touch "$NODES_PENDING_SYNC_FILE"
+        chmod 600 "$NODES_PENDING_SYNC_FILE"
+    fi
     return "$failed"
 }
 
@@ -4897,6 +5869,15 @@ subscription_node_xhttp_enabled() {
     subscription_name_in_list "$node_name" "$xhttp_nodes"
 }
 
+subscription_user_xhttp_enabled() {
+    local user="$1" node_name="$2"
+    local canary_users="${SUBSCRIPTION_XHTTP_CANARY_USERS:-}"
+    subscription_node_xhttp_enabled "$node_name" && return 0
+    subscription_name_in_list "$node_name" "${SUBSCRIPTION_XHTTP_CANARY_NODE_NAMES:-}" || return 1
+    [[ "$canary_users" == "*" ]] && return 0
+    subscription_name_in_list "$user" "$canary_users"
+}
+
 subscription_node_core_enabled() {
     local node_name="$1"
     if [[ "${SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE:-0}" == "1" ]] && subscription_node_xhttp_enabled "$node_name"; then
@@ -4919,7 +5900,7 @@ node_app_links_for_user() {
 
         if ! subscription_node_core_enabled "$name"; then
             if [[ "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}" == "1" ]]; then
-                subscription_node_xhttp_enabled "$name" && node_xhttp_link_for_user "$user" "$name" "$node_domain"
+                subscription_user_xhttp_enabled "$user" "$name" && node_xhttp_link_for_user "$user" "$name" "$node_domain"
             fi
             continue
         fi
@@ -4927,36 +5908,12 @@ node_app_links_for_user() {
         sudo_cmd=$(nodes_remote_sudo_prefix "$ssh_user")
         remote_cmd="${sudo_cmd}bash -lc 'u=\"${user}\"; token_file=\"/etc/naiveproxy/subscriptions/\${u}.token\"; token=\$(cat \"\$token_file\" 2>/dev/null || true); links=\"/var/www/html/s/\${token}/links.txt\"; if { [ -z \"\$token\" ] || [ ! -s \"\$links\" ]; } && [ -x /usr/local/bin/yurich-panel.sh ]; then bash /usr/local/bin/yurich-panel.sh nodes-subscriptions >/dev/null 2>&1 || true; token=\$(cat \"\$token_file\" 2>/dev/null || true); links=\"/var/www/html/s/\${token}/links.txt\"; fi; if [ -s \"\$links\" ]; then if systemctl is-active --quiet hysteria 2>/dev/null; then awk '\''/^(hy2:\\/\\/|hysteria2:\\/\\/)/ && \$0 !~ /[Hh]op/ {print}'\'' \"\$links\" || true; fi; if systemctl is-active --quiet xray 2>/dev/null; then awk '\''/^vless:\\/\\// && \$0 ~ /security=reality/ && \$0 ~ /type=tcp/ && \$0 ~ /^vless:\\/\\/[^@]+@[^/?#]+:[0-9]+\\?/ {print}'\'' \"\$links\" || true; fi; fi'"
         local output attempt
-        for attempt in 1 2 3; do
+        for ((attempt = 1; attempt <= 3; attempt++)); do
             if output=$(nodes_ssh "$line" "$remote_cmd" 2>/dev/null); then
                 [[ -n "$output" ]] && printf '%s\n' "$output"
                 if [[ "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}" == "1" ]]; then
-                    subscription_node_xhttp_enabled "$name" && node_xhttp_link_for_user "$user" "$name" "$node_domain"
+                    subscription_user_xhttp_enabled "$user" "$name" && node_xhttp_link_for_user "$user" "$name" "$node_domain"
                 fi
-                break
-            fi
-            sleep 2
-        done
-    done
-}
-
-node_mobile_test_links_for_user() {
-    local user="$1"
-    [[ -n "$user" ]] || return 0
-    [[ -f "$NODES_FILE" ]] || return 0
-    nodes_list_lines | while IFS='|' read -r name host port ssh_user node_domain role weight enabled; do
-        [[ "$enabled" == "1" ]] || continue
-        [[ -n "$node_domain" && "$node_domain" != "-" ]] || continue
-        is_valid_domain "$node_domain" || continue
-
-        local line sudo_cmd remote_cmd
-        line="${name}|${host}|${port}|${ssh_user}|${node_domain}|${role}|${weight}|${enabled}"
-        sudo_cmd=$(nodes_remote_sudo_prefix "$ssh_user")
-        remote_cmd="${sudo_cmd}bash -lc 'u=\"${user}\"; token_file=\"/etc/naiveproxy/subscriptions/\${u}.token\"; token=\$(cat \"\$token_file\" 2>/dev/null || true); links=\"/var/www/html/s/\${token}/mobile-test.txt\"; if { [ -z \"\$token\" ] || [ ! -s \"\$links\" ]; } && [ -x /usr/local/bin/yurich-panel.sh ]; then bash /usr/local/bin/yurich-panel.sh nodes-subscriptions >/dev/null 2>&1 || true; token=\$(cat \"\$token_file\" 2>/dev/null || true); links=\"/var/www/html/s/\${token}/mobile-test.txt\"; fi; if [ -s \"\$links\" ]; then awk '\''/^vless:\\/\\// && \$0 ~ /security=reality/ && \$0 ~ /mobile-alt/ {print}'\'' \"\$links\" || true; fi'"
-        local output attempt
-        for attempt in 1 2 3; do
-            if output=$(nodes_ssh "$line" "$remote_cmd" 2>/dev/null); then
-                [[ -n "$output" ]] && printf '%s\n' "$output"
                 break
             fi
             sleep 2
@@ -5110,9 +6067,7 @@ cmd_protocol_benchmark() {
         err "Пользователь не найден: ${user:-empty}"
         return 1
     fi
-    [[ "$rounds" =~ ^[0-9]+$ ]] || rounds=1
-    (( rounds < 1 )) && rounds=1
-    (( rounds > 5 )) && rounds=5
+    is_canonical_uint_in_range "$rounds" 1 5 || rounds=1
 
     generate_subscription_page "$user" >/dev/null 2>&1 || true
     token=$(cat "${SUBS_DIR}/${user}.token" 2>/dev/null || true)
@@ -5521,27 +6476,16 @@ cmd_protocol_benchmark_monitor() {
     if [[ -z "$user" ]]; then
         user=$(protocol_benchmark_default_user) || { err "Нет пользователя для benchmark monitor"; return 1; }
     fi
-    [[ "$rounds" =~ ^[0-9]+$ ]] || rounds=1
-    (( rounds < 1 )) && rounds=1
-    (( rounds > 5 )) && rounds=5
-    [[ "$min_rounds" =~ ^[0-9]+$ ]] || min_rounds=3
-    (( min_rounds < 1 )) && min_rounds=3
-    (( min_rounds > 5 )) && min_rounds=5
+    is_canonical_uint_in_range "$rounds" 1 5 || rounds=1
+    is_canonical_uint_in_range "$min_rounds" 1 5 || min_rounds=3
     (( rounds < min_rounds )) && rounds="$min_rounds"
-    [[ "$max_ms" =~ ^[0-9]+$ ]] || max_ms=2500
-    [[ "$slow_min_hits" =~ ^[0-9]+$ ]] || slow_min_hits=2
-    (( slow_min_hits < 1 )) && slow_min_hits=1
-    (( slow_min_hits > 5 )) && slow_min_hits=5
+    is_canonical_uint_in_range "$max_ms" 100 600000 || max_ms=2500
+    is_canonical_uint_in_range "$slow_min_hits" 1 5 || slow_min_hits=2
     (( slow_min_hits > rounds )) && slow_min_hits="$rounds"
-    [[ "$warn_min_ok" =~ ^[0-9]+$ ]] || warn_min_ok=2
-    (( warn_min_ok < 1 )) && warn_min_ok=1
+    is_canonical_uint_in_range "$warn_min_ok" 1 5 || warn_min_ok=2
     (( warn_min_ok > rounds )) && warn_min_ok="$rounds"
-    [[ "$alert_repeat" =~ ^[0-9]+$ ]] || alert_repeat=2
-    (( alert_repeat < 1 )) && alert_repeat=1
-    (( alert_repeat > 10 )) && alert_repeat=10
-    [[ "$alert_cooldown_minutes" =~ ^[0-9]+$ ]] || alert_cooldown_minutes=60
-    (( alert_cooldown_minutes < 5 )) && alert_cooldown_minutes=5
-    (( alert_cooldown_minutes > 1440 )) && alert_cooldown_minutes=1440
+    is_canonical_uint_in_range "$alert_repeat" 1 10 || alert_repeat=2
+    is_canonical_uint_in_range "$alert_cooldown_minutes" 5 1440 || alert_cooldown_minutes=60
 
     tmp=$(mktemp /tmp/yurich-protocol-benchmark-monitor-XXXXXX.out)
     if YURICH_BENCHMARK_CSV="$log_file" YURICH_BENCHMARK_USER="$user" YURICH_BENCHMARK_MAX_AVG_MS="$max_ms" cmd_protocol_benchmark "$user" "$rounds" > "$tmp" 2>&1; then
@@ -5603,9 +6547,9 @@ cmd_protocol_benchmark_monitor() {
                 prev_recovered=0
             fi
         fi
-        [[ "$prev_count" =~ ^[0-9]+$ ]] || prev_count=0
-        [[ "$prev_sent" =~ ^[0-9]+$ ]] || prev_sent=0
-        [[ "$prev_recovered" =~ ^[0-9]+$ ]] || prev_recovered=0
+        is_canonical_uint_in_range "$prev_count" 0 1000000000 || prev_count=0
+        is_canonical_uint_in_range "$prev_sent" 0 9999999999 || prev_sent=0
+        is_canonical_uint_in_range "$prev_recovered" 0 9999999999 || prev_recovered=0
         if [[ "$prev_fingerprint" != "$fingerprint" ]]; then
             issue_changed=1
         fi
@@ -5663,7 +6607,7 @@ cmd_protocol_benchmark_monitor() {
             else
                 prev_class="$state_a"; prev_count="$state_b"; prev_sent="$state_c"
             fi
-            [[ "$prev_sent" =~ ^[0-9]+$ ]] || prev_sent=0
+            is_canonical_uint_in_range "$prev_sent" 0 9999999999 || prev_sent=0
             if (( prev_sent > 0 )); then
                 tg_send "✅ <b>Yurich Connect protocol benchmark восстановлен</b>
 📡 Сервер: <code>$(hostname)</code>
@@ -5682,9 +6626,7 @@ cmd_protocol_benchmark_monitor() {
 cmd_protocol_benchmark_history() {
     load_config 2>/dev/null || true
     local log_file="${PROTOCOL_BENCHMARK_LOG:-$PROTOCOL_BENCHMARK_LOG_DEFAULT}" rows="${1:-30}"
-    [[ "$rows" =~ ^[0-9]+$ ]] || rows=30
-    (( rows < 1 )) && rows=30
-    (( rows > 200 )) && rows=200
+    is_canonical_uint_in_range "$rows" 1 200 || rows=30
     if [[ ! -s "$log_file" ]]; then
         warn "История benchmark пока пуста: $log_file"
         return 0
@@ -5745,10 +6687,8 @@ cmd_protocol_benchmark_install() {
         err "Пользователь не найден: $user"
         return 1
     fi
-    [[ "$rounds" =~ ^[0-9]+$ ]] || rounds=1
-    (( rounds < 1 )) && rounds=1
+    is_canonical_uint_in_range "$rounds" 1 5 || rounds=1
     (( rounds < 3 )) && rounds=3
-    (( rounds > 5 )) && rounds=5
     PROTOCOL_BENCHMARK_USER="$user"
     PROTOCOL_BENCHMARK_ROUNDS="$rounds"
     PROTOCOL_BENCHMARK_LOG="${PROTOCOL_BENCHMARK_LOG:-$PROTOCOL_BENCHMARK_LOG_DEFAULT}"
@@ -5850,9 +6790,7 @@ cmd_protocol_monitor() {
     local alert_cooldown_minutes="${PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:-60}" recovery_alert="${PROTOCOL_MONITOR_RECOVERY_ALERT:-1}"
     local cooldown_sec now_ts fingerprint state_line state_a state_b state_c state_d state_e
     local prev_count=0 prev_sent=0 prev_fingerprint="" issue_count=1 issue_changed=0 should_alert=0 last_sent=0
-    [[ "$alert_cooldown_minutes" =~ ^[0-9]+$ ]] || alert_cooldown_minutes=60
-    (( alert_cooldown_minutes < 5 )) && alert_cooldown_minutes=5
-    (( alert_cooldown_minutes > 1440 )) && alert_cooldown_minutes=1440
+    is_canonical_uint_in_range "$alert_cooldown_minutes" 5 1440 || alert_cooldown_minutes=60
     tmp=$(mktemp)
     if cmd_protocol_health > "$tmp" 2>&1; then
         rc=0
@@ -5874,8 +6812,8 @@ cmd_protocol_monitor() {
                 prev_fingerprint=""
             fi
         fi
-        [[ "$prev_count" =~ ^[0-9]+$ ]] || prev_count=0
-        [[ "$prev_sent" =~ ^[0-9]+$ ]] || prev_sent=0
+        is_canonical_uint_in_range "$prev_count" 0 1000000000 || prev_count=0
+        is_canonical_uint_in_range "$prev_sent" 0 9999999999 || prev_sent=0
         if [[ "$prev_fingerprint" != "$fingerprint" ]]; then
             issue_changed=1
         fi
@@ -5913,7 +6851,7 @@ cmd_protocol_monitor() {
             else
                 prev_sent="$state_c"
             fi
-            [[ "$prev_sent" =~ ^[0-9]+$ ]] || prev_sent=0
+            is_canonical_uint_in_range "$prev_sent" 0 9999999999 || prev_sent=0
             if (( prev_sent > 0 )); then
                 tg_send "✅ <b>Yurich Connect protocol health восстановлен</b>
 📡 Сервер: <code>$(hostname)</code>
@@ -6128,13 +7066,13 @@ happ_location_code() {
     local label="${1:-}" lowered
     lowered=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')
     case "$lowered" in
-        *swe*|*sweden*|*stockholm*|*swe.go-it*) printf 'SWE' ;;
+        *swe*|*stockholm*) printf 'SWE' ;;
         *finland\ 2*|*finland2*|*n8n*) printf 'FI2' ;;
+        *poland*|*warsaw*|*polska*) printf 'PL' ;;
         *finland*|*helsinki*|*suomi*|*dns-ai*) printf 'FI' ;;
         *germany*|*deutschland*|*berlin*|*frankfurt*|*plus-dns*) printf 'DE' ;;
         *netherlands*|*holland*|*amsterdam*|*net-it*) printf 'NL' ;;
         *usa*|*united\ states*|*america*|*california*|*fremont*) printf 'US' ;;
-        *poland*|*warsaw*|*polska*|*poland.dns-ai*) printf 'PL' ;;
         *) printf 'VPN' ;;
     esac
 }
@@ -6399,7 +7337,7 @@ xray_reality_public_port() {
     if [[ -z "$public_port" ]]; then
         public_port="${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
     fi
-    if [[ "$public_port" =~ ^[0-9]+$ ]]; then
+    if is_valid_port "$public_port"; then
         printf '%s\n' "$public_port"
     else
         printf '%s\n' "${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
@@ -6628,9 +7566,13 @@ EOF
 
 # ─── HYSTERIA 2 ───────────────────────────────────────────────
 install_hysteria_bin() {
-    local arch asset url tmp_bin tmp_hash expected actual
+    local arch asset url tmp_bin tmp_hash expected actual version_output expected_version staging_bin=""
     arch=$(detect_hysteria_arch) || return 1
     asset="hysteria-linux-${arch}"
+    [[ "$HYSTERIA_VERSION_PIN" == "latest" || "$HYSTERIA_VERSION_PIN" =~ ^(app/)?v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || {
+        err "Некорректный Hysteria version pin: $HYSTERIA_VERSION_PIN"
+        return 1
+    }
     if [[ -x "$HYSTERIA_BIN" ]]; then
         if "$HYSTERIA_BIN" version >/dev/null 2>&1; then
             ok "Hysteria 2 уже установлен: $("$HYSTERIA_BIN" version 2>/dev/null | head -1 || echo "$HYSTERIA_BIN")"
@@ -6648,7 +7590,7 @@ install_hysteria_bin() {
     trap 'rm -f "${tmp_bin:-}" "${tmp_hash:-}" 2>/dev/null; trap - RETURN' RETURN
 
     info "Скачиваю Hysteria 2 (${asset})..."
-    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 "$url" -o "$tmp_bin"; then
+    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 -o "$tmp_bin" -- "$url"; then
         err "Не удалось скачать Hysteria 2: $url"
         return 1
     fi
@@ -6680,8 +7622,25 @@ install_hysteria_bin() {
         fi
     fi
 
-    install -m 755 "$tmp_bin" "$HYSTERIA_BIN"
-    ok "Hysteria 2 установлен: $("$HYSTERIA_BIN" version 2>/dev/null | head -1 || echo "$HYSTERIA_BIN")"
+    chmod 755 "$tmp_bin"
+    version_output=$("$tmp_bin" version 2>&1) || {
+        err "Скачанный Hysteria 2 binary не запускается"
+        return 1
+    }
+    if [[ "${HYSTERIA_VERSION_PIN:-latest}" != "latest" ]]; then
+        expected_version="${HYSTERIA_VERSION_PIN#app/}"
+        [[ "$version_output" == *"$expected_version"* ]] || {
+            err "Версия Hysteria 2 не совпадает: ожидалась $expected_version"
+            return 1
+        }
+    fi
+    staging_bin=$(mktemp "${HYSTERIA_BIN}.install.XXXXXX") || return 1
+    if ! install -m 755 "$tmp_bin" "$staging_bin" || ! mv -f -- "$staging_bin" "$HYSTERIA_BIN"; then
+        rm -f "$staging_bin"
+        err "Не удалось атомарно установить Hysteria 2"
+        return 1
+    fi
+    ok "Hysteria 2 установлен: $(printf '%s\n' "$version_output" | head -1)"
     info "Hysteria release pin: ${HYSTERIA_VERSION_PIN:-latest}"
 }
 
@@ -6814,6 +7773,20 @@ ExecStart=${HYSTERIA_BIN} server -c ${HYSTERIA_CONFIG}
 Restart=on-failure
 RestartSec=5s
 LimitNOFILE=1048576
+TasksMax=16384
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target
@@ -6934,7 +7907,7 @@ hysteria_port_hop_range() {
     [[ "$range" =~ ^[0-9]{2,5}-[0-9]{2,5}$ ]] || range="$HYSTERIA_PORT_HOP_PORTS_DEFAULT"
     start="${range%-*}"
     end="${range#*-}"
-    if (( start < 1024 || end > 65535 || start >= end )); then
+    if ! is_valid_local_proxy_port "$start" || ! is_valid_port "$end" || (( 10#$start >= 10#$end )); then
         range="$HYSTERIA_PORT_HOP_PORTS_DEFAULT"
     fi
     printf '%s\n' "$range"
@@ -6947,6 +7920,7 @@ hysteria_port_hop_enabled() {
 
 hysteria_port_hop_server_ports() {
     local main_port="${HYSTERIA_PORT:-8443}" hop_range
+    is_valid_port "$main_port" || main_port="8443"
     hop_range=$(hysteria_port_hop_range)
     printf '%s,%s\n' "$main_port" "$hop_range"
 }
@@ -7501,8 +8475,12 @@ install_xray_bin() {
         return 0
     fi
 
-    local arch url tmp tmp_dgst zip_dir expected actual bad_member
+    local arch url tmp tmp_dgst zip_dir expected actual version_output expected_version staging_bin="" archive_size
     arch=$(detect_xray_arch) || return 1
+    [[ "$XRAY_VERSION_PIN" == "latest" || "$XRAY_VERSION_PIN" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || {
+        err "Некорректный Xray version pin: $XRAY_VERSION_PIN"
+        return 1
+    }
     if [[ "${XRAY_VERSION_PIN:-latest}" == "latest" ]]; then
         url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-${arch}.zip"
     else
@@ -7514,10 +8492,15 @@ install_xray_bin() {
     trap 'rm -f "${tmp:-}" "${tmp_dgst:-}" 2>/dev/null; rm -rf "${zip_dir:-}" 2>/dev/null; trap - RETURN' RETURN
 
     info "Скачиваю Xray-core (${arch})..."
-    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 "$url" -o "$tmp"; then
+    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 -o "$tmp" -- "$url"; then
         err "Не удалось скачать Xray: $url"
         return 1
     fi
+    archive_size=$(stat -c '%s' "$tmp" 2>/dev/null || echo 0)
+    [[ "$archive_size" =~ ^[0-9]+$ && "$archive_size" -le 268435456 ]] || {
+        err "Xray archive превышает лимит 256 MiB"
+        return 1
+    }
     info "Xray release pin: ${XRAY_VERSION_PIN:-latest}"
 
     command -v unzip &>/dev/null || apt-get install -y -q unzip
@@ -7542,21 +8525,38 @@ install_xray_bin() {
         err "Не удалось скачать ${url}.dgst. Установка Xray остановлена."
         return 1
     fi
-    bad_member=$(unzip -Z1 "$tmp" 2>/dev/null | grep -E '(^/|(^|/)\.\.(/|$))' | head -1 || true)
-    if [[ -n "$bad_member" ]]; then
-        err "Xray zip содержит небезопасный путь: $bad_member"
+    if ! validate_zip_archive_safe "$tmp" 10000 536870912; then
+        err "Xray ZIP не прошёл безопасную проверку"
         return 1
     fi
-    if ! unzip -Z1 "$tmp" 2>/dev/null | grep -qx 'xray'; then
+    if ! unzip -Z1 "$tmp" 2>/dev/null \
+        | awk '$0 == "xray" { found=1 } END { exit(found ? 0 : 1) }'; then
         err "Xray zip не содержит ожидаемый бинарник xray"
         return 1
     fi
     unzip -q "$tmp" -d "$zip_dir"
-    install -m 755 "$zip_dir/xray" "$XRAY_BIN"
+    chmod 755 "$zip_dir/xray"
+    version_output=$("$zip_dir/xray" version 2>&1) || {
+        err "Скачанный Xray binary не запускается"
+        return 1
+    }
+    if [[ "${XRAY_VERSION_PIN:-latest}" != "latest" ]]; then
+        expected_version="${XRAY_VERSION_PIN#v}"
+        [[ "$version_output" == *"$expected_version"* ]] || {
+            err "Версия Xray не совпадает: ожидалась ${XRAY_VERSION_PIN}"
+            return 1
+        }
+    fi
+    staging_bin=$(mktemp "${XRAY_BIN}.install.XXXXXX") || return 1
+    if ! install -m 755 "$zip_dir/xray" "$staging_bin" || ! mv -f -- "$staging_bin" "$XRAY_BIN"; then
+        rm -f "$staging_bin"
+        err "Не удалось атомарно установить Xray"
+        return 1
+    fi
     mkdir -p /usr/local/share/xray
     [[ -f "$zip_dir/geoip.dat" ]] && install -m 644 "$zip_dir/geoip.dat" /usr/local/share/xray/geoip.dat
     [[ -f "$zip_dir/geosite.dat" ]] && install -m 644 "$zip_dir/geosite.dat" /usr/local/share/xray/geosite.dat
-    ok "Xray установлен: $("$XRAY_BIN" version 2>/dev/null | head -1 || echo "$XRAY_BIN")"
+    ok "Xray установлен: $(printf '%s\n' "$version_output" | head -1)"
 }
 
 load_xray_users() {
@@ -7570,12 +8570,16 @@ load_xray_users() {
     fi
 }
 
+is_valid_xray_uuid() {
+    [[ "${1:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
 get_xray_user_uuid() {
     local lookup_user="$1"
     local uuid
     [[ -f "$XRAY_USERS_FILE" ]] || return 1
     uuid=$(awk -F: -v user="$lookup_user" '$1 == user {print $2; exit}' "$XRAY_USERS_FILE")
-    [[ -n "$uuid" ]] || return 1
+    is_valid_xray_uuid "$uuid" || return 1
     printf '%s\n' "$uuid"
 }
 
@@ -7584,17 +8588,17 @@ get_xray_compat_user_uuid() {
     local uuid
     [[ -f "$XRAY_COMPAT_USERS_FILE" ]] || return 1
     uuid=$(awk -F: -v user="$lookup_user" '$1 == user {print $2; exit}' "$XRAY_COMPAT_USERS_FILE")
-    [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] || return 1
+    is_valid_xray_uuid "$uuid" || return 1
     printf '%s\n' "$uuid"
 }
 
 xray_generate_uuid() {
     local uuid raw
     uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
-    if [[ ! "$uuid" =~ ^[0-9a-fA-F-]{36}$ && -x "$XRAY_BIN" ]]; then
+    if ! is_valid_xray_uuid "$uuid" && [[ -x "$XRAY_BIN" ]]; then
         uuid=$("$XRAY_BIN" uuid 2>/dev/null | head -1 || true)
     fi
-    if [[ ! "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    if ! is_valid_xray_uuid "$uuid"; then
         raw=$(openssl rand -hex 16)
         uuid="${raw:0:8}-${raw:8:4}-${raw:12:4}-${raw:16:4}-${raw:20:12}"
     fi
@@ -7664,10 +8668,11 @@ xray_clients_json() {
 }
 
 xray_clients_json_no_flow() {
-    local first=1 user uuid
+    local allowed_users="${1:-all}" first=1 user uuid
     while IFS=: read -r user uuid; do
         [[ -z "$user" || -z "$uuid" ]] && continue
         user_is_expired "$user" && continue
+        subscription_name_in_list "$user" "$allowed_users" || continue
         if [[ "$first" -eq 0 ]]; then printf ',\n'; fi
         first=0
         printf '          { "id": "%s", "email": "%s" }' "$uuid" "$user"
@@ -7687,7 +8692,7 @@ xray_clients_json_reality() {
     [[ -f "$XRAY_COMPAT_USERS_FILE" ]] || return 0
     while IFS=: read -r user uuid; do
         [[ -z "$user" || -z "$uuid" || "$user" == \#* ]] && continue
-        [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] || continue
+        is_valid_xray_uuid "$uuid" || continue
         user_is_expired "$user" && continue
         if [[ "$first" -eq 0 ]]; then printf ',\n'; fi
         first=0
@@ -7700,7 +8705,7 @@ xray_clients_json_compat_only() {
     [[ -f "$XRAY_COMPAT_USERS_FILE" ]] || return 0
     while IFS=: read -r user uuid; do
         [[ -z "$user" || -z "$uuid" || "$user" == \#* ]] && continue
-        [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]] || continue
+        is_valid_xray_uuid "$uuid" || continue
         user_is_expired "$user" && continue
         if [[ "$first" -eq 0 ]]; then printf ',\n'; fi
         first=0
@@ -7895,6 +8900,23 @@ prompt_xray_reality_target() {
     ok "REALITY target выбран: ${XRAY_REALITY_TARGET}"
 }
 
+write_xray_logrotate() {
+    cat > "$XRAY_LOGROTATE_CONF" <<'EOF'
+/var/log/xray/access.log /var/log/xray/error.log {
+    daily
+    rotate 14
+    size 50M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    create 0600 root root
+}
+EOF
+    chmod 644 "$XRAY_LOGROTATE_CONF"
+}
+
 write_xray_service() {
     cat > "$XRAY_SERVICE" <<EOF
 [Unit]
@@ -7911,11 +8933,25 @@ RestartSec=2s
 TimeoutStopSec=15s
 LimitNOFILE=1048576
 LimitNPROC=4096
-TasksMax=infinity
+TasksMax=16384
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    write_xray_logrotate
     systemctl daemon-reload
     systemctl enable xray --quiet
 }
@@ -7926,6 +8962,14 @@ ensure_xray_zapret_assets() {
     local tmp
 
     [[ "${XRAY_ZAPRET_ENABLED:-0}" == "1" ]] || return 1
+    [[ "$dat" == "$XRAY_ZAPRET_DAT_DEFAULT" ]] || {
+        err "Небезопасный путь XRAY_ZAPRET_DAT: $dat"
+        return 1
+    }
+    import_https_url_list_is_safe "$url" || {
+        err "Некорректный XRAY_ZAPRET_URL"
+        return 1
+    }
     mkdir -p "$(dirname "$dat")"
 
     if [[ -s "$dat" ]]; then
@@ -7935,9 +8979,9 @@ ensure_xray_zapret_assets() {
     tmp="${dat}.tmp.$$"
     rm -f "$tmp"
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 10 --max-time 60 "$url" -o "$tmp" 2>/dev/null || true
+        curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp" -- "$url" 2>/dev/null || true
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$tmp" "$url" 2>/dev/null || true
+        wget -q -O "$tmp" -- "$url" 2>/dev/null || true
     fi
 
     if [[ -s "$tmp" ]]; then
@@ -7962,7 +9006,7 @@ write_xray_config() {
     fi
     ensure_xray_reality_keys || return 1
 
-    local cert key fallback_enabled fallback_port reality_enabled reality_port reality_listen xhttp_port mobile_alt_port mobile_alt_target mobile_alt_sni github_test_port github_test_target github_test_sni trojan_pass reality_target reality_sni zapret_enabled xray_config_backup xray_warp_enabled xray_filtered_config
+    local cert key fallback_enabled fallback_port reality_enabled reality_port reality_listen xhttp_port mobile_alt_port mobile_alt_target mobile_alt_sni github_test_port github_test_target github_test_sni trojan_pass reality_target reality_sni zapret_enabled xray_config_backup xray_warp_enabled xray_filtered_config xhttp_clients_json
     fallback_enabled="${XRAY_FALLBACK_ENABLED:-0}"
     fallback_port="${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
     reality_enabled="${XRAY_REALITY_ENABLED:-1}"
@@ -7988,6 +9032,14 @@ write_xray_config() {
     if [[ "$reality_enabled" != "1" && "${XRAY_XHTTP_ENABLED:-0}" != "1" && "$fallback_enabled" != "1" ]]; then
         err "Xray не имеет ни одного включённого inbound: Reality, XHTTP и fallback отключены"
         return 1
+    fi
+    xhttp_clients_json=""
+    if [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" ]]; then
+        xhttp_clients_json=$(xray_clients_json_no_flow "${XRAY_XHTTP_ALLOWED_USERS:-all}")
+        if [[ -z "$xhttp_clients_json" ]]; then
+            err "XHTTP allowlist не содержит активных Xray-пользователей: ${XRAY_XHTTP_ALLOWED_USERS:-all}"
+            return 1
+        fi
     fi
     if [[ "${XRAY_GITHUB_TEST_ENABLED:-0}" == "1" ]]; then
         if ! is_valid_domain "$github_test_sni"; then
@@ -8140,7 +9192,7 @@ EOF
       "protocol": "vless",
       "settings": {
         "clients": [
-$(xray_clients_json_no_flow)
+${xhttp_clients_json}
         ],
         "decryption": "none"
       },
@@ -8389,7 +9441,7 @@ subscription_traffic_cache_path() {
 subscription_traffic_cache_fresh() {
     local cache="$1" max_age now mtime age
     max_age="${SUBSCRIPTION_TRAFFIC_REFRESH_SECONDS:-300}"
-    [[ "$max_age" =~ ^[0-9]+$ ]] || max_age=300
+    is_canonical_uint_in_range "$max_age" 1 86400 || max_age=300
     [[ -s "$cache" ]] || return 1
     now=$(date +%s 2>/dev/null || echo 0)
     mtime=$(stat -c %Y "$cache" 2>/dev/null || echo 0)
@@ -8585,7 +9637,7 @@ subscription_active_locations_label() {
         [[ -z "$location" || "$location" == "$name" ]] && continue
         text="$(printf '%s %s' "$host" "$location" | tr '[:upper:]' '[:lower:]')"
         case "$text" in
-            *swe*|*sweden*|*stockholm*|*swe.go-it*) location="🇸🇪 SWE" ;;
+            *swe*|*stockholm*) location="🇸🇪 SWE" ;;
             *n8n-cloud*|*finland\ 2*|*finland2*|*fi2*) location="🇫🇮 Finland 2" ;;
             *poland*|*warsaw*|*polska*) location="🇵🇱 Poland" ;;
             *finland*|*helsinki*|*suomi*) location="🇫🇮 Finland" ;;
@@ -8971,7 +10023,7 @@ remove_web_token_dir() {
         warn "Отказываюсь удалять path вне WEBROOT: ${base_dir}"
         return 1
     fi
-    rm -rf -- "${base_dir}/${token}" 2>/dev/null || true
+    rm -rf -- "${base_dir:?}/${token:?}" 2>/dev/null || true
 }
 
 cleanup_subscription_page() {
@@ -8991,6 +10043,33 @@ cleanup_subscription_page() {
         remove_web_token_dir "$SUBS_WEB_DIR" "$old_token"
     fi
     rm -f -- "$token_file" 2>/dev/null || true
+}
+
+suspend_subscription_page() {
+    local user="$1" token_file token page_dir file safe_user
+    is_valid_proxy_user "$user" || return 1
+    token_file="${SUBS_DIR}/${user}.token"
+    [[ -s "$token_file" ]] || return 0
+    token=$(tr -d '\r\n' < "$token_file")
+    [[ "$token" =~ ^[A-Fa-f0-9]{48}$ ]] || return 1
+    page_dir="${SUBS_WEB_DIR}/${token}"
+    remove_web_token_dir "$SUBS_WEB_DIR" "$token" || return 1
+    mkdir -p "$page_dir"
+    chmod 755 "$SUBS_WEB_DIR" "$page_dir"
+    for file in links.txt hiddify.txt nekobox.txt v2rayng.txt karing.txt streisand.txt happ.txt mobile-test.txt pingtunnel.txt; do
+        : > "$page_dir/$file"
+        chmod 644 "$page_dir/$file"
+    done
+    safe_user=$(html_escape_text "$user")
+    cat > "$page_dir/index.html" <<EOF
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Подписка приостановлена</title></head>
+<body style="margin:0;background:#09131d;color:#eef7fb;font:16px/1.5 system-ui,sans-serif;display:grid;min-height:100vh;place-items:center">
+<main style="max-width:560px;padding:32px;text-align:center"><h1>Подписка приостановлена</h1><p>Срок подписки <strong>${safe_user}</strong> закончился. Профили временно отозваны.</p><p>После продления эта же ссылка снова станет активной.</p></main>
+</body></html>
+EOF
+    chmod 644 "$page_dir/index.html"
 }
 
 subscription_user_exists() {
@@ -9013,6 +10092,24 @@ remove_user_from_colon_file() {
     return 0
 }
 
+remove_subscription_aliases_for_user() {
+    local user="$1" token="${2:-}" tmp alias target mapped_user rest
+    [[ -f "$SUBS_ALIASES_FILE" ]] || return 0
+    is_valid_proxy_user "$user" || return 1
+    tmp=$(mktemp)
+    while read -r alias target mapped_user rest; do
+        if [[ "$alias" =~ ^[A-Fa-f0-9]{32,64}$ && "$target" =~ ^[A-Fa-f0-9]{32,64}$ ]]; then
+            if [[ "$mapped_user" == "$user" || -n "$token" && ( "$alias" == "$token" || "$target" == "$token" ) ]]; then
+                remove_web_token_dir "$SUBS_WEB_DIR" "$alias" || true
+                continue
+            fi
+        fi
+        printf '%s %s%s%s\n' "$alias" "$target" "${mapped_user:+ $mapped_user}" "${rest:+ $rest}" >> "$tmp"
+    done < "$SUBS_ALIASES_FILE"
+    install -m 600 "$tmp" "$SUBS_ALIASES_FILE"
+    rm -f "$tmp"
+}
+
 cleanup_orphan_subscription_pages() {
     load_config
     load_users
@@ -9028,18 +10125,26 @@ cleanup_orphan_subscription_pages() {
     done
     shopt -u nullglob
 
-    local keep_file dir name
+    local keep_file primary_tokens dir name alias target mapped_user
     keep_file=$(mktemp)
+    primary_tokens=$(mktemp)
     shopt -s nullglob
     for token_file in "$SUBS_DIR"/*.token; do
         token=$(tr -dc 'a-fA-F0-9' < "$token_file" | head -c 48 || true)
-        [[ "$token" =~ ^[a-fA-F0-9]{32,64}$ ]] && printf '%s\n' "$token" >> "$keep_file"
+        if [[ "$token" =~ ^[a-fA-F0-9]{32,64}$ ]]; then
+            printf '%s\n' "$token" >> "$keep_file"
+            printf '%s\n' "$token" >> "$primary_tokens"
+        fi
     done
     if [[ -f "$SUBS_ALIASES_FILE" ]]; then
-        awk '
-            /^[[:space:]]*#/ || NF < 2 { next }
-            $1 ~ /^[A-Fa-f0-9]{32,64}$/ { print $1 }
-        ' "$SUBS_ALIASES_FILE" >> "$keep_file" 2>/dev/null || true
+        while read -r alias target mapped_user _; do
+            [[ "$alias" =~ ^[A-Fa-f0-9]{32,64}$ && "$target" =~ ^[A-Fa-f0-9]{32,64}$ ]] || continue
+            if grep -Fxq "$target" "$primary_tokens" 2>/dev/null; then
+                printf '%s\n' "$alias" >> "$keep_file"
+            else
+                remove_web_token_dir "$SUBS_WEB_DIR" "$alias" || true
+            fi
+        done < "$SUBS_ALIASES_FILE"
     fi
     for dir in "$SUBS_WEB_DIR"/*; do
         [[ -d "$dir" ]] || continue
@@ -9050,7 +10155,7 @@ cleanup_orphan_subscription_pages() {
         fi
     done
     shopt -u nullglob
-    rm -f "$keep_file"
+    rm -f "$keep_file" "$primary_tokens"
 }
 
 apply_subscription_aliases() {
@@ -9071,7 +10176,10 @@ apply_subscription_aliases() {
         [[ "$alias" == "$target" ]] && continue
         target_dir="${SUBS_WEB_DIR}/${target}"
         alias_dir="${SUBS_WEB_DIR}/${alias}"
-        [[ -d "$target_dir" ]] || continue
+        if [[ ! -d "$target_dir" ]]; then
+            remove_web_token_dir "$SUBS_WEB_DIR" "$alias" || true
+            continue
+        fi
         if grep -qx "$alias" "$primary_tokens" 2>/dev/null; then
             continue
         fi
@@ -9090,7 +10198,7 @@ delete_subscription_user_everywhere() {
     load_config
     load_users
 
-    local target="$1" has_naive=0 has_xray=0 found=0 naive_changed=0 xray_changed=0 disabled_changed=0
+    local target="$1" has_naive=0 has_xray=0 found=0 naive_changed=0 xray_changed=0 apply_failed=0 old_token=""
     if ! is_valid_proxy_user "$target"; then
         err "Некорректный логин"
         return 1
@@ -9119,33 +10227,49 @@ delete_subscription_user_everywhere() {
 
     backup_config
 
+    if [[ -s "${SUBS_DIR}/${target}.token" ]]; then
+        old_token=$(tr -d '\r\n' < "${SUBS_DIR}/${target}.token")
+        [[ "$old_token" =~ ^[A-Fa-f0-9]{48}$ ]] || old_token=""
+    fi
+
     remove_user_from_colon_file "$USERS_FILE" "$target" && naive_changed=1
-    remove_user_from_colon_file "$DISABLED_USERS_FILE" "$target" && disabled_changed=1
+    remove_user_from_colon_file "$DISABLED_USERS_FILE" "$target" || true
     remove_user_from_colon_file "$XRAY_USERS_FILE" "$target" && xray_changed=1
     remove_user_from_colon_file "$XRAY_COMPAT_USERS_FILE" "$target" && xray_changed=1
-    remove_user_from_colon_file "$XRAY_DISABLED_USERS_FILE" "$target" && disabled_changed=1
+    remove_user_from_colon_file "$XRAY_DISABLED_USERS_FILE" "$target" || true
 
     cleanup_user_metadata "$target"
+    remove_subscription_aliases_for_user "$target" "$old_token" || { warn "Не удалось удалить alias URL пользователя $target"; apply_failed=1; }
     cleanup_subscription_page "$target"
     cleanup_orphan_subscription_pages
 
     if [[ "$naive_changed" -eq 1 ]]; then
-        rewrite_caddyfile_current || return 1
-        systemctl reload caddy 2>/dev/null || systemctl restart caddy
-        sync_hysteria_users_if_active >/dev/null 2>&1 || true
+        if rewrite_caddyfile_current; then
+            systemctl reload caddy 2>/dev/null || systemctl restart caddy || apply_failed=1
+        else
+            apply_failed=1
+        fi
+        sync_hysteria_users_if_active >/dev/null 2>&1 || apply_failed=1
     fi
     if [[ "$xray_changed" -eq 1 && -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
-        write_xray_config >/dev/null || return 1
-        systemctl restart xray || return 1
+        if write_xray_config >/dev/null; then
+            systemctl restart xray || apply_failed=1
+        else
+            apply_failed=1
+        fi
     fi
 
-    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
+    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || apply_failed=1
     if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]]; then
-        cmd_nodes_sync_users all >/dev/null 2>&1 || warn "Не удалось синхронизировать удаление $target на все nodes"
+        cmd_nodes_sync_users all >/dev/null 2>&1 || { warn "Не удалось синхронизировать удаление $target на все nodes"; apply_failed=1; }
     fi
 
     ok "Пользователь $target удалён из Naive/Xray/disabled/metainfo"
     ok "Подписка $target и публичные ссылки удалены"
+    if [[ "$apply_failed" -ne 0 ]]; then
+        err "Пользователь удалён локально, но часть runtime/node-операций требует повтора"
+        return 1
+    fi
 }
 
 generate_subscription_page() {
@@ -9172,7 +10296,7 @@ generate_subscription_page() {
 
     ensure_web_privacy_files
 
-    local token token_file page_dir links_file hiddify_file streisand_file happ_file nekobox_file karing_file v2rayng_file pingtunnel_file naive_pass naive_uri naive_json naive_singbox_tun_json hy2_uri hy2_json expiry_label expiry_tag node_links node_app_links active_links app_links happ_links v2rayng_links
+    local token token_file page_dir links_file hiddify_file streisand_file happ_file nekobox_file karing_file v2rayng_file pingtunnel_file naive_pass naive_uri hy2_uri expiry_label expiry_tag node_links node_app_links active_links app_links happ_links v2rayng_links
     token_file="${SUBS_DIR}/${user}.token"
     token=$(get_or_create_token_file "$token_file")
     page_dir="${SUBS_WEB_DIR}/${token}"
@@ -9191,65 +10315,26 @@ generate_subscription_page() {
 
     naive_pass=$(get_active_user_pass "$user" 2>/dev/null || true)
     naive_uri=""
-    yurich_uri=""
-    naive_json=""
-    naive_singbox_tun_json=""
     if [[ -n "$naive_pass" ]]; then
         naive_uri=$(uri_with_profile_name "naive+https://${user}:${naive_pass}@${DOMAIN}:443" "$(pretty_profile_name "$user" "HTTPS")")
-        yurich_uri=$(yurich_proxy_uri "$user" "$naive_pass" "$(pretty_profile_name "$user" "HTTPS")")
-        naive_json=$(cat <<EOF
-{
-  "listen": "socks://127.0.0.1:1080",
-  "proxy": "https://${user}:${naive_pass}@${DOMAIN}:443"
-}
-EOF
-)
-        naive_singbox_tun_json=$(singbox_naive_tun_json "$user" "$naive_pass")
     fi
 
     hy2_uri=""
-    hy2_json=""
     if [[ -n "$naive_pass" && -n "${HYSTERIA_OBFS_PASSWORD:-}" && ( -f "$HYSTERIA_CONFIG" || -x "$HYSTERIA_BIN" ) ]]; then
         hy2_uri=$(hysteria_uri_for_user "$user" 2>/dev/null || true)
         if [[ -n "$hy2_uri" ]]; then
             hy2_uri=$(uri_with_profile_name "$hy2_uri" "$(pretty_profile_name "$user" "Turbo")")
-            hy2_json=$(cat <<EOF
-{
-  "type": "hysteria2",
-  "tag": "hysteria2-out",
-  "server": "${DOMAIN}",
-  "server_port": ${HYSTERIA_PORT:-8443},
-  "password": "${user}:${naive_pass}",
-  "obfs": {
-    "type": "salamander",
-    "password": "${HYSTERIA_OBFS_PASSWORD}"
-  },
-  "tls": {
-    "enabled": true,
-    "server_name": "${DOMAIN}"
-  }
-}
-EOF
-)
         fi
     fi
 
-    local uuid compat_uuid reality_link compat_link mobile_alt_link github_test_link reality_direct_link reality_links reality_test_links trojan_link reality_public_port reality_direct_port reality_public_label reality_direct_label github_test_users_norm github_test_sni
+    local uuid reality_link github_test_link reality_links reality_public_port reality_public_label github_test_users_norm github_test_sni
     reality_public_port=$(xray_reality_public_port)
-    reality_direct_port="${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
     uuid=$(get_xray_user_uuid "$user" 2>/dev/null || true)
-    compat_uuid=$(get_xray_compat_user_uuid "$user" 2>/dev/null || true)
     reality_link=""
-    compat_link=""
-    mobile_alt_link=""
     github_test_link=""
-    reality_direct_link=""
     reality_links=""
-    reality_test_links=""
-    trojan_link=""
     if [[ -n "$uuid" ]]; then
         reality_public_label="Reality"
-        reality_direct_label="Reality"
         reality_link=$(uri_with_profile_name "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2F" "$(pretty_profile_name "$user" "$reality_public_label")")
         if [[ "${XRAY_GITHUB_TEST_ENABLED:-0}" == "1" ]]; then
             github_test_users_norm=",${XRAY_GITHUB_TEST_USERS//[[:space:]]/},"
@@ -9259,17 +10344,9 @@ EOF
             fi
         fi
     fi
-    if [[ "${XRAY_MOBILE_ALT_ENABLED:-0}" == "1" && -n "$compat_uuid" ]]; then
-        compat_link=$(uri_with_profile_name "vless://${compat_uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&headerType=none&packetEncoding=xudp&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2Fcompat-${user}" "$(pretty_profile_name "$user" "Reality MOBILE TEST")")
-        mobile_alt_link=$(uri_with_profile_name "vless://${compat_uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&headerType=none&packetEncoding=xudp&sni=${XRAY_MOBILE_ALT_SERVER_NAME:-$XRAY_MOBILE_ALT_SERVER_NAME_DEFAULT}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2Fmobile-alt-${user}" "$(pretty_profile_name "$user" "Reality ALT MOBILE TEST")")
-    fi
     reality_links=$({
         [[ -n "$reality_link" ]] && printf '%s\n' "$reality_link"
         [[ -n "$github_test_link" ]] && printf '%s\n' "$github_test_link"
-    } | awk 'NF')
-    reality_test_links=$({
-        [[ -n "$compat_link" ]] && printf '%s\n' "$compat_link"
-        [[ -n "$mobile_alt_link" ]] && printf '%s\n' "$mobile_alt_link"
     } | awk 'NF')
     node_links=$(node_links_for_user "$user" "$naive_pass" "$expiry_tag" 2>/dev/null || true)
     node_app_links=$(node_app_links_for_user "$user" 2>/dev/null || true)
@@ -9344,8 +10421,8 @@ EOF
         rm -f "$pingtunnel_file"
     fi
 
-    local subscription_domain sub_url links_url hiddify_url streisand_url happ_url nekobox_url v2rayng_url pingtunnel_url hiddify_open_url hiddify_expire_epoch hiddify_used_bytes hiddify_used_human hiddify_links title display_profile_label active_locations safe_active_locations safe_user safe_domain safe_expiry_label safe_days_left safe_hiddify_used_human safe_profile_label safe_naive_uri safe_naive_json safe_naive_singbox_tun_json safe_hy2_uri safe_hy2_json safe_node_links
-    local safe_android_url safe_windows_url safe_streisand_url safe_karing_url safe_telegram_url safe_donation_url safe_tg_bot_url safe_tg_id_bot_url safe_vk_url safe_support_email safe_support_mailto
+    local subscription_domain sub_url links_url hiddify_url streisand_url nekobox_url v2rayng_url pingtunnel_url hiddify_open_url hiddify_expire_epoch hiddify_used_bytes hiddify_used_human hiddify_links title display_profile_label active_locations safe_active_locations safe_user safe_domain safe_expiry_label safe_days_left safe_hiddify_used_human
+    local safe_android_url safe_windows_url safe_streisand_url safe_karing_url safe_telegram_url safe_donation_url safe_tg_bot_url safe_tg_id_bot_url
     local traffic_summary safe_traffic_summary profile_cards_html profile_count qr_cards_html recommendations_html recommendations_all_html
     local subscription_logo_source subscription_logo_name subscription_logo_html subscription_header_logo_html
     local project_help_qr_source project_help_qr_name project_help_qr_html
@@ -9358,7 +10435,6 @@ EOF
     links_url="${sub_url}links.txt"
     hiddify_url="${sub_url}hiddify.txt"
     streisand_url="${sub_url}streisand.txt"
-    happ_url="${sub_url}happ.txt"
     nekobox_url="${sub_url}nekobox.txt"
     v2rayng_url="${sub_url}v2rayng.txt"
     pingtunnel_url="${sub_url}pingtunnel.txt"
@@ -9438,13 +10514,6 @@ EOF
     safe_hiddify_used_human=$(html_escape_text "$hiddify_used_human")
     display_profile_label=$(subscription_active_locations_label "$active_links")
     [[ -n "$display_profile_label" ]] || display_profile_label=$(profile_location_label)
-    safe_profile_label=$(html_escape_text "$display_profile_label")
-    safe_naive_uri=$(html_escape_text "$naive_uri")
-    safe_naive_json=$(html_escape_text "$naive_json")
-    safe_naive_singbox_tun_json=$(html_escape_text "$naive_singbox_tun_json")
-    safe_hy2_uri=$(html_escape_text "$hy2_uri")
-    safe_hy2_json=$(html_escape_text "$hy2_json")
-    safe_node_links=$(html_escape_text "$active_links")
     safe_android_url=$(html_escape_text "$ANDROID_APP_RELEASES_URL")
     safe_windows_url=$(html_escape_text "$WINDOWS_APP_RELEASES_URL")
     safe_streisand_url=$(html_escape_text "$STREISAND_APP_URL")
@@ -9453,9 +10522,6 @@ EOF
     safe_donation_url=$(html_escape_text "$PROJECT_DONATION_URL")
     safe_tg_bot_url=$(html_escape_text "$TELEGRAM_BOT_URL")
     safe_tg_id_bot_url=$(html_escape_text "$TELEGRAM_ID_BOT_URL")
-    safe_vk_url=$(html_escape_text "$VK_COMMUNITY_URL")
-    safe_support_email=$(html_escape_text "$SUPPORT_EMAIL")
-    safe_support_mailto=$(html_escape_text "mailto:${SUPPORT_EMAIL}")
     traffic_summary=$(subscription_traffic_summary "$user")
     safe_traffic_summary=$(html_escape_text "$traffic_summary")
     active_locations=$(subscription_active_locations_label "$active_links")
@@ -9472,13 +10538,10 @@ EOF
         "NekoBox|${qr_nekobox_png}|${nekobox_url}|Для NekoBox и совместимых клиентов" \
         "v2rayNG|${qr_v2rayng_png}|${v2rayng_url}|Только VLESS Reality через TCP/${reality_public_port}" | subscription_qr_cards_html)
 
-    local safe_reality safe_trojan safe_links_url safe_hiddify_url safe_streisand_sub_url safe_happ_url safe_hiddify_open_url safe_nekobox_url safe_v2rayng_url safe_pingtunnel_url pingtunnel_panel_html wireguard_app_cards_html wireguard_qr_cards_html
-    safe_reality=$(html_escape_text "$reality_link")
-    safe_trojan=$(html_escape_text "$trojan_link")
+    local safe_links_url safe_hiddify_url safe_streisand_sub_url safe_hiddify_open_url safe_nekobox_url safe_v2rayng_url safe_pingtunnel_url pingtunnel_panel_html wireguard_app_cards_html wireguard_qr_cards_html
     safe_links_url=$(html_escape_text "$links_url")
     safe_hiddify_url=$(html_escape_text "$hiddify_url")
     safe_streisand_sub_url=$(html_escape_text "$streisand_url")
-    safe_happ_url=$(html_escape_text "$happ_url")
     safe_hiddify_open_url=$(html_escape_text "$hiddify_open_url")
     safe_nekobox_url=$(html_escape_text "$nekobox_url")
     safe_v2rayng_url=$(html_escape_text "$v2rayng_url")
@@ -10689,6 +11752,7 @@ cmd_subscription_reset() {
     if [[ -s "${SUBS_DIR}/${user}.token" ]]; then
         old_token=$(tr -dc 'a-fA-F0-9' < "${SUBS_DIR}/${user}.token" | head -c 48 || true)
     fi
+    remove_subscription_aliases_for_user "$user" "$old_token" || return 1
     reset_token_file "${SUBS_DIR}/${user}.token"
     if [[ "$old_token" =~ ^[a-fA-F0-9]{32,64}$ ]]; then
         remove_web_token_dir "$SUBS_WEB_DIR" "$old_token"
@@ -11032,7 +12096,8 @@ cmd_vless_tune() {
     echo -e "${BOLD}  VLESS Reality stability tuning${RESET}"
     hr
 
-    local backup_dir="${BACKUP_DIR}/vless-tune-before-$(date '+%Y%m%d_%H%M%S')"
+    local backup_dir
+    backup_dir="${BACKUP_DIR}/vless-tune-before-$(date '+%Y%m%d_%H%M%S')"
     install -d -m 700 "$backup_dir"
     for item in "$XRAY_CONFIG" "$XRAY_SERVICE" "$HAPROXY_CFG" "$HAPROXY_SYSCTL_CONF" "$XRAY_SYSCTL_CONF"; do
         [[ -e "$item" ]] && cp -a "$item" "$backup_dir/" 2>/dev/null || true
@@ -11362,8 +12427,10 @@ warp_route_cidr_for_ip() {
     local ip="$1"
     [[ -z "$ip" ]] && return 1
     if [[ "$ip" == *:* ]]; then
+        [[ "$ip" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
         printf '%s/128\n' "$ip"
     else
+        is_valid_ipv4 "$ip" || return 1
         printf '%s/32\n' "$ip"
     fi
 }
@@ -11409,7 +12476,7 @@ warp_prepare_ssh_safety() {
     done
 
     public_ip=$(curl -4 -fsSL --connect-timeout 5 --max-time 8 https://api.ipify.org 2>/dev/null || true)
-    if [[ "$public_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if is_valid_ipv4 "$public_ip"; then
         public_cidr="${public_ip}/32"
         warp_add_excluded_route "$public_cidr" >/dev/null 2>&1 || true
     fi
@@ -11494,12 +12561,18 @@ warp_arm_rollback() {
     unit_name="naiveproxy-warp-rollback-$(date +%s)"
     echo "$(date '+%F %T')" > "$marker" 2>/dev/null || true
     if command -v systemd-run >/dev/null 2>&1; then
-        systemd-run --unit="$unit_name" --on-active=2m \
+        if ! systemd-run --unit="$unit_name" --on-active=2m \
             /bin/bash -lc 'if [[ -f /run/naiveproxy-warp-full-pending ]]; then warp-cli disconnect >/dev/null 2>&1 || true; rm -f /run/naiveproxy-warp-full-pending; logger -t naiveproxy "WARP full tunnel rollback: disconnected after missing confirmation"; fi' \
-            >/dev/null 2>&1 || true
+            >/dev/null 2>&1; then
+            rm -f "$marker"
+            err "Не удалось запланировать аварийный rollback WARP. Full tunnel не включён."
+            return 1
+        fi
         warn "Аварийный rollback WARP включён на 2 минуты. Подтверди доступ после подключения."
     else
-        warn "systemd-run не найден — автоматический rollback WARP недоступен"
+        rm -f "$marker"
+        err "systemd-run не найден — безопасно включить WARP full tunnel нельзя"
+        return 1
     fi
 }
 
@@ -11745,7 +12818,7 @@ cmd_warp_full_install() {
     systemctl enable --now warp-svc >/dev/null 2>&1 || systemctl enable --now cloudflare-warp >/dev/null 2>&1 || true
     warp_registration_new || return 1
     warp_prepare_ssh_safety
-    warp_arm_rollback
+    warp_arm_rollback || return 1
 
     local tried="" proto
     if [[ "$proto_ans" == "auto" ]]; then
@@ -12113,6 +13186,86 @@ cmd_domains() {
 }
 
 # ─── УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ────────────────────────────────
+restore_user_credentials_backup() {
+    local backup_dir="$1"
+    cp -a "$backup_dir/users.conf" "$USERS_FILE"
+    if [[ -f "$backup_dir/xray-users.conf" ]]; then
+        cp -a "$backup_dir/xray-users.conf" "$XRAY_USERS_FILE"
+    else
+        rm -f "$XRAY_USERS_FILE"
+    fi
+    if [[ -f "$backup_dir/xray-compat-users.conf" ]]; then
+        cp -a "$backup_dir/xray-compat-users.conf" "$XRAY_COMPAT_USERS_FILE"
+    else
+        rm -f "$XRAY_COMPAT_USERS_FILE"
+    fi
+}
+
+rotate_user_credentials() {
+    local target="$1" new_pass="$2" backup_dir tmp new_uuid changed_xray=0
+    is_valid_proxy_user "$target" || return 1
+    is_valid_proxy_pass "$new_pass" || return 1
+    get_user_pass "$target" >/dev/null 2>&1 || { err "Пользователь $target не найден"; return 1; }
+    backup_dir=$(mktemp -d /tmp/yurich-rotate-user.XXXXXX)
+    chmod 700 "$backup_dir"
+    cp -a "$USERS_FILE" "$backup_dir/users.conf"
+    [[ -f "$XRAY_USERS_FILE" ]] && cp -a "$XRAY_USERS_FILE" "$backup_dir/xray-users.conf"
+    [[ -f "$XRAY_COMPAT_USERS_FILE" ]] && cp -a "$XRAY_COMPAT_USERS_FILE" "$backup_dir/xray-compat-users.conf"
+
+    tmp=$(mktemp)
+    awk -F: -v OFS=: -v user="$target" -v pass="$new_pass" '$1 == user {$2=pass} {print}' "$USERS_FILE" > "$tmp"
+    install -m 600 "$tmp" "$USERS_FILE"
+    rm -f "$tmp"
+
+    if [[ -n "$(get_xray_user_uuid "$target" 2>/dev/null || true)" ]]; then
+        if ! new_uuid=$(xray_generate_uuid); then
+            restore_user_credentials_backup "$backup_dir"
+            rm -rf -- "$backup_dir"
+            err "Не удалось создать новый VLESS UUID; изменения отменены"
+            return 1
+        fi
+        tmp=$(mktemp)
+        awk -F: -v OFS=: -v user="$target" -v uuid="$new_uuid" '$1 == user {$2=uuid} {print}' "$XRAY_USERS_FILE" > "$tmp"
+        install -m 600 "$tmp" "$XRAY_USERS_FILE"
+        rm -f "$tmp"
+        changed_xray=1
+    fi
+    if [[ -n "$(get_xray_compat_user_uuid "$target" 2>/dev/null || true)" ]]; then
+        if ! new_uuid=$(xray_generate_uuid); then
+            restore_user_credentials_backup "$backup_dir"
+            rm -rf -- "$backup_dir"
+            err "Не удалось создать новый VLESS Compat UUID; изменения отменены"
+            return 1
+        fi
+        tmp=$(mktemp)
+        awk -F: -v OFS=: -v user="$target" -v uuid="$new_uuid" '$1 == user {$2=uuid} {print}' "$XRAY_COMPAT_USERS_FILE" > "$tmp"
+        install -m 600 "$tmp" "$XRAY_COMPAT_USERS_FILE"
+        rm -f "$tmp"
+        changed_xray=1
+    fi
+
+    if ! apply_user_access_runtime; then
+        restore_user_credentials_backup "$backup_dir"
+        apply_user_access_runtime >/dev/null 2>&1 || true
+        rm -rf -- "$backup_dir"
+        err "Ротация не применена; прежние credentials восстановлены"
+        return 1
+    fi
+    rm -rf -- "$backup_dir"
+    generate_subscription_page "$target" >/dev/null 2>&1 || { err "Credentials обновлены, но страницу подписки не удалось пересобрать"; return 1; }
+    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
+    if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
+        err "Credentials обновлены локально; синхронизация nodes поставлена в повтор"
+        return 1
+    fi
+    if [[ "$changed_xray" -eq 1 ]]; then
+        ok "Naive/Hysteria password обновлён, VLESS UUID ротирован"
+    else
+        ok "Naive/Hysteria password обновлён"
+    fi
+    warn "На устройствах нужно обновить подписку, старые профили больше не действуют"
+}
+
 cmd_users() {
     load_users
 
@@ -12123,7 +13276,7 @@ cmd_users() {
         echo -e "  ${BOLD}1)${RESET} Список пользователей"
         echo -e "  ${BOLD}2)${RESET} Добавить пользователя"
         echo -e "  ${BOLD}3)${RESET} Удалить пользователя"
-        echo -e "  ${BOLD}4)${RESET} Сменить пароль"
+        echo -e "  ${BOLD}4)${RESET} Ротировать пароль и VLESS UUID"
         echo -e "  ${BOLD}5)${RESET} Показать ссылку пользователя"
         echo -e "  ${BOLD}0)${RESET} Назад"
         hr
@@ -12236,7 +13389,7 @@ cmd_users() {
                 if ! is_valid_proxy_user "$chg_user" || ! get_user_pass "$chg_user" >/dev/null; then
                     err "Пользователь $chg_user не найден"; continue
                 fi
-                echo -ne "${CYAN}Новый пароль (Enter = случайный): ${RESET}"; read -r chg_pass
+                echo -ne "${CYAN}Новый пароль (Enter = случайный): ${RESET}"; read -rs chg_pass; echo
                 if [[ -z "$chg_pass" ]]; then
                     chg_pass=$(random_safe_token 20)
                     info "Сгенерирован пароль: $chg_pass"
@@ -12245,25 +13398,7 @@ cmd_users() {
                     err "Пароль: 8-64 символа, только A-Z a-z 0-9 _ -"; continue
                 fi
                 backup_config
-                # Безопасная замена без sed regex
-                local tmp_users
-                tmp_users=$(mktemp)
-                trap 'rm -f "${tmp_users:-}" 2>/dev/null' RETURN
-                while IFS=: read -r u p; do
-                    if [[ "$u" == "$chg_user" ]]; then
-                        printf '%s:%s
-' "$u" "$chg_pass"
-                    else
-                        printf '%s:%s
-' "$u" "$p"
-                    fi
-                done < "$USERS_FILE" > "$tmp_users" && mv "$tmp_users" "$USERS_FILE"
-                rewrite_caddyfile_current
-                systemctl reload caddy 2>/dev/null || systemctl restart caddy
-                sync_hysteria_users_if_active >/dev/null 2>&1 || true
-                cleanup_subscription_page "$chg_user"
-                generate_subscription_page "$chg_user" >/dev/null 2>&1 || true
-                ok "Пароль $chg_user изменён"
+                rotate_user_credentials "$chg_user" "$chg_pass" || { warn "Ротация $chg_user не завершена"; continue; }
                 ;;
             5)
                 echo -ne "${CYAN}Логин: ${RESET}"; read -r show_user
@@ -12344,13 +13479,17 @@ device_usage_report() {
                 if (since_text != "" && substr($0, 1, 19) < since_text) next;
                 user=""; ip="";
                 for (u in users) {
-                    if ($0 ~ ("email[:= ]+" u) || $0 ~ ("\\[" u "\\]") || $0 ~ (" " u "$")) {
+                    if ($0 ~ ("email[:= ]+" u "([^A-Za-z0-9_-]|$)") || $0 ~ ("\\[" u "\\]") || $0 ~ (" " u "([^A-Za-z0-9_-]|$)")) {
                         user=u;
                         break;
                     }
                 }
                 if (user == "") next;
-                if (match($0, /(tcp|udp):[0-9][0-9.]*:[0-9]+/)) {
+                if (match($0, /(tcp|udp):\[[0-9A-Fa-f:]+\]:[0-9]+/)) {
+                    ip=substr($0, RSTART, RLENGTH);
+                    sub(/^(tcp|udp):\[/, "", ip);
+                    sub(/\]:[0-9]+$/, "", ip);
+                } else if (match($0, /(tcp|udp):[0-9][0-9.]*:[0-9]+/)) {
                     ip=substr($0, RSTART, RLENGTH);
                     sub(/^(tcp|udp):/, "", ip);
                     sub(/:[0-9]+$/, "", ip);
@@ -12396,81 +13535,57 @@ EOF
     fi
 }
 
+apply_user_access_runtime() {
+    local failed=0
+    load_config
+    load_users
+    if [[ -x "$CADDY_BIN" && -f "$CADDYFILE" ]]; then
+        safe_apply_caddy_current >/dev/null 2>&1 || failed=1
+    fi
+    if [[ -x "$HYSTERIA_BIN" || -f "$HYSTERIA_CONFIG" ]]; then
+        sync_hysteria_users_if_active >/dev/null 2>&1 || failed=1
+    fi
+    if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
+        cmd_xray_rebuild >/dev/null 2>&1 || failed=1
+    fi
+    [[ "$failed" -eq 0 ]]
+}
+
 device_disable_user() {
-    local target="$1"
-    local has_naive=0 has_xray=0 changed=0
+    local target="$1" has_user=0
     if ! is_valid_proxy_user "$target"; then
         err "Некорректный логин"
         return 1
     fi
-    get_user_pass "$target" >/dev/null && has_naive=1
-    [[ -n "$(get_xray_user_uuid "$target" 2>/dev/null || true)" ]] && has_xray=1
-    if [[ "$has_naive" -eq 0 && "$has_xray" -eq 0 ]]; then
-        err "Пользователь $target не найден"
+    subscription_user_exists "$target" && has_user=1
+    [[ "$has_user" -eq 1 ]] || { err "Пользователь $target не найден"; return 1; }
+    if user_is_blocked "$target"; then
+        warn "Пользователь $target уже приостановлен"
+        return 0
+    fi
+
+    user_meta_set "$target" ACCESS_BLOCKED "1" || return 1
+    user_meta_set "$target" BLOCKED_REASON "device-limit/admin" || return 1
+    user_meta_set "$target" BLOCKED_AT "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || return 1
+
+    if ! apply_user_access_runtime; then
+        user_meta_unset "$target" ACCESS_BLOCKED >/dev/null 2>&1 || true
+        user_meta_unset "$target" BLOCKED_REASON >/dev/null 2>&1 || true
+        user_meta_unset "$target" BLOCKED_AT >/dev/null 2>&1 || true
+        apply_user_access_runtime >/dev/null 2>&1 || true
+        err "Runtime не применил блокировку; пользователь $target оставлен активным"
         return 1
     fi
-
-    local pass backup tmp
-    if [[ "$has_naive" -eq 1 ]]; then
-        if [[ "$(active_user_count)" -le 1 ]]; then
-            warn "Naive: нельзя отключить последнего активного пользователя"
-        else
-            pass=$(get_user_pass "$target")
-            backup=$(mktemp)
-            tmp=$(mktemp)
-            cp "$USERS_FILE" "$backup"
-            mkdir -p "$CONFIG_DIR"
-            touch "$DISABLED_USERS_FILE"
-            chmod 600 "$DISABLED_USERS_FILE"
-            printf '%s:%s\t# disabled by device-limit at %s\n' "$target" "$pass" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$DISABLED_USERS_FILE"
-            awk -F: -v user="$target" '$1 != user' "$USERS_FILE" > "$tmp" && mv "$tmp" "$USERS_FILE"
-            chmod 600 "$USERS_FILE"
-            if ! rewrite_caddyfile_current; then
-                mv "$backup" "$USERS_FILE"
-                rewrite_caddyfile_current >/dev/null 2>&1 || true
-                rm -f "$tmp" "$backup"
-                err "Не смог обновить Caddyfile, Naive пользователь $target возвращён"
-                return 1
-            fi
-            rm -f "$tmp" "$backup"
-            systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
-            changed=1
-            ok "Naive пользователь $target отключён"
-        fi
+    if ! suspend_subscription_page "$target"; then
+        err "Доступ заблокирован, но страницу подписки не удалось заменить"
+        return 1
     fi
-
-    if [[ "$has_xray" -eq 1 ]]; then
-        if [[ "$(xray_active_user_count)" -le 1 ]]; then
-            warn "Xray: нельзя отключить последнего активного пользователя"
-        else
-            local uuid xray_tmp xray_backup
-            uuid=$(get_xray_user_uuid "$target")
-            xray_backup=$(mktemp)
-            cp "$XRAY_USERS_FILE" "$xray_backup"
-            touch "$XRAY_DISABLED_USERS_FILE"
-            chmod 600 "$XRAY_DISABLED_USERS_FILE"
-            printf '%s:%s\t# disabled by device-limit at %s\n' "$target" "$uuid" "$(date '+%Y-%m-%d %H:%M:%S')" >> "$XRAY_DISABLED_USERS_FILE"
-            xray_tmp=$(mktemp)
-            awk -F: -v user="$target" '$1 != user' "$XRAY_USERS_FILE" > "$xray_tmp" && mv "$xray_tmp" "$XRAY_USERS_FILE"
-            chmod 600 "$XRAY_USERS_FILE"
-            if [[ -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
-                if ! write_xray_config >/dev/null 2>&1; then
-                    mv "$xray_backup" "$XRAY_USERS_FILE"
-                    write_xray_config >/dev/null 2>&1 || true
-                    warn "Xray config не пересобран, пользователь $target возвращён"
-                    return 1
-                fi
-                systemctl restart xray 2>/dev/null || true
-            fi
-            rm -f "$xray_backup"
-            changed=1
-            ok "Xray пользователь $target отключён"
-        fi
+    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
+    if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
+        err "Пользователь заблокирован локально; синхронизация nodes поставлена в повтор"
+        return 1
     fi
-
-    [[ "$changed" -eq 1 ]] || return 1
-    cleanup_subscription_page "$target"
-    ok "Страница подписки $target отозвана"
+    ok "Все протоколы и страница подписки $target приостановлены"
 }
 
 device_enable_user() {
@@ -12478,6 +13593,32 @@ device_enable_user() {
     if ! is_valid_proxy_user "$target"; then
         err "Некорректный логин"
         return 1
+    fi
+    if user_is_blocked "$target"; then
+        user_meta_unset "$target" ACCESS_BLOCKED || return 1
+        user_meta_unset "$target" BLOCKED_REASON >/dev/null 2>&1 || true
+        user_meta_unset "$target" BLOCKED_AT >/dev/null 2>&1 || true
+        if ! apply_user_access_runtime; then
+            user_meta_set "$target" ACCESS_BLOCKED "1" >/dev/null 2>&1 || true
+            user_meta_set "$target" BLOCKED_REASON "rollback-after-enable-failure" >/dev/null 2>&1 || true
+            apply_user_access_runtime >/dev/null 2>&1 || true
+            suspend_subscription_page "$target" >/dev/null 2>&1 || true
+            err "Runtime не применил разблокировку; пользователь оставлен заблокированным"
+            return 1
+        fi
+        if user_is_time_expired "$target"; then
+            suspend_subscription_page "$target" >/dev/null 2>&1 || true
+            warn "Блокировка снята, но срок подписки истёк: $(user_expiry_label "$target")"
+        else
+            generate_subscription_page "$target" >/dev/null 2>&1 || { err "Не удалось восстановить страницу подписки"; return 1; }
+        fi
+        cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
+        if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
+            err "Локальная разблокировка выполнена; синхронизация nodes поставлена в повтор"
+            return 1
+        fi
+        ok "Все протоколы и страница подписки $target разблокированы"
+        return 0
     fi
     local restored=0
     if get_user_pass "$target" >/dev/null; then
@@ -12510,7 +13651,7 @@ device_enable_user() {
         if [[ -n "$line" ]]; then
             local uuid xray_tmp
             uuid=$(printf '%s\n' "$line" | cut -d: -f2 | awk '{print $1}')
-            if [[ "$uuid" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+            if is_valid_xray_uuid "$uuid"; then
                 printf '%s:%s\n' "$target" "$uuid" >> "$XRAY_USERS_FILE"
                 xray_tmp=$(mktemp)
                 awk -F: -v user="$target" '$1 != user' "$XRAY_DISABLED_USERS_FILE" > "$xray_tmp" && mv "$xray_tmp" "$XRAY_DISABLED_USERS_FILE"
@@ -12527,10 +13668,16 @@ device_enable_user() {
     fi
 
     [[ "$restored" -eq 1 ]] || { err "Пользователь $target не найден в отключенных"; return 1; }
-    if user_is_expired "$target"; then
+    apply_user_access_runtime || { err "Legacy credentials восстановлены, но runtime применён не полностью"; return 1; }
+    if user_is_time_expired "$target"; then
         warn "Пользователь $target восстановлен, но срок истёк: $(user_expiry_label "$target")"
     else
-        generate_subscription_page "$target" >/dev/null 2>&1 || true
+        generate_subscription_page "$target" >/dev/null 2>&1 || { err "Не удалось восстановить страницу подписки"; return 1; }
+    fi
+    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
+    if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
+        err "Legacy user восстановлен локально; синхронизация nodes поставлена в повтор"
+        return 1
     fi
 }
 
@@ -12543,8 +13690,8 @@ cmd_devices_scan() {
     local mode="${DEVICE_LIMIT_MODE:-alert}"
     local enabled="${DEVICE_LIMIT_ENABLED:-0}"
 
-    if ! [[ "$limit" =~ ^[0-9]+$ ]] || [[ "$limit" -lt 1 ]]; then limit="$DEVICE_LIMIT_DEFAULT"; fi
-    if ! [[ "$window" =~ ^[0-9]+$ ]] || [[ "$window" -lt 1 ]]; then window="$DEVICE_WINDOW_HOURS_DEFAULT"; fi
+    is_canonical_uint_in_range "$limit" 1 50 || limit="$DEVICE_LIMIT_DEFAULT"
+    is_canonical_uint_in_range "$window" 1 168 || window="$DEVICE_WINDOW_HOURS_DEFAULT"
     [[ "$mode" == "lock-user" ]] || mode="alert"
 
     local report_file
@@ -12608,7 +13755,7 @@ cmd_devices_config() {
     echo -ne "${CYAN}Лимит IP на пользователя [${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}]: ${RESET}"
     read -r ans
     DEVICE_LIMIT="${ans:-${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}}"
-    if ! [[ "$DEVICE_LIMIT" =~ ^[0-9]+$ ]] || [[ "$DEVICE_LIMIT" -lt 1 ]] || [[ "$DEVICE_LIMIT" -gt 50 ]]; then
+    if ! is_canonical_uint_in_range "$DEVICE_LIMIT" 1 50; then
         err "Лимит должен быть числом 1-50"
         return 1
     fi
@@ -12616,7 +13763,7 @@ cmd_devices_config() {
     echo -ne "${CYAN}Окно анализа, часов [${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}]: ${RESET}"
     read -r ans
     DEVICE_WINDOW_HOURS="${ans:-${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}}"
-    if ! [[ "$DEVICE_WINDOW_HOURS" =~ ^[0-9]+$ ]] || [[ "$DEVICE_WINDOW_HOURS" -lt 1 ]] || [[ "$DEVICE_WINDOW_HOURS" -gt 168 ]]; then
+    if ! is_canonical_uint_in_range "$DEVICE_WINDOW_HOURS" 1 168; then
         err "Окно должно быть числом 1-168 часов"
         return 1
     fi
@@ -12839,6 +13986,7 @@ cmd_install() {
 
     save_config
     install_monitor
+    cmd_notify_expiry_install
 
     info "Запускаю Caddy..."
     systemctl restart caddy
@@ -12930,22 +14078,20 @@ cmd_self_update() {
     info "Текущая версия: ${BOLD}v${VERSION}${RESET}"
     info "Проверяю последнюю версию на GitHub..."
 
-    # Получаем последнюю версию из GitHub Releases и raw-файла.
-    # Raw важен, потому что проект часто обновляется обычным push в main без release.
+    # Источник обновления — raw main, поэтому именно его VERSION является авторитетным.
+    # Release API используется только для диагностики рассинхронизации.
     local latest_ver api_ver raw_ver
     api_ver=$(curl -s --max-time 10 "$GITHUB_API" 2>/dev/null         | grep '"tag_name"'         | grep -oP '"\K[^"]+'         | head -1         | tr -d 'v' || echo "")
     raw_ver=$(curl -s --max-time 10 "$GITHUB_RAW" 2>/dev/null             | grep '^VERSION='             | grep -oP '"\K[^"]+' || echo "")
 
-    latest_ver="$api_ver"
-    if [[ -n "$raw_ver" ]]; then
-        if [[ -z "$latest_ver" ]] || version_gt "$raw_ver" "$latest_ver"; then
-            latest_ver="$raw_ver"
-        fi
-    fi
+    latest_ver="$raw_ver"
 
     if [[ -z "$latest_ver" ]]; then
-        err "Не удалось получить версию с GitHub. Проверь интернет."
+        err "Не удалось получить VERSION из raw main. Обновление остановлено."
         return 1
+    fi
+    if [[ -n "$api_ver" && "$api_ver" != "$raw_ver" ]]; then
+        warn "GitHub Release v${api_ver} и raw main v${raw_ver} различаются; устанавливаю проверенный raw main v${raw_ver}"
     fi
 
     info "Последняя версия: ${BOLD}v${latest_ver}${RESET}"
@@ -12962,11 +14108,11 @@ cmd_self_update() {
     [[ "${ans,,}" == "n" ]] && return 0
 
     # Скачиваем новую версию во временный файл
-    local tmp_script tmp_sha expected_sha actual_sha
+    local tmp_script tmp_sha expected_sha actual_sha downloaded_ver staging_script=""
     tmp_script=$(mktemp /tmp/naiveproxy_update_XXXXXX.sh)
     tmp_sha=$(mktemp /tmp/naiveproxy_update_sha_XXXXXX)
     # Cleanup при любом выходе из функции
-    trap 'rm -f "${tmp_script:-}" "${tmp_sha:-}" 2>/dev/null' RETURN
+    trap 'rm -f "${tmp_script:-}" "${tmp_sha:-}" "${staging_script:-}" 2>/dev/null; trap - RETURN' RETURN
 
     info "Скачиваю v${latest_ver}..."
     if ! curl -fsSL --max-time 60 "$GITHUB_RAW" -o "$tmp_script" 2>/dev/null; then
@@ -13009,6 +14155,14 @@ cmd_self_update() {
         return 1
     fi
 
+    downloaded_ver=$(sed -nE 's/^VERSION="([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$tmp_script" | head -1)
+    if [[ -z "$downloaded_ver" || "$downloaded_ver" != "$latest_ver" ]]; then
+        err "VERSION скачанного файла не совпадает с объявленной версией"
+        echo "  announced:  $latest_ver"
+        echo "  downloaded: ${downloaded_ver:-unknown}"
+        return 1
+    fi
+
     # Определяем куда установлен скрипт
     local current_script
     current_script=$(realpath "$0" 2>/dev/null || echo "")
@@ -13016,24 +14170,41 @@ cmd_self_update() {
         current_script="$SCRIPT_PATH"
     fi
 
-    # Бэкап текущей версии
-    local backup_path="${current_script}.v${VERSION}.bak"
-    cp "$current_script" "$backup_path" 2>/dev/null || true
+    [[ -f "$current_script" ]] || { err "Текущий скрипт не найден: $current_script"; return 1; }
+
+    # Бэкап обязателен, а staging создаётся в том же каталоге для атомарного rename.
+    local backup_path="${current_script}.v${VERSION}.bak" current_dir installed_ver
+    current_dir=$(dirname "$current_script")
+    staging_script=$(mktemp "${current_dir}/.yurich-panel.update.XXXXXX") || {
+        err "Не удалось создать staging-файл рядом с $current_script"
+        return 1
+    }
+    if ! cp -p -- "$current_script" "$backup_path"; then
+        err "Не удалось создать обязательный бэкап: $backup_path"
+        return 1
+    fi
     ok "Бэкап текущей версии: $backup_path"
 
-    # Устанавливаем новую версию
-    chmod +x "$tmp_script"
-    mv "$tmp_script" "$current_script"
-    chmod +x "$current_script"
+    if ! install -m 755 "$tmp_script" "$staging_script" || ! mv -f -- "$staging_script" "$current_script"; then
+        err "Не удалось атомарно установить обновление"
+        install -m 755 "$backup_path" "$current_script" 2>/dev/null || true
+        return 1
+    fi
+    staging_script=""
+
+    installed_ver=$(bash "$current_script" version 2>/dev/null | sed -nE 's/^Yurich Panel v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' | head -1)
+    if [[ "$installed_ver" != "$downloaded_ver" ]]; then
+        err "Проверка установленного скрипта не пройдена. Выполняю rollback."
+        install -m 755 "$backup_path" "$current_script"
+        return 1
+    fi
 
     # Обновляем основной путь и legacy alias, чтобы старые установки не ломались.
     if [[ "$current_script" != "$SCRIPT_PATH" ]]; then
-        cp "$current_script" "$SCRIPT_PATH" 2>/dev/null || true
-        chmod +x "$SCRIPT_PATH" 2>/dev/null || true
+        install -m 755 "$current_script" "$SCRIPT_PATH" 2>/dev/null || warn "Не удалось синхронизировать $SCRIPT_PATH"
     fi
     if [[ -n "${LEGACY_SCRIPT_PATH:-}" && "$current_script" != "$LEGACY_SCRIPT_PATH" ]]; then
-        cp "$current_script" "$LEGACY_SCRIPT_PATH" 2>/dev/null || true
-        chmod +x "$LEGACY_SCRIPT_PATH" 2>/dev/null || true
+        install -m 755 "$current_script" "$LEGACY_SCRIPT_PATH" 2>/dev/null || warn "Не удалось синхронизировать $LEGACY_SCRIPT_PATH"
     fi
 
     ok "Скрипт обновлён: v${VERSION} → v${latest_ver}"
@@ -13126,6 +14297,9 @@ cmd_diagnose_fix() {
 
     if [[ "${DEVICE_LIMIT_ENABLED:-0}" == "1" ]]; then
         write_device_cron
+    fi
+    if [[ ! -f "$EXPIRY_NOTIFY_CRON" ]]; then
+        cmd_notify_expiry_install || warn "Не удалось установить ежедневный expiry enforcement"
     fi
 
     if command -v fail2ban-client >/dev/null 2>&1; then
@@ -14061,15 +15235,17 @@ sales_apply_bot_menu() {
 }
 
 sales_plan_price() {
-    local term item key p normalized
+    local term item key p normalized plans
     normalized=$(normalize_user_term "${1:-}" 2>/dev/null || true)
     [[ -n "$normalized" ]] || return 1
-    IFS=',' read -ra _sales_plan_items <<< "${SALES_BOT_PLANS:-$SALES_BOT_PLANS_DEFAULT}"
+    plans="${SALES_BOT_PLANS:-$SALES_BOT_PLANS_DEFAULT}"
+    is_valid_sales_plans_value "$plans" || plans="$SALES_BOT_PLANS_DEFAULT"
+    IFS=',' read -ra _sales_plan_items <<< "$plans"
     for item in "${_sales_plan_items[@]}"; do
         key="${item%%:*}"
         p="${item#*:}"
         [[ "$key" =~ ^[0-9]+$ ]] && key="${key}m"
-        if [[ "$key" == "$normalized" && "$p" =~ ^[0-9]+$ ]]; then
+        if [[ "$key" == "$normalized" ]] && is_canonical_uint_in_range "$p" 1 1000000000; then
             printf '%s\n' "$p"
             return 0
         fi
@@ -14088,16 +15264,20 @@ sales_plan_regular_price() {
 }
 
 sales_plans_text() {
-    local item key term p regular discount pct per_month currency channel lines="" icon badge
+    local item key term p regular discount pct per_month currency channel plan_lines="" icon badge plans
     currency="${SALES_BOT_CURRENCY:-$SALES_BOT_CURRENCY_DEFAULT}"
     channel="${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}"
-    IFS=',' read -ra _sales_plan_items <<< "${SALES_BOT_PLANS:-$SALES_BOT_PLANS_DEFAULT}"
+    plans="${SALES_BOT_PLANS:-$SALES_BOT_PLANS_DEFAULT}"
+    is_valid_sales_plans_value "$plans" || plans="$SALES_BOT_PLANS_DEFAULT"
+    IFS=',' read -ra _sales_plan_items <<< "$plans"
     for item in "${_sales_plan_items[@]}"; do
         key="${item%%:*}"
         p="${item#*:}"
         [[ "$key" =~ ^[0-9]+$ ]] && key="${key}m"
         term=$(normalize_user_term "$key" 2>/dev/null || true)
-        [[ -n "$term" && "$p" =~ ^[0-9]+$ ]] || continue
+        if [[ -z "$term" ]] || ! is_canonical_uint_in_range "$p" 1 1000000000; then
+            continue
+        fi
         case "$term" in
             1d) icon="⚡"; badge="тест на день" ;;
             1m) icon="🚀"; badge="стартовый" ;;
@@ -14112,16 +15292,16 @@ sales_plans_text() {
             pct=$(((discount * 100 + regular / 2) / regular))
             if [[ "$term" == *m ]]; then
                 per_month=$((p / ${term%m}))
-                lines="${lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
+                plan_lines="${plan_lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
    ${badge}: ~${per_month} руб/мес, экономия ${discount} руб / ${pct}%
 "
             else
-                lines="${lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
+                plan_lines="${plan_lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
    ${badge}: экономия ${discount} руб / ${pct}%
 "
             fi
         else
-            lines="${lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
+            plan_lines="${plan_lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
    ${badge}
 "
         fi
@@ -14129,7 +15309,7 @@ sales_plans_text() {
     cat <<EOF
 💎 <b>Тарифы Yurich Connect VPN</b>
 
-${lines}
+${plan_lines}
 💡 База: <b>250 руб / месяц</b>.
 Чем больше срок, тем ниже цена за месяц.
 
@@ -14244,7 +15424,7 @@ sales_safe_chat_key() {
 
 sales_captcha_ttl() {
     local ttl="${SALES_BOT_CAPTCHA_TTL_SECONDS:-$SALES_BOT_CAPTCHA_TTL_SECONDS_DEFAULT}"
-    [[ "$ttl" =~ ^[0-9]+$ && "$ttl" -ge 300 ]] || ttl="$SALES_BOT_CAPTCHA_TTL_SECONDS_DEFAULT"
+    is_canonical_uint_in_range "$ttl" 300 2592000 || ttl="$SALES_BOT_CAPTCHA_TTL_SECONDS_DEFAULT"
     printf '%s\n' "$ttl"
 }
 
@@ -14265,7 +15445,7 @@ sales_captcha_is_verified() {
     file=$(sales_verified_file "$chat_id") || return 1
     [[ -f "$file" ]] || return 1
     expires=$(head -n 1 "$file" 2>/dev/null | tr -cd '0-9')
-    [[ "$expires" =~ ^[0-9]+$ ]] || { rm -f "$file"; return 1; }
+    is_canonical_uint_in_range "$expires" 0 9999999999 || { rm -f "$file"; return 1; }
     now=$(date +%s)
     if [[ "$expires" -gt "$now" ]]; then
         return 0
@@ -14327,7 +15507,10 @@ sales_captcha_check() {
     source "$file" 2>/dev/null || true
     now=$(date +%s)
     pending_ttl=900
-    if [[ ! "${ANSWER:-}" =~ ^[0-9]+$ || ! "${CREATED_AT:-}" =~ ^[0-9]+$ || $((now - CREATED_AT)) -gt "$pending_ttl" ]]; then
+    if ! is_canonical_uint_in_range "${ANSWER:-}" 0 999 \
+        || ! is_canonical_uint_in_range "${CREATED_AT:-}" 0 9999999999 \
+        || ! is_canonical_uint_in_range "${TRIES:-0}" 0 3 \
+        || (( now - CREATED_AT > pending_ttl )); then
         sales_captcha_prompt "$chat_id"
         return 0
     fi
@@ -14482,11 +15665,61 @@ Username: <code>${safe_user}</code>
 
 sales_create_order() {
     local chat_id="$1" from_id="$2" username="$3" first_name="$4" term="$5" price order_id order_file created safe_user safe_name payment_text term_label
+    local order_lock_fd file file_values file_chat file_status file_epoch now pending_count=0 total_count=0 newest_epoch=0
+    local min_interval max_pending max_files
     term=$(normalize_user_term "$term" 2>/dev/null || true)
     price=$(sales_plan_price "$term") || { sales_reply "$chat_id" "Этот тариф не найден. Открой /plans."; return 1; }
     term_label=$(user_term_label "$term")
     mkdir -p "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR"
     chmod 700 "$SALES_BOT_DIR" "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR" 2>/dev/null || true
+    command -v flock >/dev/null 2>&1 || { sales_reply "$chat_id" "Сервис заявок временно недоступен. Напиши в поддержку."; return 1; }
+    exec {order_lock_fd}>"${SALES_BOT_ORDERS_DIR}/.orders.lock"
+    if ! flock -w 5 "$order_lock_fd"; then
+        sales_reply "$chat_id" "Сервис обрабатывает другую заявку. Повтори через минуту."
+        exec {order_lock_fd}>&-
+        return 1
+    fi
+    min_interval="${SALES_BOT_ORDER_MIN_INTERVAL_SECONDS:-$SALES_BOT_ORDER_MIN_INTERVAL_SECONDS_DEFAULT}"
+    max_pending="${SALES_BOT_MAX_PENDING_PER_CHAT:-$SALES_BOT_MAX_PENDING_PER_CHAT_DEFAULT}"
+    max_files="${SALES_BOT_MAX_ORDER_FILES:-$SALES_BOT_MAX_ORDER_FILES_DEFAULT}"
+    is_canonical_uint_in_range "$min_interval" 10 3600 || min_interval="$SALES_BOT_ORDER_MIN_INTERVAL_SECONDS_DEFAULT"
+    is_canonical_uint_in_range "$max_pending" 1 10 || max_pending="$SALES_BOT_MAX_PENDING_PER_CHAT_DEFAULT"
+    is_canonical_uint_in_range "$max_files" 100 50000 || max_files="$SALES_BOT_MAX_ORDER_FILES_DEFAULT"
+    shopt -s nullglob
+    for file in "$SALES_BOT_ORDERS_DIR"/*.env; do
+        total_count=$((total_count + 1))
+        file_values=$( (
+            unset CHAT_ID STATUS
+            # Order files are root-owned 0600 files generated below with printf %q.
+            # shellcheck source=/dev/null
+            source "$file" 2>/dev/null || exit 0
+            printf '%s|%s\n' "${CHAT_ID:-}" "${STATUS:-}"
+        ) )
+        IFS='|' read -r file_chat file_status <<< "$file_values"
+        if [[ "$file_chat" == "$chat_id" ]]; then
+            [[ "$file_status" == "pending" || "$file_status" == "processing" ]] && pending_count=$((pending_count + 1))
+            file_epoch=$(stat -c '%Y' "$file" 2>/dev/null || echo 0)
+            [[ "$file_epoch" =~ ^[0-9]+$ && "$file_epoch" -gt "$newest_epoch" ]] && newest_epoch="$file_epoch"
+        fi
+    done
+    shopt -u nullglob
+    now=$(date +%s)
+    if (( total_count >= max_files )); then
+        flock -u "$order_lock_fd"; exec {order_lock_fd}>&-
+        sales_reply "$chat_id" "Новые заявки временно приостановлены. Администратор уже получил уведомление."
+        sales_notify_admins "<b>Лимит файлов заявок достигнут</b>: ${total_count}/${max_files}. Нужна ручная архивация."
+        return 1
+    fi
+    if (( pending_count >= max_pending )); then
+        flock -u "$order_lock_fd"; exec {order_lock_fd}>&-
+        sales_reply "$chat_id" "У тебя уже есть ${pending_count} необработанные заявки. Сначала дождись решения по ним."
+        return 1
+    fi
+    if (( newest_epoch > 0 && now - newest_epoch < min_interval )); then
+        flock -u "$order_lock_fd"; exec {order_lock_fd}>&-
+        sales_reply "$chat_id" "Заявка уже создавалась недавно. Подожди немного и повтори."
+        return 1
+    fi
     created=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     order_id="$(date -u '+%Y%m%d%H%M%S')-${chat_id#-}-${RANDOM}"
     order_file="${SALES_BOT_ORDERS_DIR}/${order_id}.env"
@@ -14508,6 +15741,8 @@ sales_create_order() {
         printf 'CREATED_AT=%q\n' "$created"
     } > "$order_file"
     chmod 600 "$order_file"
+    flock -u "$order_lock_fd"
+    exec {order_lock_fd}>&-
 
     payment_text=$(html_escape_text "${SALES_BOT_PAYMENT_TEXT:-Оплата пока подтверждается вручную.}")
     sales_reply "$chat_id" "<b>Заявка создана</b>
@@ -14573,8 +15808,21 @@ ${channel}
 EOF
 }
 
+sales_restore_issue_state() {
+    local user="$1" users_backup="$2" meta_backup="$3" meta_existed="$4" meta_file
+    meta_file=$(user_meta_file "$user")
+    [[ -f "$users_backup" ]] && cp -a "$users_backup" "$USERS_FILE"
+    if [[ "$meta_existed" == "1" && -f "$meta_backup" ]]; then
+        cp -a "$meta_backup" "$meta_file"
+    else
+        rm -f "$meta_file"
+    fi
+    rewrite_caddyfile_current >/dev/null 2>&1 || true
+    systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+}
+
 sales_issue_subscription() {
-    local chat_id="$1" term="$2" user pass users_backup created=0 sub_url sync_note=""
+    local chat_id="$1" term="$2" order_id="${3:-manual}" user pass users_backup meta_backup meta_file meta_existed=0 created=0 sub_url sync_note="" last_order
     user=$(sales_user_for_chat "$chat_id")
     term=$(normalize_user_term "$term" 2>/dev/null || true)
     if ! is_valid_user_term "$term"; then
@@ -14592,40 +15840,57 @@ sales_issue_subscription() {
     touch "$USERS_FILE"
     chmod 600 "$USERS_FILE"
 
+    last_order=$(user_meta_get "$user" LAST_SALES_ORDER_ID 2>/dev/null || true)
+    if [[ "$order_id" != "manual" && "$last_order" == "$order_id" ]]; then
+        apply_user_access_runtime || return 1
+        sub_url=$(generate_subscription_page "$user" 2>/dev/null || true)
+        [[ -n "$sub_url" ]] || return 1
+        pass=$(get_user_pass "$user" 2>/dev/null || true)
+        printf 'USER=%s\nPASS=%s\nCREATED=0\nSUB_URL=%s\nSYNC_NOTE=%s\n' "$user" "$pass" "$sub_url" "Заявка уже была применена; повторное продление не выполнялось."
+        return 0
+    fi
+
     pass=$(get_user_pass "$user" 2>/dev/null || true)
     users_backup=$(mktemp)
     cp "$USERS_FILE" "$users_backup"
+    meta_file=$(user_meta_file "$user")
+    meta_backup=$(mktemp)
+    if [[ -f "$meta_file" ]]; then
+        cp -a "$meta_file" "$meta_backup"
+        meta_existed=1
+    fi
     if [[ -z "$pass" ]]; then
         pass=$(random_safe_token 20)
         printf '%s:%s\n' "$user" "$pass" >> "$USERS_FILE"
         created=1
     fi
-    set_user_expiry_extend_term "$user" "$term" || { mv "$users_backup" "$USERS_FILE"; return 1; }
+    set_user_expiry_extend_term "$user" "$term" || { sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"; rm -f "$users_backup" "$meta_backup"; return 1; }
+    [[ "$order_id" == "manual" ]] || user_meta_set "$user" LAST_SALES_ORDER_ID "$order_id" || { sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"; rm -f "$users_backup" "$meta_backup"; return 1; }
 
     if ! rewrite_caddyfile_current >/dev/null 2>&1; then
-        mv "$users_backup" "$USERS_FILE"
-        cleanup_user_metadata "$user"
+        sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"
+        rm -f "$users_backup" "$meta_backup"
         return 1
     fi
     if ! systemctl reload caddy >/dev/null 2>&1 && ! systemctl restart caddy >/dev/null 2>&1; then
-        mv "$users_backup" "$USERS_FILE"
-        cleanup_user_metadata "$user"
-        rewrite_caddyfile_current >/dev/null 2>&1 || true
+        sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"
+        rm -f "$users_backup" "$meta_backup"
         return 1
     fi
-    rm -f "$users_backup"
+    rm -f "$users_backup" "$meta_backup"
 
     if [[ -f "$HYSTERIA_CONFIG" || -x "$HYSTERIA_BIN" ]]; then
-        sync_hysteria_users_if_active >/dev/null 2>&1 || true
+        sync_hysteria_users_if_active >/dev/null 2>&1 || { err "Hysteria не применил пользователя $user"; return 1; }
     fi
     if [[ "${XRAY_ENABLED:-0}" == "1" && -x "$XRAY_BIN" && -f "$XRAY_CONFIG" ]]; then
-        provision_xray_user "$user" >/dev/null 2>&1 || true
+        provision_xray_user "$user" >/dev/null 2>&1 || { err "Xray не применил пользователя $user"; return 1; }
     fi
 
     cmd_notify_bind_tg "$user" "$chat_id" >/dev/null 2>&1 || true
     if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]]; then
         if command -v systemd-run >/dev/null 2>&1; then
-            local sync_unit="yurich-sales-node-sync-${user}-$(date +%s)"
+            local sync_unit
+            sync_unit="yurich-sales-node-sync-${user}-$(date +%s)"
             systemd-run --quiet --unit "$sync_unit" --description "Yurich sales node sync for ${user}" /bin/bash "$SCRIPT_PATH" nodes-sync all >/dev/null 2>&1 \
                 || sync_note="Ноды синхронизируются с задержкой; основная подписка уже готова."
         else
@@ -14640,33 +15905,64 @@ sales_issue_subscription() {
 }
 
 sales_approve_order() {
-    local order_id="$1" admin_id="$2" order_file STATUS CHAT_ID FROM_ID USERNAME FIRST_NAME TERM MONTHS PRICE CURRENCY issue_tmp rc sub_url user sync_note term
+    # FROM_ID/FIRST_NAME are intentionally local: sourced order fields must not leak globally.
+    # shellcheck disable=SC2034
+    local order_id="$1" admin_id="$2" order_file STATUS CHAT_ID FROM_ID USERNAME FIRST_NAME TERM MONTHS PRICE CURRENCY issue_tmp rc sub_url user sync_note term approval_lock_fd
     sales_order_valid_id "$order_id" || { sales_reply "$admin_id" "Неверный ORDER ID."; return 1; }
     order_file="${SALES_BOT_ORDERS_DIR}/${order_id}.env"
     [[ -f "$order_file" ]] || { sales_reply "$admin_id" "Заявка не найдена: <code>${order_id}</code>"; return 1; }
+    command -v flock >/dev/null 2>&1 || { sales_reply "$admin_id" "flock не установлен; подтверждение остановлено безопасно."; return 1; }
+    exec {approval_lock_fd}>"${order_file}.lock"
+    if ! flock -n "$approval_lock_fd"; then
+        sales_reply "$admin_id" "Заявка уже обрабатывается: <code>${order_id}</code>"
+        exec {approval_lock_fd}>&-
+        return 1
+    fi
     # shellcheck source=/dev/null
     source "$order_file"
-    [[ "${STATUS:-}" == "pending" ]] || { sales_reply "$admin_id" "Заявка уже обработана: <code>${STATUS:-unknown}</code>"; return 1; }
+    if [[ "${STATUS:-}" != "pending" ]]; then
+        sales_reply "$admin_id" "Заявка уже обработана: <code>${STATUS:-unknown}</code>"
+        flock -u "$approval_lock_fd"; exec {approval_lock_fd}>&-
+        return 1
+    fi
+
+    {
+        grep -vE '^(STATUS|PROCESSING_AT|PROCESSING_BY|ISSUE_ERROR_AT)=' "$order_file" 2>/dev/null || true
+        printf 'STATUS=%q\n' "processing"
+        printf 'PROCESSING_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'PROCESSING_BY=%q\n' "$admin_id"
+    } > "${order_file}.tmp"
+    install -m 600 "${order_file}.tmp" "$order_file"
+    rm -f "${order_file}.tmp"
 
     issue_tmp=$(mktemp)
     term="${TERM:-${MONTHS:-}}"
-    if sales_issue_subscription "$CHAT_ID" "$term" > "$issue_tmp" 2>&1; then
+    if sales_issue_subscription "$CHAT_ID" "$term" "$order_id" > "$issue_tmp" 2>&1; then
         rc=0
     else
         rc=$?
     fi
     if [[ "$rc" -ne 0 ]]; then
+        {
+            grep -vE '^(STATUS|ISSUE_ERROR_AT)=' "$order_file" 2>/dev/null || true
+            printf 'STATUS=%q\n' "error"
+            printf 'ISSUE_ERROR_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        } > "${order_file}.tmp"
+        install -m 600 "${order_file}.tmp" "$order_file"
+        rm -f "${order_file}.tmp"
         sales_reply "$admin_id" "<b>Ошибка выдачи подписки</b>
 ORDER: <code>${order_id}</code>
+Статус: <code>error</code>, повторное продление заблокировано до ручной проверки.
 <pre>$(html_escape_text "$(tail -n 40 "$issue_tmp")")</pre>"
         rm -f "$issue_tmp"
+        flock -u "$approval_lock_fd"; exec {approval_lock_fd}>&-
         return 1
     fi
     user=$(awk -F= '$1=="USER"{print $2}' "$issue_tmp")
     sub_url=$(awk -F= '$1=="SUB_URL"{print $2}' "$issue_tmp")
     sync_note=$(awk -F= '$1=="SYNC_NOTE"{print $2}' "$issue_tmp")
     {
-        grep -vE '^(STATUS|APPROVED_AT|APPROVED_BY|ISSUED_USER|SUB_URL)=' "$order_file" 2>/dev/null || true
+        grep -vE '^(STATUS|PROCESSING_AT|PROCESSING_BY|ISSUE_ERROR_AT|APPROVED_AT|APPROVED_BY|ISSUED_USER|SUB_URL)=' "$order_file" 2>/dev/null || true
         printf 'STATUS=%q\n' "approved"
         printf 'APPROVED_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
         printf 'APPROVED_BY=%q\n' "$admin_id"
@@ -14675,6 +15971,8 @@ ORDER: <code>${order_id}</code>
     } > "${order_file}.tmp"
     install -m 600 "${order_file}.tmp" "$order_file"
     rm -f "${order_file}.tmp" "$issue_tmp"
+    flock -u "$approval_lock_fd"
+    exec {approval_lock_fd}>&-
 
     sales_reply "$CHAT_ID" "<b>Подписка активирована</b>
 
@@ -14863,7 +16161,7 @@ Email: ${SUPPORT_EMAIL}" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
 }
 
 cmd_sales_bot() {
-    [[ -n "${SALES_BOT_TOKEN:-}" ]] || { err "Sales bot не настроен. Запусти: sudo bash ${SCRIPT_PATH} sales-bot-install TOKEN ADMIN_ID"; return 1; }
+    [[ -n "${SALES_BOT_TOKEN:-}" ]] || { err "Sales bot не настроен. Запусти интерактивно: sudo bash ${SCRIPT_PATH} sales-bot-install"; return 1; }
     sales_apply_bot_menu >/dev/null 2>&1 || true
     mkdir -p "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR"
     chmod 700 "$SALES_BOT_DIR" "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR" 2>/dev/null || true
@@ -14898,15 +16196,16 @@ try:
                 continue
         def clean(v):
             return str(v or '').replace('|',' ').replace('\\r',' ').replace('\\n',' ')[:120]
-        print('|'.join([str(uid), clean(chat.get('id')), clean(frm.get('id')), clean(frm.get('username')), clean(frm.get('first_name')), clean(msg.get('message_id')), clean(kind), clean(text)]))
+        print('|'.join([str(uid), clean(chat.get('id')), clean(chat.get('type')), clean(frm.get('id')), clean(frm.get('username')), clean(frm.get('first_name')), clean(msg.get('message_id')), clean(kind), clean(text)]))
 except Exception:
     pass
 " 2>/dev/null || echo "")
-        while IFS='|' read -r update_id chat_id from_id username first_name message_id kind text; do
+        while IFS='|' read -r update_id chat_id chat_type from_id username first_name message_id kind text; do
             [[ -z "${update_id:-}" ]] && continue
-            if [[ "$update_id" =~ ^[0-9]+$ && "$update_id" -lt 2147483647 ]]; then
+            if is_canonical_uint_in_range "$update_id" 0 2147483646; then
                 offset=$(( update_id + 1 ))
             fi
+            [[ "$chat_type" == "private" ]] || continue
             if [[ "${kind:-text}" == "photo" || "${kind:-text}" == "document" ]]; then
                 sales_handle_payment_proof "$chat_id" "$from_id" "$username" "$first_name" "$message_id" "$kind"
             else
@@ -14921,14 +16220,20 @@ install_sales_bot_service() {
     local token="${1:-}" admin_id="${2:-}" script_path="${SCRIPT_PATH:-/usr/local/bin/yurich-panel.sh}" response bot_name
     load_config 2>/dev/null || true
     if [[ -n "$token" ]]; then
+        warn "Передача token через argv видна в history/process list. В следующий раз запускай sales-bot-install без аргументов."
         SALES_BOT_TOKEN="$token"
     fi
     if [[ -n "$admin_id" ]]; then
         SALES_BOT_ADMIN_ID="$admin_id"
     fi
     if [[ -z "${SALES_BOT_TOKEN:-}" ]]; then
-        err "Передай token: sudo bash ${SCRIPT_PATH} sales-bot-install TOKEN ADMIN_ID"
-        return 1
+        echo -ne "${CYAN}Sales bot token: ${RESET}"
+        read -rs SALES_BOT_TOKEN
+        echo
+    fi
+    if [[ -z "${SALES_BOT_ADMIN_ID:-}" ]]; then
+        echo -ne "${CYAN}Telegram admin ID: ${RESET}"
+        read -r SALES_BOT_ADMIN_ID
     fi
     if [[ ! "${SALES_BOT_TOKEN:-}" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
         err "Sales bot token выглядит некорректно"
@@ -14956,6 +16261,8 @@ install_sales_bot_service() {
 Description=Yurich VPN Sales Telegram Bot
 After=network-online.target caddy.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14963,6 +16270,13 @@ ExecStart=/bin/bash ${script_path} sales-bot
 Restart=always
 RestartSec=10
 User=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+KeyringMode=private
+LimitNOFILE=65536
+TasksMax=512
+TimeoutStopSec=20s
 
 [Install]
 WantedBy=multi-user.target
@@ -14984,11 +16298,8 @@ EOF
 
 cmd_sales_bot_apply_defaults() {
     local existing_sales_token=""
-    if [[ -f "$CONFIG_FILE" ]]; then
-        existing_sales_token=$(bash -c 'source "$1" >/dev/null 2>&1; printf "%s" "${SALES_BOT_TOKEN:-}"' _ "$CONFIG_FILE" 2>/dev/null || true)
-    fi
-
     load_config 2>/dev/null || true
+    existing_sales_token="${SALES_BOT_TOKEN:-}"
     if [[ -z "${SALES_BOT_TOKEN:-}" && -n "$existing_sales_token" ]]; then
         SALES_BOT_TOKEN="$existing_sales_token"
     fi
@@ -15036,10 +16347,10 @@ tg_reply_file_tail() {
     local chat_id="$1"
     local title="$2"
     local file="$3"
-    local lines="${4:-60}"
+    local tail_lines="${4:-60}"
     local content
     if [[ -f "$file" ]]; then
-        content=$(tail -n "$lines" "$file" 2>/dev/null || true)
+        content=$(tail -n "$tail_lines" "$file" 2>/dev/null || true)
     else
         content="файл не найден: ${file}"
     fi
@@ -16112,21 +17423,24 @@ try:
     for u in data.get('result', []):
         uid = u.get('update_id', 0)
         msg = u.get('message', {})
-        chat_id = msg.get('chat', {}).get('id', '')
+        chat = msg.get('chat', {})
+        chat_id = chat.get('id', '')
+        chat_type = chat.get('type', '')
         from_id = msg.get('from', {}).get('id', '')
         text = str(msg.get('text') or '')
         if text:
             text = text.replace('|', ' ').replace('\\r', ' ').replace('\\n', ' ')
-            print(f'{uid}|{chat_id}|{from_id}|{text}')
+            print(f'{uid}|{chat_id}|{chat_type}|{from_id}|{text}')
 except: pass
 " 2>/dev/null || echo "")
 
-        while IFS='|' read -r update_id chat_id from_id text; do
+        while IFS='|' read -r update_id chat_id chat_type from_id text; do
             [[ -z "${update_id}" ]] && continue
             # Защита от переполнения
-            if [[ "${update_id}" =~ ^[0-9]+$ ]] && [[ ${update_id} -lt 2147483647 ]]; then
+            if is_canonical_uint_in_range "${update_id}" 0 2147483646; then
                 offset=$(( update_id + 1 ))
             fi
+            [[ "$chat_type" == "private" ]] || continue
             tg_handle_command "${chat_id}" "${from_id}" "${text}"
         done <<< "${updates}"
 
@@ -16161,6 +17475,8 @@ install_bot_service() {
 Description=Yurich Panel Telegram Bot
 After=network-online.target caddy.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -16168,6 +17484,13 @@ ExecStart=/bin/bash ${script_path} bot
 Restart=always
 RestartSec=10
 User=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+KeyringMode=private
+LimitNOFILE=65536
+TasksMax=512
+TimeoutStopSec=20s
 
 [Install]
 WantedBy=multi-user.target
@@ -16249,6 +17572,7 @@ DNS_LEGACY_GATEWAY_SERVICE="/etc/systemd/system/aurum-dns-gateway.service"
 DNS_DEFAULT_GATEWAY_IP="10.0.0.1"
 DNS_DEFAULT_VPN_CIDRS="10.0.0.0/24"
 DNS_STATS_FILE="/etc/naiveproxy/dns_stats"
+DNS_LAST_CONFIG_BACKUP=""
 
 is_valid_ipv4() {
     local ip="$1" part
@@ -16256,7 +17580,9 @@ is_valid_ipv4() {
     [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
     IFS='.' read -r -a oct <<< "$ip"
     for part in "${oct[@]}"; do
-        [[ "$part" =~ ^[0-9]+$ && "$part" -ge 0 && "$part" -le 255 ]] || return 1
+        [[ "$part" =~ ^[0-9]+$ ]] || return 1
+        [[ "$part" == "0" || "$part" != 0* ]] || return 1
+        (( 10#$part <= 255 )) || return 1
     done
 }
 
@@ -16267,12 +17593,43 @@ is_valid_cidr4() {
     ip="${cidr%/*}"
     IFS='.' read -r -a oct <<< "$ip"
     for part in "${oct[@]}"; do
-        [[ "$part" =~ ^[0-9]+$ && "$part" -ge 0 && "$part" -le 255 ]] || return 1
+        [[ "$part" =~ ^[0-9]+$ ]] || return 1
+        [[ "$part" == "0" || "$part" != 0* ]] || return 1
+        (( 10#$part <= 255 )) || return 1
     done
 }
 
+is_private_vpn_ipv4() {
+    local ip="$1" a b
+    is_valid_ipv4 "$ip" || return 1
+    IFS='.' read -r a b _ _ <<< "$ip"
+    case "$a" in
+        10) return 0 ;;
+        172) (( 10#$b >= 16 && 10#$b <= 31 )) ;;
+        192) (( 10#$b == 168 )) ;;
+        100) (( 10#$b >= 64 && 10#$b <= 127 )) ;;
+        127) [[ "$ip" == "127.0.0.1" ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+is_allowed_vpn_cidr4() {
+    local cidr="$1" ip mask a b
+    is_valid_cidr4 "$cidr" || return 1
+    ip="${cidr%/*}"
+    mask="${cidr#*/}"
+    IFS='.' read -r a b _ _ <<< "$ip"
+    case "$a" in
+        10) (( mask >= 8 )) ;;
+        172) (( 10#$b >= 16 && 10#$b <= 31 && mask >= 12 )) ;;
+        192) (( 10#$b == 168 && mask >= 16 )) ;;
+        100) (( 10#$b >= 64 && 10#$b <= 127 && mask >= 10 )) ;;
+        *) [[ "${YURICH_DNS_ALLOW_PUBLIC_CIDRS:-0}" == "1" && "$mask" -ge 24 ]] ;;
+    esac
+}
+
 normalize_cidr_list() {
-    local raw="$1" item out=""
+    local raw="$1" item out="" count=0
     local -a cidrs
     raw="${raw// /}"
     IFS=',' read -ra cidrs <<< "$raw"
@@ -16282,8 +17639,13 @@ normalize_cidr_list() {
             err "Некорректная VPN CIDR подсеть: $item"
             return 1
         fi
-        if [[ "${item#*/}" == "0" ]]; then
-            err "Open resolver запрещён: маска /0 использовать нельзя"
+        if ! is_allowed_vpn_cidr4 "$item"; then
+            err "Небезопасная VPN CIDR: $item. Разрешены private/CGNAT сети; публичные требуют YURICH_DNS_ALLOW_PUBLIC_CIDRS=1 и /24 или уже."
+            return 1
+        fi
+        count=$((count + 1))
+        if (( count > 32 )); then
+            err "Слишком много VPN CIDR (максимум 32)"
             return 1
         fi
         out="${out},${item}"
@@ -16363,6 +17725,11 @@ remove_managed_dns_gateway() {
 prepare_unbound_gateway_ip() {
     local gateway_ip="$1"
     local ans
+
+    if ! is_private_vpn_ipv4 "$gateway_ip" && [[ "${YURICH_DNS_ALLOW_PUBLIC_GATEWAY:-0}" != "1" ]]; then
+        err "Публичный DNS gateway запрещён без YURICH_DNS_ALLOW_PUBLIC_GATEWAY=1: $gateway_ip"
+        return 1
+    fi
 
     if ip_is_on_server "$gateway_ip"; then
         UNBOUND_MANAGED_GATEWAY="0"
@@ -16476,17 +17843,25 @@ dns_filter_state_value() {
 
 generate_dns_blocklist_conf() {
     local out_file="$1" max_domains="${UNBOUND_FILTER_MAX_DOMAINS:-$DNS_FILTER_MAX_DOMAINS_DEFAULT}" urls="${UNBOUND_FILTER_URLS:-$DNS_FILTER_URLS_DEFAULT}"
-    local workdir source_file idx=0 url
-    [[ "$max_domains" =~ ^[0-9]+$ ]] || max_domains="$DNS_FILTER_MAX_DOMAINS_DEFAULT"
-    (( max_domains < 1000 )) && max_domains=1000
-    (( max_domains > 500000 )) && max_domains=500000
+    local workdir source_file source_size idx=0 url max_source_bytes=26214400
+    is_canonical_uint_in_range "$max_domains" 1000 500000 || max_domains="$DNS_FILTER_MAX_DOMAINS_DEFAULT"
+    if ! import_https_url_list_is_safe "$urls"; then
+        warn "UNBOUND_FILTER_URLS содержит небезопасные URL, использую встроенный список"
+        urls="$DNS_FILTER_URLS_DEFAULT"
+    fi
     workdir=$(mktemp -d /tmp/yurich-dns-filter-XXXXXX)
     ensure_dns_allowlist_file
     for url in $urls; do
         idx=$((idx + 1))
         source_file="${workdir}/source-${idx}.txt"
-        if ! curl -fsSL --connect-timeout 10 --max-time 45 "$url" -o "$source_file"; then
+        if ! curl -fsSL --connect-timeout 10 --max-time 45 --max-filesize "$max_source_bytes" -o "$source_file" -- "$url"; then
             warn "DNS filter source недоступен: $url"
+            rm -f "$source_file"
+            continue
+        fi
+        source_size=$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)
+        if [[ ! "$source_size" =~ ^[0-9]+$ || "$source_size" -gt "$max_source_bytes" ]]; then
+            warn "DNS filter source превышает лимит 25 MiB: $url"
             rm -f "$source_file"
         fi
     done
@@ -16581,17 +17956,18 @@ def allowed(domain: str) -> bool:
 domains = set()
 for source in sources:
     try:
-        lines = source.read_text(encoding="utf-8", errors="ignore").splitlines()
+        lines = source.open("r", encoding="utf-8", errors="ignore")
     except OSError:
         continue
-    for line in lines:
-        for domain in extract_domains(line):
-            if valid_domain(domain) and not allowed(domain):
-                domains.add(domain)
-                if len(domains) >= limit:
-                    break
-        if len(domains) >= limit:
-            break
+    with lines:
+        for line in lines:
+            for domain in extract_domains(line):
+                if valid_domain(domain) and not allowed(domain):
+                    domains.add(domain)
+                    if len(domains) >= limit:
+                        break
+            if len(domains) >= limit:
+                break
     if len(domains) >= limit:
         break
 
@@ -16685,8 +18061,8 @@ EOF
 }
 
 dns_monitor_resolve_ok() {
-    local domain="${1:-cloudflare.com}" server="${2:-127.0.0.1}" attempt
-    for attempt in 1 2 3; do
+    local domain="${1:-cloudflare.com}" server="${2:-127.0.0.1}" _attempt
+    for _attempt in 1 2 3; do
         dig @"$server" "$domain" A +time=3 +tries=1 >/dev/null 2>&1 && return 0
         sleep 2
     done
@@ -16694,8 +18070,8 @@ dns_monitor_resolve_ok() {
 }
 
 dns_monitor_resolve_tcp_ok() {
-    local domain="${1:-cloudflare.com}" server="${2:-127.0.0.1}" attempt
-    for attempt in 1 2 3; do
+    local domain="${1:-cloudflare.com}" server="${2:-127.0.0.1}" _attempt
+    for _attempt in 1 2 3; do
         dig @"$server" "$domain" A +tcp +time=3 +tries=1 >/dev/null 2>&1 && return 0
         sleep 2
     done
@@ -16709,9 +18085,9 @@ dns_monitor_query_time_ms() {
 }
 
 dns_monitor_block_ok() {
-    local domain="$1" attempt
+    local domain="$1" _attempt
     [[ -n "$domain" ]] || return 1
-    for attempt in 1 2 3; do
+    for _attempt in 1 2 3; do
         if dig @127.0.0.1 "$domain" A +time=3 +tries=1 2>/dev/null | grep -q "status: NXDOMAIN"; then
             return 0
         fi
@@ -16724,8 +18100,8 @@ cmd_dns_monitor() {
     load_config
     local failed=0 status count updated_at message public_53 first_blocked gateway_ip gateway_re fail_details=""
     local domain ms latency_warn=0 latency_warn_details="" dns_latency_warn_ms="${DNS_MONITOR_LATENCY_WARN_MS:-250}" dns_latency_fail_ms="${DNS_MONITOR_LATENCY_FAIL_MS:-1500}"
-    [[ "$dns_latency_warn_ms" =~ ^[0-9]+$ ]] || dns_latency_warn_ms=250
-    [[ "$dns_latency_fail_ms" =~ ^[0-9]+$ ]] || dns_latency_fail_ms=1500
+    is_canonical_uint_in_range "$dns_latency_warn_ms" 1 600000 || dns_latency_warn_ms=250
+    is_canonical_uint_in_range "$dns_latency_fail_ms" 1 600000 || dns_latency_fail_ms=1500
     if systemctl is-active --quiet unbound 2>/dev/null; then
         ok "Unbound active"
     else
@@ -16742,7 +18118,7 @@ cmd_dns_monitor() {
     fi
     for domain in cloudflare.com google.com telegram.org github.com; do
         if ms=$(dns_monitor_query_time_ms "$domain"); then
-            if [[ "$ms" =~ ^[0-9]+$ ]]; then
+            if is_canonical_uint_in_range "$ms" 0 600000; then
                 if (( ms >= dns_latency_fail_ms )); then
                     err "DNS latency failed: ${domain} ${ms}ms"
                     failed=$((failed + 1))
@@ -17020,8 +18396,16 @@ cmd_dns_latency_report() {
 }
 
 write_unbound_config() {
+    local candidate
     mkdir -p "$(dirname "$DNS_CONF")" /var/lib/unbound
     dns_config_backup "$DNS_CONF"
+    if [[ -f "$DNS_CONF" ]]; then
+        DNS_LAST_CONFIG_BACKUP=$(mktemp /tmp/yurich-unbound-config.XXXXXX)
+        cp -a "$DNS_CONF" "$DNS_LAST_CONFIG_BACKUP"
+    else
+        DNS_LAST_CONFIG_BACKUP="absent"
+    fi
+    candidate=$(mktemp "$(dirname "$DNS_CONF")/.yurich-dns.conf.XXXXXX")
 
     local vpn_enabled="${UNBOUND_VPN_ENABLED:-0}"
     local vpn_cidrs="${UNBOUND_VPN_CIDRS:-$DNS_DEFAULT_VPN_CIDRS}"
@@ -17029,7 +18413,7 @@ write_unbound_config() {
     local cidr
     local -a cidrs
 
-    cat > "$DNS_CONF" <<EOF
+    cat > "$candidate" <<EOF
 server:
     # DNS (Unbound): local recursive resolver.
     # Never bind 0.0.0.0. VPN access is bound to the gateway IP only.
@@ -17037,10 +18421,10 @@ server:
 EOF
 
     if [[ "$vpn_enabled" == "1" && -n "$gateway_ip" ]]; then
-        printf '    interface: %s\n' "$gateway_ip" >> "$DNS_CONF"
+        printf '    interface: %s\n' "$gateway_ip" >> "$candidate"
     fi
 
-    cat >> "$DNS_CONF" <<'EOF'
+    cat >> "$candidate" <<'EOF'
 
     port: 53
     do-ip4: yes
@@ -17056,11 +18440,11 @@ EOF
     if [[ "$vpn_enabled" == "1" ]]; then
         IFS=',' read -ra cidrs <<< "$vpn_cidrs"
         for cidr in "${cidrs[@]}"; do
-            [[ -n "$cidr" ]] && printf '    access-control: %s allow\n' "$cidr" >> "$DNS_CONF"
+            [[ -n "$cidr" ]] && printf '    access-control: %s allow\n' "$cidr" >> "$candidate"
         done
     fi
 
-    cat >> "$DNS_CONF" <<'EOF'
+    cat >> "$candidate" <<'EOF'
 
     # Privacy and hardening.
     hide-identity: yes
@@ -17083,6 +18467,7 @@ EOF
     prefetch-key: yes
     num-threads: 2
     so-rcvbuf: 256k
+    ip-ratelimit: 200
     msg-cache-size: 64m
     rrset-cache-size: 128m
     cache-min-ttl: 300
@@ -17096,14 +18481,28 @@ EOF
     # Recursive mode: no Google/Cloudflare forwarders here.
     # Unbound queries root and authoritative DNS servers directly.
 EOF
+    install -m 644 "$candidate" "$DNS_CONF"
+    rm -f "$candidate"
 
     chown -R unbound:unbound /var/lib/unbound 2>/dev/null || true
 }
 
+rollback_unbound_config() {
+    if [[ "$DNS_LAST_CONFIG_BACKUP" == "absent" ]]; then
+        rm -f "$DNS_CONF"
+    elif [[ -n "$DNS_LAST_CONFIG_BACKUP" && -f "$DNS_LAST_CONFIG_BACKUP" ]]; then
+        install -m 644 "$DNS_LAST_CONFIG_BACKUP" "$DNS_CONF"
+    fi
+    [[ -n "$DNS_LAST_CONFIG_BACKUP" && "$DNS_LAST_CONFIG_BACKUP" == /tmp/yurich-unbound-config.* ]] && rm -f "$DNS_LAST_CONFIG_BACKUP"
+    DNS_LAST_CONFIG_BACKUP=""
+    systemctl restart unbound >/dev/null 2>&1 || true
+}
+
 restart_unbound_checked() {
-    if ! unbound-checkconf "$DNS_CONF" >/dev/null 2>&1; then
+    if ! unbound-checkconf >/dev/null 2>&1; then
         err "Ошибка конфига Unbound:"
-        unbound-checkconf "$DNS_CONF" || true
+        unbound-checkconf || true
+        rollback_unbound_config
         return 1
     fi
     systemctl enable unbound --quiet
@@ -17113,8 +18512,11 @@ restart_unbound_checked() {
     if ! systemctl is-active --quiet unbound; then
         err "Unbound не запустился!"
         journalctl -u unbound -n 20 --no-pager
+        rollback_unbound_config
         return 1
     fi
+    [[ -n "$DNS_LAST_CONFIG_BACKUP" && "$DNS_LAST_CONFIG_BACKUP" == /tmp/yurich-unbound-config.* ]] && rm -f "$DNS_LAST_CONFIG_BACKUP"
+    DNS_LAST_CONFIG_BACKUP=""
 }
 
 install_yurich_dns_cli_commands() {
@@ -17657,17 +19059,60 @@ cmd_update() {
 
     backup_config
 
-    local tmp_caddy_dir tmp_caddy
+    local tmp_caddy_dir tmp_caddy backup_bin="" staging_bin="" restore_stage=""
     tmp_caddy_dir=$(mktemp -d /tmp/naiveproxy_caddy_XXXXXX)
     tmp_caddy="${tmp_caddy_dir}/caddy"
-    trap 'rm -rf "${tmp_caddy_dir:-}" 2>/dev/null' RETURN
+    trap 'rm -rf "${tmp_caddy_dir:-}" 2>/dev/null; rm -f "${backup_bin:-}" "${staging_bin:-}" "${restore_stage:-}" 2>/dev/null; trap - RETURN' RETURN
 
-    build_caddy "$tmp_caddy"
-    install -m 755 "$tmp_caddy" "$CADDY_BIN"
-    systemctl restart caddy
+    build_caddy "$tmp_caddy" || return 1
+    if ! "$tmp_caddy" validate --config "$CADDYFILE" >/dev/null 2>&1; then
+        err "Новый Caddy не принимает текущий Caddyfile. Обновление отменено."
+        "$tmp_caddy" validate --config "$CADDYFILE" || true
+        return 1
+    fi
+    if ! "$tmp_caddy" list-modules 2>/dev/null | grep -Fxq 'http.handlers.forward_proxy'; then
+        err "Новый Caddy не содержит forward_proxy. Обновление отменено."
+        return 1
+    fi
+
+    backup_bin=$(mktemp "${CADDY_BIN}.rollback.XXXXXX") || { err "Не удалось создать rollback-файл Caddy"; return 1; }
+    if ! cp -p -- "$CADDY_BIN" "$backup_bin"; then
+        err "Не удалось сохранить текущий бинарник Caddy"
+        return 1
+    fi
+    staging_bin=$(mktemp "${CADDY_BIN}.update.XXXXXX") || { err "Не удалось создать staging-файл Caddy"; return 1; }
+    if ! install -m 755 "$tmp_caddy" "$staging_bin" || ! mv -f -- "$staging_bin" "$CADDY_BIN"; then
+        err "Не удалось атомарно заменить Caddy"
+        return 1
+    fi
+    staging_bin=""
+
+    if ! systemctl restart caddy \
+        || ! timeout 20s bash -c 'until systemctl is-active --quiet caddy; do sleep 1; done'; then
+        err "Новый Caddy не запустился. Возвращаю предыдущий бинарник."
+        restore_stage=$(mktemp "${CADDY_BIN}.restore.XXXXXX") || true
+        if [[ -n "$restore_stage" ]] \
+            && install -m 755 "$backup_bin" "$restore_stage" \
+            && mv -f -- "$restore_stage" "$CADDY_BIN"; then
+            restore_stage=""
+            systemctl restart caddy || true
+            if systemctl is-active --quiet caddy; then
+                ok "Rollback Caddy выполнен, рабочая версия восстановлена"
+            else
+                err "Rollback-файл возвращён, но Caddy не active. Проверь journalctl -u caddy"
+            fi
+        else
+            err "Автоматический rollback Caddy не удался. Бэкап: $backup_bin"
+            backup_bin=""
+        fi
+        journalctl -u caddy -n 40 --no-pager 2>/dev/null || true
+        return 1
+    fi
 
     local new_ver
     new_ver=$("$CADDY_BIN" version 2>/dev/null | head -1 || echo "unknown")
+    rm -f "$backup_bin"
+    backup_bin=""
     ok "Обновлено: $old_ver → $new_ver"
     load_config; tg_alert_updated "$old_ver" "$new_ver"
 }
@@ -17751,30 +19196,35 @@ show_menu() {
     clear
     load_config
 
-    local status_str="${YELLOW}● $(t "не установлен" "not installed")${RESET}"
+    local status_str
+    status_str="${YELLOW}● $(t "не установлен" "not installed")${RESET}"
     if check_installed; then
         systemctl is-active --quiet caddy 2>/dev/null \
             && status_str="${GREEN}● $(t "работает" "running")${RESET}" \
             || status_str="${RED}● $(t "остановлен" "stopped")${RESET}"
     fi
 
-    local tg_str="${RED}$(t "не настроен" "not configured")${RESET}"
+    local tg_str
+    tg_str="${RED}$(t "не настроен" "not configured")${RESET}"
     [[ -n "${TG_TOKEN:-}" ]] && tg_str="${GREEN}$(t "подключён" "connected")${RESET}"
 
     hr
     echo -e "${BOLD}${CYAN}   Yurich Panel v${VERSION}${RESET}  ${DIM}[$(t "РУС" "ENG")]${RESET}"
     echo -e "   $(t "Статус" "Status"): ${status_str}  |  $(t "Домен" "Domain"): ${CYAN}${DOMAIN:-$(t "не задан" "not set")}${RESET}"
-    local ssh_str="${YELLOW}$(t "не настроен" "not configured")${RESET}"
+    local ssh_str
+    ssh_str="${YELLOW}$(t "не настроен" "not configured")${RESET}"
     [[ -f "$SSH_HARDENING_DONE" ]] && ssh_str="${GREEN}$(grep SSH_PORT "$SSH_HARDENING_DONE" 2>/dev/null | cut -d= -f2)${RESET}"
     echo -e "   Telegram: ${tg_str}  |  $(t "Юзеров" "Users"): $(get_users | wc -l)  |  $(t "SSH порт" "SSH port"): ${ssh_str}"
-    local hysteria_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
+    local hysteria_str
+    hysteria_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
     if [[ -f "$HYSTERIA_CONFIG" || -x "$HYSTERIA_BIN" ]]; then
         systemctl is-active --quiet hysteria 2>/dev/null \
             && hysteria_str="${GREEN}UDP/${HYSTERIA_PORT:-8443}${RESET}" \
             || hysteria_str="${RED}$(t "остановлен" "stopped")${RESET}"
     fi
     echo -e "   Hysteria 2: ${hysteria_str}"
-    local warp_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
+    local warp_str
+    warp_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
     if command -v warp-cli &>/dev/null; then
         case "${WARP_MODE:-off}" in
             proxy) warp_str="${GREEN}proxy 127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}${RESET}" ;;
@@ -17783,7 +19233,8 @@ show_menu() {
         esac
     fi
     echo -e "   WARP: ${warp_str}"
-    local xray_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
+    local xray_str
+    xray_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
     if [[ -x "$XRAY_BIN" || -f "$XRAY_CONFIG" ]]; then
         systemctl is-active --quiet xray 2>/dev/null \
             && xray_str="${GREEN}active${RESET}" \
@@ -17791,7 +19242,8 @@ show_menu() {
         [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]] && xray_str="${xray_str} ${CYAN}443-fallback${RESET}"
     fi
     echo -e "   Xray Modern: ${xray_str}"
-    local unbound_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
+    local unbound_str
+    unbound_str="${YELLOW}$(t "не установлен" "not installed")${RESET}"
     if command -v unbound &>/dev/null; then
         if systemctl is-active --quiet unbound 2>/dev/null; then
             unbound_str="${GREEN}active${RESET} ${CYAN}${UNBOUND_GATEWAY_IP:-127.0.0.1}${RESET}"
@@ -17800,7 +19252,8 @@ show_menu() {
         fi
     fi
     echo -e "   DNS (Unbound): ${unbound_str}"
-    local device_str="${YELLOW}$(t "выкл" "off")${RESET}"
+    local device_str
+    device_str="${YELLOW}$(t "выкл" "off")${RESET}"
     if [[ "${DEVICE_LIMIT_ENABLED:-0}" == "1" ]]; then
         device_str="${GREEN}${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}/${DEVICE_WINDOW_HOURS:-$DEVICE_WINDOW_HOURS_DEFAULT}ч ${DEVICE_LIMIT_MODE:-alert}${RESET}"
     fi

@@ -17,7 +17,8 @@ case "$PROFILE" in
 esac
 
 [[ $EUID -eq 0 ]] || { echo "Run as root" >&2; exit 1; }
-for command_name in apt-get curl sha256sum python3 systemctl; do
+for command_name in apt-get curl sha256sum python3 systemctl timeout tar awk grep install \
+    jq ss sshd ufw caddy haproxy xray unbound-checkconf augenrules sysctl flock; do
     command -v "$command_name" >/dev/null || { echo "Missing: $command_name" >&2; exit 1; }
 done
 
@@ -37,6 +38,10 @@ except ValueError as exc:
 PY
 fi
 
+install -d -m 0755 /run/lock
+exec 9>/run/lock/yurich-security-rollout.lock
+flock -n 9 || { echo "Another security rollout is already running" >&2; exit 1; }
+
 umask 077
 timestamp=$(date +%Y%m%d_%H%M%S)
 backup_dir="/etc/naiveproxy/backups/security-rollout-${timestamp}"
@@ -47,11 +52,20 @@ backup_file() {
     [[ ! -e "$source_path" ]] || cp -a "$source_path" "$backup_dir/$target_name"
 }
 
+restore_file_or_remove() {
+    local target_path="$1" backup_path="$2"
+    rm -f -- "$target_path"
+    [[ ! -e "$backup_path" ]] || cp -a -- "$backup_path" "$target_path"
+}
+
 backup_file /etc/naiveproxy/naive.conf naive.conf.before
 backup_file /etc/naiveproxy/xray-compat-users.conf xray-compat-users.before
 backup_file /etc/caddy/Caddyfile Caddyfile.before
 backup_file /etc/xray/config.json xray-config.before
 backup_file /etc/haproxy/haproxy.cfg haproxy.cfg.before
+backup_file /etc/systemd/system/caddy.service caddy.service.before
+backup_file /etc/systemd/system/xray.service xray.service.before
+backup_file /etc/systemd/system/haproxy.service haproxy.service.before
 backup_file /usr/local/bin/hysteria hysteria.before
 tar -C /etc/systemd/system -czf "$backup_dir/systemd-dropins.before.tar.gz" \
     caddy.service.d xray.service.d hysteria.service.d haproxy.service.d unbound.service.d 2>/dev/null || true
@@ -80,8 +94,12 @@ install -m 755 "$temp_dir/hysteria" /usr/local/bin/hysteria.next
 mv -f /usr/local/bin/hysteria.next /usr/local/bin/hysteria
 if ! systemctl restart hysteria \
     || ! timeout 20s bash -c 'until systemctl is-active --quiet hysteria; do sleep 1; done'; then
-    cp -a "$backup_dir/hysteria.before" /usr/local/bin/hysteria
-    systemctl restart hysteria || true
+    restore_file_or_remove /usr/local/bin/hysteria "$backup_dir/hysteria.before"
+    if [[ -e "$backup_dir/hysteria.before" ]]; then
+        systemctl restart hysteria || true
+    else
+        systemctl stop hysteria || true
+    fi
     echo "HYSTERIA_ROLLBACK backup=$backup_dir" >&2
     exit 1
 fi
@@ -141,22 +159,22 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictRealtime=true'
-for service_name in xray haproxy unbound; do
-    install -d -m 0755 "/etc/systemd/system/${service_name}.service.d"
-    printf '%s\nProtectHome=true\n' "$common_hardening" \
-        > "/etc/systemd/system/${service_name}.service.d/90-yurich-hardening.conf"
-done
-install -d -m 0755 /etc/systemd/system/caddy.service.d /etc/systemd/system/hysteria.service.d
-printf '%s\nProtectHome=false\n' "$common_hardening" \
-    > /etc/systemd/system/caddy.service.d/90-yurich-hardening.conf
-printf '%s\nProtectHome=read-only\n' "$common_hardening" \
-    > /etc/systemd/system/hysteria.service.d/90-yurich-hardening.conf
-chmod 0644 /etc/systemd/system/{caddy,xray,hysteria,haproxy,unbound}.service.d/90-yurich-hardening.conf
-systemctl daemon-reload
 for service_name in caddy xray hysteria haproxy unbound; do
+    dropin_dir="/etc/systemd/system/${service_name}.service.d"
+    dropin_path="${dropin_dir}/90-yurich-hardening.conf"
+    backup_file "$dropin_path" "${service_name}.hardening.before"
+    install -d -m 0755 "$dropin_dir"
+    case "$service_name" in
+        caddy) protect_home=false ;;
+        hysteria) protect_home=read-only ;;
+        *) protect_home=true ;;
+    esac
+    printf '%s\nProtectHome=%s\n' "$common_hardening" "$protect_home" > "$dropin_path"
+    chmod 0644 "$dropin_path"
+    systemctl daemon-reload
     if ! systemctl restart "$service_name" \
         || ! timeout 20s bash -c "until systemctl is-active --quiet '$service_name'; do sleep 1; done"; then
-        rm -f "/etc/systemd/system/${service_name}.service.d/90-yurich-hardening.conf"
+        restore_file_or_remove "$dropin_path" "$backup_dir/${service_name}.hardening.before"
         systemctl daemon-reload
         systemctl restart "$service_name" || true
         echo "SYSTEMD_ROLLBACK service=$service_name backup=$backup_dir" >&2
@@ -192,18 +210,40 @@ PY
 chmod 600 /etc/naiveproxy/naive.conf
 : > /etc/naiveproxy/xray-compat-users.conf
 chmod 600 /etc/naiveproxy/xray-compat-users.conf
-bash /usr/local/bin/yurich-panel.sh safe-apply
-bash /usr/local/bin/yurich-panel.sh xray-rebuild
 
-if [[ "$PROFILE" == xhttp-only ]]; then
-    jq -e '[.inbounds[].tag] == ["vless-reality", "vless-xhttp"]' /etc/xray/config.json >/dev/null
-    grep -qE '@xhttp|127\.0\.0\.1:8448' /etc/caddy/Caddyfile
-else
-    jq -e '[.inbounds[].tag] == ["vless-reality"]' /etc/xray/config.json >/dev/null
-    ! grep -qE '@xhttp|127\.0\.0\.1:8448' /etc/caddy/Caddyfile
+validate_protocol_configs() {
+    if [[ "$PROFILE" == xhttp-only ]]; then
+        jq -e '[.inbounds[].tag] == ["vless-reality", "vless-xhttp"]' /etc/xray/config.json >/dev/null \
+            && grep -qE '@xhttp|127\.0\.0\.1:8448' /etc/caddy/Caddyfile \
+            || return 1
+    else
+        jq -e '[.inbounds[].tag] == ["vless-reality"]' /etc/xray/config.json >/dev/null \
+            && ! grep -qE '@xhttp|127\.0\.0\.1:8448' /etc/caddy/Caddyfile \
+            || return 1
+    fi
+    ! grep -qE 'xray_reality_mobile_alt|www\.cloudflare\.com|8445' /etc/haproxy/haproxy.cfg \
+        && ss -ltnH | awk '$4 == "127.0.0.1:7443" { found=1 } END { exit found ? 0 : 1 }'
+}
+
+if ! bash /usr/local/bin/yurich-panel.sh safe-apply \
+    || ! bash /usr/local/bin/yurich-panel.sh xray-rebuild \
+    || ! validate_protocol_configs; then
+    restore_file_or_remove /etc/naiveproxy/naive.conf "$backup_dir/naive.conf.before"
+    restore_file_or_remove /etc/naiveproxy/xray-compat-users.conf "$backup_dir/xray-compat-users.before"
+    restore_file_or_remove /etc/caddy/Caddyfile "$backup_dir/Caddyfile.before"
+    restore_file_or_remove /etc/xray/config.json "$backup_dir/xray-config.before"
+    restore_file_or_remove /etc/haproxy/haproxy.cfg "$backup_dir/haproxy.cfg.before"
+    restore_file_or_remove /etc/systemd/system/caddy.service "$backup_dir/caddy.service.before"
+    restore_file_or_remove /etc/systemd/system/xray.service "$backup_dir/xray.service.before"
+    restore_file_or_remove /etc/systemd/system/haproxy.service "$backup_dir/haproxy.service.before"
+    systemctl daemon-reload
+    caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+    xray run -test -config /etc/xray/config.json >/dev/null 2>&1 || true
+    haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1 || true
+    systemctl restart caddy xray haproxy >/dev/null 2>&1 || true
+    echo "PROTOCOL_CONFIG_ROLLBACK backup=$backup_dir" >&2
+    exit 1
 fi
-! grep -qE 'xray_reality_mobile_alt|www\.cloudflare\.com|8445' /etc/haproxy/haproxy.cfg
-ss -ltnH | awk '{print $4}' | grep -qx '127.0.0.1:7443'
 
 echo "[$LABEL 7/7] firewall and verification"
 ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
@@ -211,8 +251,7 @@ if (( LOCK_EDGE_SSH )); then
     if ! ufw status | grep -Eq "^${ssh_port}/tcp[[:space:]]+ALLOW[[:space:]]+${MASTER_IP//./\\.}"; then
         ufw allow from "$MASTER_IP" to any port "$ssh_port" proto tcp comment 'Yurich master SSH' >/dev/null
     fi
-    ufw --force delete allow "${ssh_port}/tcp" >/dev/null 2>&1 || true
-    ufw --force delete limit "${ssh_port}/tcp" >/dev/null 2>&1 || true
+    echo "SSH master allow rule verified; broad SSH rules are preserved for a two-session manual cutover."
 fi
 hysteria_port=$(awk -F= '$1 == "HYSTERIA_PORT" {gsub(/[^0-9]/, "", $2); print $2; exit}' \
     /etc/naiveproxy/naive.conf)
@@ -231,4 +270,13 @@ unbound-checkconf >/dev/null
 hysteria version 2>&1 | grep -q 'Version:.*v2.10.0'
 [[ $(apt list --upgradable 2>/dev/null | tail -n +2 | wc -l) -eq 0 ]]
 
-echo "ROLLOUT_OK label=$LABEL profile=$PROFILE backup=$backup_dir hysteria=v2.10.0 ssh_port=$ssh_port"
+test_user="${YURICH_ROLLOUT_TEST_USER:-}"
+if [[ -z "$test_user" && -f /etc/naiveproxy/users.conf ]]; then
+    test_user=$(awk -F: 'NF >= 2 && $1 != "" {print $1; exit}' /etc/naiveproxy/users.conf)
+fi
+[[ -n "$test_user" ]] || { echo "No subscription user available for data-plane verification" >&2; exit 1; }
+bash /usr/local/bin/yurich-panel.sh health
+bash /usr/local/bin/yurich-panel.sh protocol-validate
+bash /usr/local/bin/yurich-panel.sh protocol-benchmark "$test_user" 3
+
+echo "ROLLOUT_OK label=$LABEL profile=$PROFILE backup=$backup_dir hysteria=v2.10.0 ssh_port=$ssh_port test_user=$test_user"

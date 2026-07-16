@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+query_status() {
+    local domain="$1"
+    dig @127.0.0.1 "$domain" A +time=4 +tries=2 2>/dev/null \
+        | awk -F'status: ' '/status:/ {split($2,a,","); print a[1]; exit}'
+}
+
 echo "===== dig google.com ====="
 dig @127.0.0.1 google.com +time=3 +tries=1
 echo
@@ -8,7 +14,12 @@ echo "===== dig cloudflare.com ====="
 dig @127.0.0.1 cloudflare.com +time=3 +tries=1
 echo
 echo "===== DNSSEC valid test ====="
-dig @127.0.0.1 sigok.verteiltesysteme.net A +time=4 +tries=1
+valid_status=$(query_status sigok.verteiltesysteme.net || true)
+echo "status: ${valid_status:-no response}"
+[[ "$valid_status" == "NOERROR" ]] || { echo "DNSSEC valid-domain test failed" >&2; exit 1; }
 echo
 echo "===== DNSSEC invalid test should SERVFAIL ====="
-dig @127.0.0.1 dnssec-failed.org A +time=4 +tries=1 || true
+invalid_status=$(query_status dnssec-failed.org || true)
+echo "status: ${invalid_status:-no response}"
+[[ "$invalid_status" == "SERVFAIL" ]] || { echo "DNSSEC invalid-domain test failed" >&2; exit 1; }
+echo "DNSSEC validation: OK"

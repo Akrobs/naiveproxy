@@ -5,6 +5,7 @@
 .vscode/
 
 # Backups and temporary files
+_audit-backups/
 *.bak
 *.backup
 *.old

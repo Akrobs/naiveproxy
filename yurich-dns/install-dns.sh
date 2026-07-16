@@ -15,6 +15,27 @@ LEGACY_GATEWAY_SERVICE="/etc/systemd/system/aurum-dns-gateway.service"
 DEFAULT_GATEWAY="10.0.0.1"
 DEFAULT_CIDRS="10.0.0.0/24"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROLLBACK_DIR=""
+ROLLBACK_ARMED=0
+ROLLBACK_CIDRS=""
+ROLLBACK_PATHS=(
+    "$CONF"
+    "$LEGACY_CONF"
+    "$LEGACY_NAIVE_CONF"
+    "$LEGACY_BLOCKLIST"
+    "$LEGACY_WHITELIST"
+    "$ENV_FILE"
+    "$LEGACY_ENV_FILE"
+    "$NO_STUB"
+    "$GATEWAY_SERVICE"
+    "$LEGACY_GATEWAY_SERVICE"
+    /usr/local/bin/yurich-dns-status
+    /usr/local/bin/yurich-dns-test
+    /usr/local/bin/yurich-dns-restart
+    /usr/local/bin/aurum-dns-status
+    /usr/local/bin/aurum-dns-test
+    /usr/local/bin/aurum-dns-restart
+)
 
 log() { printf '[i] %s\n' "$*"; }
 ok() { printf '[OK] %s\n' "$*"; }
@@ -31,13 +52,98 @@ backup_file() {
     cp -a "$file" "${file}.bak.$(date '+%Y%m%d-%H%M%S')"
 }
 
+snapshot_service_state() {
+    local unit="$1" enabled="no" active="no"
+    systemctl is-enabled --quiet "$unit" 2>/dev/null && enabled="yes"
+    systemctl is-active --quiet "$unit" 2>/dev/null && active="yes"
+    printf '%s|%s|%s\n' "$unit" "$enabled" "$active" >> "$ROLLBACK_DIR/services.state"
+}
+
+snapshot_install_state() {
+    local path rel
+    ROLLBACK_DIR=$(mktemp -d /tmp/yurich-dns-rollback.XXXXXX)
+    chmod 700 "$ROLLBACK_DIR"
+    mkdir -p "$ROLLBACK_DIR/files"
+    : > "$ROLLBACK_DIR/present.list"
+    : > "$ROLLBACK_DIR/services.state"
+    for path in "${ROLLBACK_PATHS[@]}"; do
+        if [[ -e "$path" || -L "$path" ]]; then
+            rel="${path#/}"
+            mkdir -p "$ROLLBACK_DIR/files/$(dirname "$rel")"
+            cp -a -- "$path" "$ROLLBACK_DIR/files/$rel"
+            printf '%s\n' "$path" >> "$ROLLBACK_DIR/present.list"
+        fi
+    done
+    snapshot_service_state unbound.service
+    snapshot_service_state systemd-resolved.service
+    snapshot_service_state "$(basename "$GATEWAY_SERVICE")"
+    snapshot_service_state "$(basename "$LEGACY_GATEWAY_SERVICE")"
+    ROLLBACK_ARMED=1
+}
+
+restore_service_state() {
+    local unit="$1" enabled="$2" active="$3"
+    if [[ "$enabled" == "yes" ]]; then
+        systemctl enable "$unit" >/dev/null 2>&1 || true
+    else
+        systemctl disable "$unit" >/dev/null 2>&1 || true
+    fi
+    if [[ "$active" == "yes" ]]; then
+        systemctl restart "$unit" >/dev/null 2>&1 || systemctl start "$unit" >/dev/null 2>&1 || true
+    else
+        systemctl stop "$unit" >/dev/null 2>&1 || true
+    fi
+}
+
+rollback_install() {
+    local path rel unit enabled active cidr
+    local -a cidr_list
+    [[ "$ROLLBACK_ARMED" -eq 1 && -n "$ROLLBACK_DIR" && -d "$ROLLBACK_DIR" ]] || return 0
+    warn "Installation failed; restoring previous DNS configuration"
+    set +e
+    if command -v ufw >/dev/null 2>&1 && [[ -n "$ROLLBACK_CIDRS" ]]; then
+        IFS=',' read -r -a cidr_list <<< "$ROLLBACK_CIDRS"
+        for cidr in "${cidr_list[@]}"; do
+            [[ -z "$cidr" ]] && continue
+            ufw delete allow from "$cidr" to any port 53 proto udp >/dev/null 2>&1 || true
+            ufw delete allow from "$cidr" to any port 53 proto tcp >/dev/null 2>&1 || true
+        done
+    fi
+    for path in "${ROLLBACK_PATHS[@]}"; do
+        rm -rf -- "$path"
+        if grep -Fxq -- "$path" "$ROLLBACK_DIR/present.list"; then
+            rel="${path#/}"
+            mkdir -p "$(dirname "$path")"
+            cp -a -- "$ROLLBACK_DIR/files/$rel" "$path"
+        fi
+    done
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    while IFS='|' read -r unit enabled active; do
+        [[ -n "$unit" ]] && restore_service_state "$unit" "$enabled" "$active"
+    done < "$ROLLBACK_DIR/services.state"
+    systemctl restart systemd-resolved >/dev/null 2>&1 || true
+    ROLLBACK_ARMED=0
+}
+
+cleanup_on_exit() {
+    local rc=$?
+    trap - EXIT
+    if [[ "$ROLLBACK_ARMED" -eq 1 ]]; then
+        rollback_install
+    fi
+    [[ -n "$ROLLBACK_DIR" && "$ROLLBACK_DIR" == /tmp/yurich-dns-rollback.* ]] && rm -rf -- "$ROLLBACK_DIR"
+    exit "$rc"
+}
+
 is_ipv4() {
     local ip="$1" part
     local -a parts
     [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
     IFS='.' read -r -a parts <<< "$ip"
     for part in "${parts[@]}"; do
-        [[ "$part" =~ ^[0-9]+$ && "$part" -ge 0 && "$part" -le 255 ]] || return 1
+        [[ "$part" =~ ^[0-9]{1,3}$ ]] || return 1
+        [[ "$part" == "0" || "$part" != 0* ]] || return 1
+        (( 10#$part <= 255 )) || return 1
     done
 }
 
@@ -49,15 +155,46 @@ is_cidr4() {
     is_ipv4 "$ip" && [[ "$mask" -ge 0 && "$mask" -le 32 ]]
 }
 
+is_private_vpn_ipv4() {
+    local ip="$1" a b
+    is_ipv4 "$ip" || return 1
+    IFS='.' read -r a b _ _ <<< "$ip"
+    case "$a" in
+        10) return 0 ;;
+        172) (( 10#$b >= 16 && 10#$b <= 31 )) ;;
+        192) (( 10#$b == 168 )) ;;
+        100) (( 10#$b >= 64 && 10#$b <= 127 )) ;;
+        127) [[ "$ip" == "127.0.0.1" ]] ;;
+        *) return 1 ;;
+    esac
+}
+
+is_allowed_vpn_cidr4() {
+    local cidr="$1" ip mask a b
+    is_cidr4 "$cidr" || return 1
+    ip="${cidr%/*}"
+    mask="${cidr#*/}"
+    IFS='.' read -r a b _ _ <<< "$ip"
+    case "$a" in
+        10) (( mask >= 8 )) ;;
+        172) (( 10#$b >= 16 && 10#$b <= 31 && mask >= 12 )) ;;
+        192) (( 10#$b == 168 && mask >= 16 )) ;;
+        100) (( 10#$b >= 64 && 10#$b <= 127 && mask >= 10 )) ;;
+        *) [[ "${YURICH_DNS_ALLOW_PUBLIC_CIDRS:-0}" == "1" && "$mask" -ge 24 ]] ;;
+    esac
+}
+
 normalize_cidrs() {
-    local raw="$1" item out=""
+    local raw="$1" item out="" count=0
     local -a items
     raw="${raw// /}"
     IFS=',' read -r -a items <<< "$raw"
     for item in "${items[@]}"; do
         [[ -z "$item" ]] && continue
         is_cidr4 "$item" || die "Invalid CIDR: $item"
-        [[ "${item#*/}" == "0" ]] && die "Open resolver is forbidden: /0"
+        is_allowed_vpn_cidr4 "$item" || die "Unsafe VPN CIDR: $item (use private/CGNAT ranges; public access requires YURICH_DNS_ALLOW_PUBLIC_CIDRS=1 and /24 or narrower)"
+        count=$((count + 1))
+        (( count <= 32 )) || die "Too many VPN CIDRs (maximum: 32)"
         out="${out},${item}"
     done
     [[ -n "$out" ]] || die "At least one VPN CIDR is required"
@@ -83,6 +220,9 @@ ip_on_server() {
 ensure_managed_gateway() {
     local gateway="$1" ip_bin
     is_ipv4 "$gateway" || die "Invalid gateway IP: $gateway"
+    if ! is_private_vpn_ipv4 "$gateway" && [[ "${YURICH_DNS_ALLOW_PUBLIC_GATEWAY:-0}" != "1" ]]; then
+        die "Public DNS gateway is forbidden without YURICH_DNS_ALLOW_PUBLIC_GATEWAY=1: $gateway"
+    fi
     ip_bin=$(command -v ip || echo "/usr/sbin/ip")
     cat > "$GATEWAY_SERVICE" <<EOF
 [Unit]
@@ -152,24 +292,59 @@ check_port53() {
     fi
 }
 
-source_legacy_env_if_safe() {
+root_controlled_env_file() {
+    local env_file="$1" candidate owner_uid mode
+    [[ -f "$env_file" && ! -L "$env_file" ]] || return 1
+    for candidate in "$env_file" "$(dirname "$env_file")"; do
+        owner_uid=$(stat -c '%u' "$candidate" 2>/dev/null || echo -1)
+        mode=$(stat -c '%a' "$candidate" 2>/dev/null || echo invalid)
+        [[ "$owner_uid" == "0" && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+        (( (8#$mode & 022) == 0 )) || return 1
+    done
+}
+
+parse_dns_env_value() {
+    local raw="$1"
+    if [[ "$raw" == \'*\' && ${#raw} -ge 2 ]]; then
+        raw="${raw:1:${#raw}-2}"
+    elif [[ "$raw" == \"*\" && ${#raw} -ge 2 ]]; then
+        raw="${raw:1:${#raw}-2}"
+    elif [[ "$raw" == *\'* || "$raw" == *\"* ]]; then
+        return 1
+    fi
+    printf '%s\n' "$raw"
+}
+
+load_legacy_env_if_safe() {
     [[ -f "$ENV_FILE" || -f "$LEGACY_ENV_FILE" ]] || return 0
-    local env_file="$ENV_FILE"
+    local env_file="$ENV_FILE" line key raw value gateway="" cidrs="" normalized_cidrs
+    local seen_gateway=0 seen_cidrs=0
     [[ -f "$env_file" ]] || env_file="$LEGACY_ENV_FILE"
+    root_controlled_env_file "$env_file" || { warn "Skip unsafe DNS env file: $env_file"; return 0; }
 
-    local owner perms
-    owner=$(stat -c '%U' "$env_file" 2>/dev/null || echo "unknown")
-    perms=$(stat -c '%a' "$env_file" 2>/dev/null || echo "000")
-    if [[ "$owner" != "root" ]]; then
-        warn "Skip unsafe env file owner: $env_file belongs to $owner"
-        return 0
-    fi
-    if [[ "$perms" != "600" ]]; then
-        chmod 600 "$env_file" 2>/dev/null || true
-    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ "$line" =~ ^(YURICH_DNS_GATEWAY|YURICH_DNS_CIDRS)=(.*)$ ]] || { warn "Skip invalid DNS env syntax: $env_file"; return 0; }
+        key="${BASH_REMATCH[1]}"
+        raw="${BASH_REMATCH[2]}"
+        value=$(parse_dns_env_value "$raw") || { warn "Skip unsafe DNS env value: $key"; return 0; }
+        case "$key" in
+            YURICH_DNS_GATEWAY)
+                (( seen_gateway == 0 )) || { warn "Duplicate DNS env key: $key"; return 0; }
+                [[ -z "$value" ]] || is_ipv4 "$value" || { warn "Invalid DNS gateway in $env_file"; return 0; }
+                gateway="$value"; seen_gateway=1
+                ;;
+            YURICH_DNS_CIDRS)
+                (( seen_cidrs == 0 )) || { warn "Duplicate DNS env key: $key"; return 0; }
+                normalized_cidrs=$(normalize_cidrs "$value") || { warn "Invalid DNS CIDRs in $env_file"; return 0; }
+                cidrs="$normalized_cidrs"; seen_cidrs=1
+                ;;
+        esac
+    done < "$env_file"
 
-    # shellcheck disable=SC1090
-    source "$env_file"
+    (( seen_gateway == 0 )) || YURICH_DNS_GATEWAY="$gateway"
+    (( seen_cidrs == 0 )) || YURICH_DNS_CIDRS="$cidrs"
 }
 
 cleanup_legacy_files() {
@@ -188,22 +363,25 @@ cleanup_legacy_files() {
 }
 
 write_env() {
-    local gateway="$1" cidrs="$2"
-    mkdir -p "$ENV_DIR"
-    cat > "$ENV_FILE" <<EOF
-YURICH_DNS_GATEWAY='${gateway}'
-YURICH_DNS_CIDRS='${cidrs}'
-EOF
-    chmod 600 "$ENV_FILE"
+    local gateway="$1" cidrs="$2" tmp
+    install -d -m 700 "$ENV_DIR"
+    tmp=$(mktemp "${ENV_DIR}/.yurich-dns.env.XXXXXX")
+    {
+        printf 'YURICH_DNS_GATEWAY=%q\n' "$gateway"
+        printf 'YURICH_DNS_CIDRS=%q\n' "$cidrs"
+    } > "$tmp"
+    install -m 600 "$tmp" "$ENV_FILE"
+    rm -f "$tmp"
 }
 
 write_unbound_config() {
-    local gateway="$1" cidrs="$2" cidr
+    local gateway="$1" cidrs="$2" cidr candidate
     local -a cidr_list
     mkdir -p "$(dirname "$CONF")" /var/lib/unbound
     backup_file "$CONF"
+    candidate=$(mktemp "$(dirname "$CONF")/.yurich-dns.conf.XXXXXX")
 
-    cat > "$CONF" <<EOF
+    cat > "$candidate" <<EOF
 server:
     # DNS (Unbound): private recursive resolver for VPN clients.
     # Security rule: never bind 0.0.0.0 here.
@@ -211,10 +389,10 @@ server:
 EOF
 
     if [[ -n "$gateway" ]]; then
-        printf '    interface: %s\n' "$gateway" >> "$CONF"
+        printf '    interface: %s\n' "$gateway" >> "$candidate"
     fi
 
-    cat >> "$CONF" <<'EOF'
+    cat >> "$candidate" <<'EOF'
     port: 53
 
     do-ip4: yes
@@ -228,10 +406,10 @@ EOF
 
     IFS=',' read -r -a cidr_list <<< "$cidrs"
     for cidr in "${cidr_list[@]}"; do
-        [[ -n "$cidr" ]] && printf '    access-control: %s allow\n' "$cidr" >> "$CONF"
+        [[ -n "$cidr" ]] && printf '    access-control: %s allow\n' "$cidr" >> "$candidate"
     done
 
-    cat >> "$CONF" <<'EOF'
+    cat >> "$candidate" <<'EOF'
 
     hide-identity: yes
     hide-version: yes
@@ -254,11 +432,14 @@ EOF
     rrset-cache-size: 128m
     msg-cache-size: 64m
     so-rcvbuf: 256k
+    ip-ratelimit: 200
 
     log-queries: no
     statistics-interval: 0
     verbosity: 1
 EOF
+    install -m 644 "$candidate" "$CONF"
+    rm -f "$candidate"
 }
 
 apply_ufw() {
@@ -283,20 +464,28 @@ install_commands() {
 }
 
 run_tests() {
-    unbound-checkconf "$CONF"
+    local valid_status invalid_status
+    unbound-checkconf
     systemctl enable unbound --quiet
     systemctl reset-failed unbound 2>/dev/null || true
     systemctl restart unbound
     systemctl status unbound --no-pager || true
     dig @127.0.0.1 google.com +time=3 +tries=1
     dig @127.0.0.1 cloudflare.com +time=3 +tries=1
-    dig @127.0.0.1 sigok.verteiltesysteme.net A +time=4 +tries=1 | grep -q 'status: NOERROR' \
-        && ok "DNSSEC valid test passed" || warn "DNSSEC valid test was inconclusive"
+    valid_status=$(dig @127.0.0.1 sigok.verteiltesysteme.net A +time=4 +tries=2 2>/dev/null \
+        | awk -F'status: ' '/status:/ {split($2,a,","); print a[1]; exit}' || true)
+    invalid_status=$(dig @127.0.0.1 dnssec-failed.org A +time=4 +tries=2 2>/dev/null \
+        | awk -F'status: ' '/status:/ {split($2,a,","); print a[1]; exit}' || true)
+    [[ "$valid_status" == "NOERROR" ]] || die "DNSSEC valid-domain test failed: ${valid_status:-no response}"
+    [[ "$invalid_status" == "SERVFAIL" ]] || die "DNSSEC invalid-domain test failed: ${invalid_status:-no response}"
+    ok "DNSSEC validation passed (NOERROR/SERVFAIL)"
 }
 
 main() {
     require_root
-    source_legacy_env_if_safe
+    snapshot_install_state
+    trap cleanup_on_exit EXIT
+    load_legacy_env_if_safe
     apt-get update -qq
     apt-get install -y -q unbound unbound-anchor dnsutils dns-root-data curl ca-certificates
 
@@ -314,6 +503,9 @@ main() {
         gateway=""
     elif [[ -n "$gateway" ]]; then
         is_ipv4 "$gateway" || die "Invalid gateway IP: $gateway"
+        if ! is_private_vpn_ipv4 "$gateway" && [[ "${YURICH_DNS_ALLOW_PUBLIC_GATEWAY:-0}" != "1" ]]; then
+            die "Public DNS gateway is forbidden without YURICH_DNS_ALLOW_PUBLIC_GATEWAY=1: $gateway"
+        fi
         prepare_gateway "$gateway"
     fi
 
@@ -322,6 +514,7 @@ main() {
         read -r cidrs
     fi
     cidrs=$(normalize_cidrs "${cidrs:-$DEFAULT_CIDRS}")
+    ROLLBACK_CIDRS="$cidrs"
 
     disable_resolved_stub_if_needed
     check_port53
@@ -331,6 +524,7 @@ main() {
     apply_ufw "$cidrs"
     install_commands
     run_tests
+    ROLLBACK_ARMED=0
     ok "DNS (Unbound) installed. Commands: yurich-dns-status, yurich-dns-test, yurich-dns-restart"
 }
 
