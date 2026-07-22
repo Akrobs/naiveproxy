@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="5.7.1"
+VERSION="5.7.2"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -8769,6 +8769,18 @@ cmd_post_update() {
     if hysteria_tls_layout_needs_repair; then
         info "Обнаружена старая TLS-схема Hysteria 2; запускаю безопасную миграцию"
         cmd_hysteria_repair || return 1
+    fi
+}
+
+run_startup_migrations() {
+    load_config 2>/dev/null || true
+    load_users 2>/dev/null || true
+    if hysteria_tls_layout_needs_repair; then
+        warn "Обнаружена старая TLS-схема Hysteria 2"
+        if ! cmd_hysteria_repair; then
+            warn "Автомиграция Hysteria отложена. Запусти: sudo bash yurich-panel.sh hysteria-repair"
+            return 1
+        fi
     fi
 }
 
@@ -20409,6 +20421,7 @@ main() {
 
     check_root
     check_os
+    run_startup_migrations || true
 
     if [[ $# -gt 0 ]]; then
         load_config; load_users

@@ -6,7 +6,7 @@
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-[![Version](https://img.shields.io/badge/version-5.7.1-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.7.2-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -48,7 +48,7 @@ Yurich Panel — это единый установочный и админис�
 
 ## Что нового в текущей ветке 5.7.x
 
-Релиз `5.7.1` дополняет защищённое хранение учёток исправлением TLS для Hysteria 2. Сервис больше не читает сертификат напрямую из `/root/.local/share/caddy`: проверенная копия хранится в `/etc/naiveproxy/hysteria-tls`, а root-only systemd timer синхронизирует её после продления Caddy. Старые установки автоматически мигрируются при self-update с rollback; ручной запуск доступен через `hysteria-repair`.
+Релиз `5.7.2` дополняет защищённое хранение учёток исправлением TLS для Hysteria 2. Сервис больше не читает сертификат напрямую из `/root/.local/share/caddy`: проверенная копия хранится в `/etc/naiveproxy/hysteria-tls`, а root-only systemd timer синхронизирует её после продления Caddy. Старые установки транзакционно мигрируются при первом root-запуске новой версии, даже если self-update начался на `5.6.x`; ручной запуск доступен через `hysteria-repair`.
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -680,12 +680,13 @@ sudo bash yurich-panel.sh ssh-rescue
 
 ## Changelog
 
-### v5.7.1
+### v5.7.2
 
 - исправлен запуск Hysteria 2 при `ProtectHome=true`: runtime больше не зависит от сертификата внутри `/root`;
 - сертификат и ключ проверяются через OpenSSL, сверяются между собой и копируются атомарно с правами `600`;
 - добавлен root-only timer синхронизации сертификата Caddy каждые 6 часов;
 - добавлены `hysteria-repair`, автоисправление через `diagnose --fix` и post-update миграция с rollback;
+- добавлен first-start fallback для обновления напрямую с `5.6.x`, где старая функция self-update ещё не знает о post-update hook;
 - security audit теперь считает старый или неполный TLS-layout Hysteria критической ошибкой.
 
 ### v5.7.0

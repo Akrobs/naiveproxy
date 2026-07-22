@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.7.1-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.7.2-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -101,7 +101,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ## 🎉 What's new in the current 5.7.x branch
 
-> v5.7.1 keeps the protected credential store and fixes Hysteria TLS under `ProtectHome=true`. Hysteria now reads a validated private copy from `/etc/naiveproxy/hysteria-tls`; a root-only systemd timer synchronizes Caddy renewals, while self-update and `hysteria-repair` migrate legacy layouts with rollback.
+> v5.7.2 keeps the protected credential store and fixes Hysteria TLS under `ProtectHome=true`. Hysteria now reads a validated private copy from `/etc/naiveproxy/hysteria-tls`; a root-only systemd timer synchronizes Caddy renewals, while first-start migration and `hysteria-repair` migrate legacy layouts with rollback even when the update starts on 5.6.x.
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -1443,7 +1443,7 @@ for donors
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.7.1</b> — Hysteria TLS sandbox repair ← CURRENT</summary>
+<summary><b>v5.7.2</b> — Hysteria TLS sandbox repair ← CURRENT</summary>
 
 **Reliability and security:**
 - Stops referencing Caddy certificates directly from `/root` when `ProtectHome=true`
@@ -1451,6 +1451,7 @@ for donors
 - Stores Hysteria TLS material in a root-only `700/600` directory
 - Synchronizes Caddy certificate renewals with a hardened systemd timer
 - Adds `hysteria-repair`, `diagnose --fix` integration and transactional post-update migration
+- Adds a first-start fallback for direct upgrades from 5.6.x, whose updater does not yet invoke the new post-update hook
 
 </details>
 

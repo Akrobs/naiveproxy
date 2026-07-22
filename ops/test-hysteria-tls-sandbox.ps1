@@ -36,6 +36,8 @@ Assert-Contains 'ReadOnlyPaths=\$\{HYSTERIA_TLS_DIR\}' "Hysteria service does no
 Assert-Contains 'OnUnitActiveSec=6h' "Hysteria TLS renewal timer is missing"
 Assert-Contains 'hysteria-repair\|hy2-repair' "Hysteria repair CLI is missing"
 Assert-Contains 'cmd_post_update\(\)' "Post-update migration hook is missing"
+Assert-Contains 'run_startup_migrations\(\)' "First-start migration fallback is missing"
+Assert-Contains 'check_os\s+run_startup_migrations \|\| true' "First-start migration is not wired into main"
 Assert-NotContains '^[ \t]*cert: \$\{cert_file\}[ \t]*$' "Hysteria config still references the Caddy certificate directly"
 Assert-NotContains '^[ \t]*key: \$\{key_file\}[ \t]*$' "Hysteria config still references the Caddy key directly"
 

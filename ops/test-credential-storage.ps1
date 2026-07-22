@@ -27,7 +27,7 @@ function Assert-NotContains {
     }
 }
 
-Assert-Contains 'VERSION="5\.7\.1"' "Expected Yurich Panel v5.7.1"
+Assert-Contains 'VERSION="5\.7\.2"' "Expected Yurich Panel v5.7.2"
 Assert-Contains 'credential_set_user\(\)' "Protected credential writer is missing"
 Assert-Contains 'hash_proxy_password' "bcrypt generation is missing"
 Assert-Contains 'rsa_padding_mode:oaep' "RSA-OAEP encryption is missing"
