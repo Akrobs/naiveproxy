@@ -1,12 +1,12 @@
 <p align="center">
-  <a href="README.md">Русский</a> · <a href="README_EN.md">English</a> · <a href="ARTICLE_RU.md">Большая статья</a> · <a href="MULTISERVER_GUIDE_RU.md">Мультисервер</a> · <a href="HAPROXY_GUIDE_RU.md">HAProxy</a>
+  <a href="README.md">Русский</a> · <a href="README_EN.md">English</a> · <a href="ARTICLE_RU.md">Большая статья</a> · <a href="MULTISERVER_GUIDE_RU.md">Мультисервер</a> · <a href="CREDENTIALS_MIGRATION_RU.md">Миграция credentials</a> · <a href="HAPROXY_GUIDE_RU.md">HAProxy</a>
 </p>
 
 # Yurich Panel
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-[![Version](https://img.shields.io/badge/version-5.6.62-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.7.1-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -46,9 +46,18 @@ Yurich Panel — это единый установочный и админис�
 - Telegram Bot API;
 - optional: Xray-core, Hysteria 2, Cloudflare WARP proxy mode, unbound DNS.
 
-## Что нового в текущей ветке 5.6.x
+## Что нового в текущей ветке 5.7.x
 
-Релиз `5.6.62` закрывает риски импорта и SSH node-управления, делает DNS и смену SNI-mux транзакционными, а блокировку, истечение и ротацию credentials пользователя атомарными с rollback.
+Релиз `5.7.1` дополняет защищённое хранение учёток исправлением TLS для Hysteria 2. Сервис больше не читает сертификат напрямую из `/root/.local/share/caddy`: проверенная копия хранится в `/etc/naiveproxy/hysteria-tls`, а root-only systemd timer синхронизирует её после продления Caddy. Старые установки автоматически мигрируются при self-update с rollback; ручной запуск доступен через `hysteria-repair`.
+
+```bash
+sudo bash yurich-panel.sh credentials-status
+sudo bash yurich-panel.sh backup
+sudo bash yurich-panel.sh credentials-migrate
+sudo bash yurich-panel.sh security-audit
+```
+
+Подробный порядок и rollback: [CREDENTIALS_MIGRATION_RU.md](CREDENTIALS_MIGRATION_RU.md).
 
 Ветка `5.6.x` добавляет базовое мультисерверное управление: главный сервер может хранить список node-серверов, проверять их по SSH, отправлять на них текущий скрипт, синхронизировать пользователей и добавлять дополнительные node-ссылки в страницы подписки.
 
@@ -64,7 +73,7 @@ Yurich Panel — это единый установочный и админис�
 | Node registry | Root-only реестр `/etc/naiveproxy/nodes.conf` с `name/host/ssh/domain/role/weight/enabled` |
 | SSH status | Проверка node по SSH: hostname, uptime, Caddy, Xray, Hysteria, Unbound и открытые порты |
 | Node deploy | Отправка текущего `yurich-panel.sh` / `naiveproxy.sh` на выбранную node |
-| User sync | Синхронизация `users.conf`, `users.d`, `xray-users.conf` на одну node или на все |
+| User sync | Синхронизация bcrypt `users.conf`, encrypted credential vault, `users.d`, `xray-users.conf` на одну node или на все |
 | Safe remote apply | На node выполняется backup, `safe-apply`, `hysteria-sync`, `xray-rebuild` |
 | Multi-node subscriptions | `links.txt` получает дополнительные `naive+https` ссылки для включённых node-доменов |
 | Multi-server guide | Добавлена подробная инструкция [MULTISERVER_GUIDE_RU.md](MULTISERVER_GUIDE_RU.md) |
@@ -77,6 +86,7 @@ Yurich Panel — это единый установочный и админис�
 | Xray menu | Новый пункт `REALITY target presets / test` и CLI-команда `xray-target` |
 | XHTTP standalone | Новый VLESS XHTTP TLS inbound на `8448/tcp` |
 | XHTTP/Caddy stability | `stream_close_delay 5m`, исключение XHTTP из access-log и сэмплирование повторяющихся runtime-сообщений |
+| Hiddify/XHTTP | В `hiddify.txt` XHTTP получает `core=xray`; остальные форматы подписок не меняются |
 | Subscription page | Личная страница теперь показывает XHTTP standalone отдельно от fallback-only ссылок |
 | UFW / Diagnose | Скрипт автоматически открывает и проверяет `8448/tcp` для XHTTP |
 | Installer hotfix | Исправлен скрытый prompt `Срок пользователя 1-12 месяцев` после генерации пароля |
@@ -126,7 +136,7 @@ Yurich Panel — это единый установочный и админис�
 | Bind safety | Unbound слушает `127.0.0.1` и указанный VPN gateway IP, но не `0.0.0.0` |
 | Auto gateway | Если `10.0.0.1` отсутствует, скрипт может создать `10.0.0.1/32` на `lo` через systemd |
 | Adblock removed | Blocklists/whitelist удалены из основного скрипта |
-| Hysteria per-user | При добавлении/удалении/смене пароля пользователя Hysteria 2 пересобирает `userpass` auth |
+| Hysteria per-user | Hysteria 2 проверяет пользователей через root-only command helper и общий bcrypt store |
 | Hysteria порт | В меню можно выбрать порт по умолчанию `8443` или указать UDP порт вручную |
 | Подписки | Личная страница пользователя теперь включает Yurich Proxy + Hysteria 2 + Xray, если модули установлены |
 | WARP SSH-safe | Full tunnel добавляет split-tunnel exclude для текущего SSH IP и включает аварийный rollback |
@@ -179,6 +189,9 @@ Yurich Panel — это единый установочный и админис�
 
 - добавление и удаление пользователей;
 - генерация безопасного пароля;
+- хранение bcrypt в `users.conf` вместо открытого пароля;
+- RSA-OAEP vault для обратимого client secret с правами `root:root 600`;
+- безопасная миграция legacy-установок с проверкой и rollback;
 - вывод URI и JSON-конфига;
 - QR-код для мобильного клиента;
 - защита от удаления последнего активного пользователя;
@@ -278,6 +291,8 @@ sudo bash yurich-panel.sh remove
 sudo bash yurich-panel.sh health
 sudo bash yurich-panel.sh safe-apply
 sudo bash yurich-panel.sh backup
+sudo bash yurich-panel.sh credentials-status
+sudo bash yurich-panel.sh credentials-migrate
 sudo bash yurich-panel.sh export
 sudo bash yurich-panel.sh import /path/to/naiveproxy-state.tar.gz
 sudo bash yurich-panel.sh bridge
@@ -324,6 +339,7 @@ sudo bash yurich-panel.sh hysteria-install
 sudo bash yurich-panel.sh hysteria-config
 sudo bash yurich-panel.sh hysteria-status
 sudo bash yurich-panel.sh hysteria-logs
+sudo bash yurich-panel.sh hysteria-repair
 sudo bash yurich-panel.sh hysteria-port
 sudo bash yurich-panel.sh hysteria-remove
 ```
@@ -431,6 +447,8 @@ systemctl restart naiveproxy-bot
 
 Telegram-доступ ограничивается `TG_CHAT_ID` и списком дополнительных администраторов.
 
+`/adduser LOGIN [MONTHS]` сам создаёт случайный пароль. Передавать пароль в Telegram-команде больше нельзя.
+
 ## Страницы подписки
 
 Создать или показать страницу:
@@ -454,6 +472,8 @@ sudo bash yurich-panel.sh subscription-reset USER
 
 Старый каталог страницы удаляется. Новый URL создаётся автоматически.
 
+Страница, `links.txt`, QR и JSON содержат рабочий client secret, поэтому URL подписки является bearer-секретом. После утечки нужно ротировать пароль пользователя и выполнить `subscription-reset USER`.
+
 Для приватных web-путей скрипт добавляет:
 
 - `robots.txt`;
@@ -467,6 +487,8 @@ sudo bash yurich-panel.sh subscription-reset USER
 
 - Caddyfile не создаётся без активных пользователей;
 - логины и пароли проходят валидацию;
+- Caddy получает bcrypt-хеши, а не открытые proxy-пароли;
+- обратимые client secrets зашифрованы RSA-OAEP и доступны только root;
 - конфиги и файлы пользователей получают права `600`;
 - директории токенов получают права `700`;
 - перед `source` конфигурации проверяется владелец файла;
@@ -519,6 +541,10 @@ sudo bash yurich-panel.sh diagnose --fix
 /etc/naiveproxy/naive.conf
 /etc/naiveproxy/users.conf
 /etc/naiveproxy/users.disabled
+/etc/naiveproxy/credentials/private.pem
+/etc/naiveproxy/credentials/public.pem
+/etc/naiveproxy/credentials/users.secrets
+/etc/naiveproxy/credentials/users.active.htpasswd
 /etc/naiveproxy/xray-users.conf
 /etc/naiveproxy/xray-users.disabled
 /etc/naiveproxy/subscriptions/
@@ -613,7 +639,7 @@ sudo bash yurich-panel.sh remove
 
 ### Можно ли обновлять пользователей без полной переустановки?
 
-Да. Пользователи хранятся в `/etc/naiveproxy/users.conf`. После изменения скрипт перегенерирует Caddyfile и делает reload/restart Caddy.
+Да. В `/etc/naiveproxy/users.conf` хранятся только bcrypt-хеши. Обратимый client secret находится в root-only RSA-OAEP vault `/etc/naiveproxy/credentials/`, потому что он нужен для формирования клиентских URI. После изменения скрипт атомарно обновляет оба хранилища, перегенерирует Caddyfile и применяет Hysteria auth.
 
 ### Что делать, если клиентская ссылка утекла?
 
@@ -653,6 +679,25 @@ sudo bash yurich-panel.sh ssh-rescue
 ```
 
 ## Changelog
+
+### v5.7.1
+
+- исправлен запуск Hysteria 2 при `ProtectHome=true`: runtime больше не зависит от сертификата внутри `/root`;
+- сертификат и ключ проверяются через OpenSSL, сверяются между собой и копируются атомарно с правами `600`;
+- добавлен root-only timer синхронизации сертификата Caddy каждые 6 часов;
+- добавлены `hysteria-repair`, автоисправление через `diagnose --fix` и post-update миграция с rollback;
+- security audit теперь считает старый или неполный TLS-layout Hysteria критической ошибкой.
+
+### v5.7.0
+
+- `users.conf` и `users.disabled` переведены на Caddy-совместимый bcrypt;
+- добавлен root-only RSA-3072 OAEP-SHA256 vault для секретов, необходимых клиентским URI;
+- Caddy использует стандартный `basic_auth bcrypt`, без plaintext `basic_auth` в `forward_proxy`;
+- Hysteria 2 использует command-auth и общий active bcrypt store;
+- новые пользователи из меню, admin-бота и sales-бота сразу сохраняются в новом формате;
+- добавлены `credentials-status` и транзакционный `credentials-migrate` с проверкой runtime и rollback;
+- export/import и node sync переносят credential state целиком и проверяют keypair, ciphertext и соответствие bcrypt;
+- security audit проверяет legacy plaintext, права vault и отсутствие старых auth-конфигов.
 
 ### v5.6.62
 

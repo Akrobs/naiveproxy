@@ -30,6 +30,13 @@
 - может быть отдельной локацией: Finland, Germany, Netherlands, USA и так далее;
 - может работать как обычный edge-сервер, backup-сервер или часть будущей bridge-схемы.
 
+Начиная с `5.7.0`, master синхронизирует не открытые пароли, а два связанных набора данных:
+
+- `/etc/naiveproxy/users.conf` — bcrypt-хеши для Caddy;
+- `/etc/naiveproxy/credentials/` — RSA-OAEP vault и активный htpasswd-файл для Hysteria.
+
+Каталог `credentials` нельзя переносить частично: `private.pem`, `public.pem` и `users.secrets` должны принадлежать одному keypair. Команда `nodes-sync` переносит их вместе и проверяет runtime уже на node.
+
 Главная идея: пользователь получает одну личную страницу подписки, а внутри видит несколько профилей. Например:
 
 - `Yurich Proxy panel`;
@@ -43,7 +50,7 @@
 ```mermaid
 flowchart LR
     A["Администратор"] --> B["Master VPS: panel.example.com"]
-    B --> C["/etc/naiveproxy/users.conf"]
+    B --> C["bcrypt users.conf + encrypted credential vault"]
     B --> D["/etc/naiveproxy/nodes.conf"]
     B --> E["Страницы подписки /s/<token>/"]
     B -- SSH deploy/sync --> F["Node 1: fi-1.example.com"]
@@ -107,6 +114,17 @@ sudo bash yurich-panel.sh protocol-benchmark-monitor USER 3
 
 `nodes-*` отвечает за серверы и синхронизацию, а `protocol-*` проверяет уже
 готовую клиентскую выдачу. В production лучше использовать оба уровня проверки.
+
+Перед первой синхронизацией после перехода с `5.6.x` выполни на master:
+
+```bash
+sudo bash yurich-panel.sh credentials-status
+sudo bash yurich-panel.sh backup
+sudo bash yurich-panel.sh credentials-migrate
+sudo bash yurich-panel.sh nodes-sync all
+```
+
+Сначала проверь одного пользователя на одной node. Обновление скрипта само по себе не удаляет legacy store, а транзакционная миграция откатывает runtime при неуспешной проверке.
 
 ## Требования
 
@@ -453,6 +471,7 @@ sudo bash yurich-panel.sh nodes-sync fi-1
 ```text
 /etc/naiveproxy/users.conf
 /etc/naiveproxy/users.disabled
+/etc/naiveproxy/credentials/
 /etc/naiveproxy/users.d/
 /etc/naiveproxy/subscriptions/
 /etc/naiveproxy/xray-users.conf
@@ -474,7 +493,7 @@ sudo bash /usr/local/bin/yurich-panel.sh xray-rebuild
 sudo bash /usr/local/bin/yurich-panel.sh nodes-subscriptions
 ```
 
-Это важно: Caddy/Xray/Hysteria пересобираются уже на стороне node, с её доменом и локальными сертификатами.
+Это важно: Caddy/Xray/Hysteria пересобираются уже на стороне node, с её доменом и локальными сертификатами. Начиная с `5.7.1`, Hysteria получает проверенную копию сертификата в `/etc/naiveproxy/hysteria-tls`; прямой доступ к Caddy storage внутри `/root` сервису не выдаётся. При старой схеме запусти на node `sudo bash yurich-panel.sh hysteria-repair`.
 
 ## Пересборка подписок
 

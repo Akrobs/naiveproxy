@@ -1,4 +1,4 @@
-# Yurich Panel 5.6.x: большой обзор скрипта для развёртывания и управления приватным прокси-сервером
+# Yurich Panel 5.7.x: большой обзор скрипта для развёртывания и управления приватным прокси-сервером
 
 > В статье используются только демонстрационные значения: `<your-domain.example>`, `<admin@example.invalid>`, `<user>`, `<server-ip>`. Реальные домены, IP-адреса, логины, пароли, токены и ссылки намеренно не приводятся.
 
@@ -9,19 +9,6 @@ Yurich Panel — это Bash-скрипт для быстрого развёрт
 Проект вырос из простого установщика в полноценный серверный менеджер. В версии `5.6.x` он уже закрывает не только базовую установку Yurich Proxy, но и дополнительные сценарии: лимит устройств на пользователя, страницы подписки, Telegram-бот с расширенными командами, Xray Modern transports, Hysteria 2, Cloudflare WARP в proxy mode, собственный DNS-резолвер, SSH hardening и автофикс типовых проблем.
 
 Главная идея скрипта — дать владельцу VPS понятный инструмент, который можно запустить из терминала, получить рабочую конфигурацию и дальше обслуживать сервер без постоянного ручного редактирования системных файлов. Это особенно полезно, когда сервер используется не как экспериментальная песочница, а как сервис, который должен стабильно работать, перезапускаться после сбоев, обновляться и давать понятную диагностику.
-
-## Обновление 5.6.49: публичная GitHub-версия
-
-Версия `5.6.49` подготовлена как безопасная публичная версия проекта. В документации и демонстрационных файлах не используются реальные домены, IP-адреса, Telegram ID, токены, локальные пути, коммерческие ссылки оплаты или приватные контакты. Все такие значения заменены на нейтральные placeholders вроде `<your-domain.example>`, `example.com`, `support@example.com`.
-
-Отдельно добавлены:
-
-- `SECURITY.md` с правилами безопасного disclosure;
-- `.gitignore` и `.gitattributes` для защиты от случайной публикации локальных файлов, backup-архивов, ключей и runtime-состояния;
-- расширенный [MULTISERVER_GUIDE_RU.md](MULTISERVER_GUIDE_RU.md) по node-серверам, rollout без простоя, HAProxy/SNI mux, WARP, проверке профилей и удалению node из подписок;
-- описание `protocol-validate`, `protocol-benchmark` и `protocol-benchmark-monitor` для проверки клиентских ссылок, а не только systemd-сервисов.
-
-Функционально проект сохраняет обратную совместимость: основным именем становится `yurich-panel.sh`, а `naiveproxy.sh` остаётся совместимым alias для старых установок, команд и привычных сценариев обновления.
 
 ## Что именно делает скрипт
 
@@ -126,7 +113,8 @@ naive+https://<user>:<password>@<your-domain.example>:443
 /etc/caddy/Caddyfile                конфигурация Caddy
 /etc/systemd/system/caddy.service   systemd service
 /etc/naiveproxy/naive.conf          настройки менеджера
-/etc/naiveproxy/users.conf          пользователи Yurich Proxy
+/etc/naiveproxy/users.conf          bcrypt пользователей Yurich Proxy
+/etc/naiveproxy/credentials/        root-only RSA-OAEP credential vault
 /var/log/caddy/naive.log            access log прокси
 /var/www/html/index.html            публичная камуфляжная страница
 ```
@@ -160,12 +148,20 @@ sudo bash yurich-panel.sh config <user>
 
 ```text
 /users
-/adduser <login> <password>
+/adduser <login> [months]
 /deluser <login>
 /qr <login>
 ```
 
-Скрипт валидирует логины и пароли. Это важно для безопасности и стабильности Caddyfile: логин не должен содержать неожиданные спецсимволы, а пароль должен быть достаточно длинным и безопасным для вставки в конфигурацию.
+Скрипт валидирует логины и пароли. `users.conf` хранит Caddy-совместимый bcrypt, а открытый пароль не попадает в Caddyfile или Hysteria config. Обратимый client secret хранится в root-only RSA-OAEP vault, потому что без него невозможно сформировать URI для приложения. Telegram-команда `/adduser` сама создаёт случайный пароль и не принимает его в тексте команды.
+
+Для старых установок предусмотрена явная миграция без внезапного отключения действующих клиентов:
+
+```bash
+sudo bash yurich-panel.sh credentials-status
+sudo bash yurich-panel.sh backup
+sudo bash yurich-panel.sh credentials-migrate
+```
 
 Для защиты от случайного открытия сервиса без авторизации Caddyfile не перегенерируется, если активных пользователей нет. Это простая, но важная предохранительная мера.
 
@@ -262,7 +258,7 @@ Telegram-бот превращает сервер в управляемый се
 /diagfix
 /logs
 /users
-/adduser <login> <password>
+/adduser <login> [months]
 /deluser <login>
 /qr <login>
 /sub <login>
@@ -427,12 +423,13 @@ sudo bash yurich-panel.sh hysteria
 sudo bash yurich-panel.sh hysteria-install
 sudo bash yurich-panel.sh hysteria-config
 sudo bash yurich-panel.sh hysteria-status
+sudo bash yurich-panel.sh hysteria-repair
 sudo bash yurich-panel.sh hysteria-remove
 ```
 
 Скрипт определяет архитектуру сервера, скачивает бинарник, создаёт конфиг, настраивает systemd и открывает нужный UDP-порт.
 
-Если Caddy уже получил TLS-сертификат для домена, Hysteria 2 может использовать тот же сертификат. Это уменьшает количество ручных действий.
+Если Caddy уже получил TLS-сертификат для домена, Hysteria 2 использует его защищённую копию из `/etc/naiveproxy/hysteria-tls`. Прямой доступ к `/root/.local/share/caddy` сервису не выдаётся. Сертификат и ключ проверяются перед копированием, а systemd timer синхронизирует последующие продления. Для исправления старой установки используется `hysteria-repair`; при ошибке конфиг и unit автоматически откатываются.
 
 ## Cloudflare WARP proxy mode
 
@@ -599,6 +596,7 @@ Yurich Panel полезен не потому, что делает что-то �
 
 - не открывает прокси без пользователей;
 - проверяет формат логинов и паролей;
+- хранит Caddy credentials как bcrypt и проверяет целостность encrypted vault;
 - хранит чувствительные файлы с ограниченными правами;
 - проверяет владельца конфигурации перед загрузкой;
 - использует systemd restart policies;
@@ -646,7 +644,7 @@ sudo bash yurich-panel.sh subscription <new-user>
 Через Telegram:
 
 ```text
-/adduser <new-user> <password>
+/adduser <new-user> [months]
 /sub <new-user>
 /qr <new-user>
 ```

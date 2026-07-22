@@ -145,6 +145,7 @@ catch {
 
 $caddyPort = Get-FreeTcpPort
 $socksPort = Get-FreeTcpPort
+$badSocksPort = Get-FreeTcpPort
 $appData = Join-Path $testRoot "AppData\Roaming"
 $localAppData = Join-Path $testRoot "AppData\Local"
 New-Item -ItemType Directory -Force -Path $appData, $localAppData | Out-Null
@@ -153,12 +154,19 @@ $caddyfile = Join-Path $testRoot "Caddyfile"
 $caddyStdout = Join-Path $testRoot "caddy.stdout.log"
 $caddyStderr = Join-Path $testRoot "caddy.stderr.log"
 $naiveConfig = Join-Path $testRoot "naive.json"
+$badNaiveConfig = Join-Path $testRoot "naive-bad-auth.json"
 $naiveStdout = Join-Path $testRoot "naive.stdout.log"
 $naiveStderr = Join-Path $testRoot "naive.stderr.log"
 $webRoot = Join-Path $testRoot "www"
 New-Item -ItemType Directory -Force -Path $webRoot | Out-Null
 "caddy candidate" | Set-Content -LiteralPath (Join-Path $webRoot "index.html") -Encoding utf8
 $caddyWebRoot = $webRoot.Replace('\', '/')
+$authHash = (& $CaddyPath hash-password --plaintext "build-check").Trim()
+if ($LASTEXITCODE -ne 0 -or $authHash -notmatch '^\$2[aby]\$') {
+    throw "Caddy failed to generate a bcrypt test credential"
+}
+# Apache htpasswd emits $2y$ on Ubuntu; exercise the exact migration format.
+$authHash = '$2y$' + $authHash.Substring(4)
 
 @"
 {
@@ -166,19 +174,36 @@ $caddyWebRoot = $webRoot.Replace('\', '/')
     skip_install_trust
     auto_https disable_redirects
     order forward_proxy before file_server
+    servers {
+        protocols h1 h2
+    }
 }
 
 :$caddyPort, localhost:$caddyPort {
     bind 127.0.0.1
     tls internal
-    forward_proxy {
-        basic_auth build-check build-check
-        hide_ip
-        hide_via
-        probe_resistance
+    @naive_proxy method CONNECT
+    route @naive_proxy {
+        request_header Authorization "{http.request.header.Proxy-Authorization}"
+        basic_auth bcrypt {
+            build-check $authHash
+        }
+        request_header -Authorization
+        forward_proxy {
+            hide_ip
+            hide_via
+        }
     }
     file_server {
         root $caddyWebRoot
+    }
+    handle_errors {
+        @proxy_auth_error expression {http.error.status_code} == 401
+        handle @proxy_auth_error {
+            log_append yurich_auth_failure "1"
+            header -WWW-Authenticate
+            respond "Not Found" 404
+        }
     }
 }
 "@ | Set-Content -LiteralPath $caddyfile -Encoding utf8
@@ -190,8 +215,16 @@ $caddyWebRoot = $webRoot.Replace('\', '/')
     log = ""
 } | ConvertTo-Json | Set-Content -LiteralPath $naiveConfig -Encoding utf8
 
+@{
+    listen = "socks://127.0.0.1:$badSocksPort"
+    proxy = "https://build-check:wrong-password@localhost:$caddyPort"
+    "host-resolver-rules" = "MAP localhost 127.0.0.1"
+    log = ""
+} | ConvertTo-Json | Set-Content -LiteralPath $badNaiveConfig -Encoding utf8
+
 $caddyProcess = $null
 $naiveProcess = $null
+$badNaiveProcess = $null
 $rootThumbprint = $null
 $success = $false
 $failureMessage = ""
@@ -208,9 +241,21 @@ try {
         LOCALAPPDATA = $localAppData
         USERPROFILE = $testRoot
     }
-    $caddyProcess = Start-Process -FilePath $CaddyPath -ArgumentList @(
-        "run", "--config", $caddyfile, "--adapter", "caddyfile"
-    ) -WorkingDirectory $testRoot -WindowStyle Hidden -RedirectStandardOutput $caddyStdout -RedirectStandardError $caddyStderr -Environment $childEnvironment -PassThru
+    $previousChildEnvironment = @{}
+    foreach ($entry in $childEnvironment.GetEnumerator()) {
+        $previousChildEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key, "Process")
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+    }
+    try {
+        $caddyProcess = Start-Process -FilePath $CaddyPath -ArgumentList @(
+            "run", "--config", $caddyfile, "--adapter", "caddyfile"
+        ) -WorkingDirectory $testRoot -WindowStyle Hidden -RedirectStandardOutput $caddyStdout -RedirectStandardError $caddyStderr -PassThru
+    }
+    finally {
+        foreach ($entry in $previousChildEnvironment.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+        }
+    }
 
     $rootCertificatePath = Join-Path $appData "Caddy\pki\authorities\local\root.crt"
     if (-not (Wait-TcpPort -Port $caddyPort -Process $caddyProcess)) {
@@ -244,6 +289,24 @@ try {
         throw "Naive request failed: curl=$LASTEXITCODE http=$httpCode"
     }
 
+    $badNaiveProcess = Start-Process -FilePath $naiveExe -ArgumentList @($badNaiveConfig, "--log") -WorkingDirectory $testRoot -WindowStyle Hidden -PassThru
+    if (-not (Wait-TcpPort -Port $badSocksPort -Process $badNaiveProcess)) {
+        throw "Bad-auth Naive SOCKS listener did not start"
+    }
+    $previousErrorPreference = $ErrorActionPreference
+    try {
+        # A TLS failure is the expected result for rejected proxy credentials.
+        $ErrorActionPreference = "Continue"
+        $badHttpCode = & curl.exe -sS --max-time 8 --socks5-hostname "127.0.0.1:$badSocksPort" -o NUL -w "%{http_code}" "https://example.com/" 2>$null
+        $badCurlExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorPreference
+    }
+    if ($badCurlExitCode -eq 0 -and $badHttpCode -eq "200") {
+        throw "Caddy accepted an invalid proxy credential"
+    }
+
     Start-Sleep -Milliseconds 700
     $naiveLog = (Get-Content -LiteralPath $naiveStdout -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath $naiveStderr -Raw -ErrorAction SilentlyContinue)
     $paddingMatch = [regex]::Match($naiveLog, "negotiated padding type:\s*([^\r\n]+)")
@@ -266,6 +329,10 @@ finally {
     if ($naiveProcess -and -not $naiveProcess.HasExited) {
         Stop-Process -Id $naiveProcess.Id -Force
         Wait-Process -Id $naiveProcess.Id -ErrorAction SilentlyContinue
+    }
+    if ($badNaiveProcess -and -not $badNaiveProcess.HasExited) {
+        Stop-Process -Id $badNaiveProcess.Id -Force
+        Wait-Process -Id $badNaiveProcess.Id -ErrorAction SilentlyContinue
     }
     if ($caddyProcess -and -not $caddyProcess.HasExited) {
         Stop-Process -Id $caddyProcess.Id -Force

@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.6.62-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.7.1-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -99,9 +99,16 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ---
 
-## 🎉 What's new in the current 5.6.x branch
+## 🎉 What's new in the current 5.7.x branch
 
-> v5.6.62 hardens state imports and node SSH trust, makes DNS and SNI-mux changes transactional, and adds rollback-safe user expiry, blocking, and credential rotation.
+> v5.7.1 keeps the protected credential store and fixes Hysteria TLS under `ProtectHome=true`. Hysteria now reads a validated private copy from `/etc/naiveproxy/hysteria-tls`; a root-only systemd timer synchronizes Caddy renewals, while self-update and `hysteria-repair` migrate legacy layouts with rollback.
+
+```bash
+sudo bash yurich-panel.sh credentials-status
+sudo bash yurich-panel.sh backup
+sudo bash yurich-panel.sh credentials-migrate
+sudo bash yurich-panel.sh security-audit
+```
 
 <table>
 <tr>
@@ -126,6 +133,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 ✅ New Xray menu action: `REALITY target presets / test`
 ✅ New CLI command: `xray-target`
 ✅ VLESS XHTTP TLS now works as a standalone inbound on `8448/tcp`
+✅ Hiddify XHTTP links explicitly select Xray core with `core=xray`
 ✅ XHTTP no longer requires the 443 fallback hub
 ✅ Subscription pages and `links.txt` include the XHTTP standalone link automatically
 ✅ UFW/status/diagnostics/uninstall now handle the XHTTP port
@@ -211,7 +219,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 🔐 **DNS (Unbound) env guard** — standalone status/uninstall scripts trust only root-owned env files
 🧩 **Bot install sync** — service install syncs the currently running valid script into `/usr/local/bin`
 🛠️ **bot-menu CLI** — refresh the Telegram command menu manually
-⚡ **Per-user Hysteria 2** — Hysteria server config now uses `auth.type: userpass` for Yurich Proxy users
+⚡ **Per-user Hysteria 2** — Hysteria authenticates through a root-only command helper backed by the active bcrypt store
 ⚙️ **Hysteria port selector** — choose the default UDP/8443 or enter a custom UDP port
 🔗 **Hysteria in subscriptions** — personal pages now include Yurich Proxy + Hysteria 2 + Xray links when available
 🛟 **WARP SSH-safe full tunnel** — full tunnel adds split-tunnel excludes for the current SSH IP and arms rollback
@@ -269,7 +277,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 │   Your      │     │  Censor/DPI  │     │      Your VPS             │     │          │
 │   phone     │────▶│              │────▶│  Caddy + Yurich Proxy     │────▶│ Internet │
 │   laptop    │     │ Sees Chrome  │     │  DNS / Unbound            │     │          │
-└─────────────┘     │  HTTPS/2 ✓   │     │  probe_resistance         │     └──────────┘
+└─────────────┘     │  HTTPS/2 ✓   │     │  bcrypt auth + 404 errors │     └──────────┘
   compatible client   └──────────────┘     └───────────────────────────┘
   naive transport       TLS/HTTP stack        DNSSEC + cache
 ```
@@ -324,6 +332,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/
 
 ### 🔐 Security
 
+🔐 **Hashed proxy credentials**
+Caddy-compatible bcrypt in `users.conf`; no plaintext password in `Caddyfile`
+
+🗝️ **Encrypted client-secret vault**
+RSA-OAEP-SHA256, root-only files, transactional legacy migration and rollback
+
 🛡️ **SSH Hardening**
 ED25519 key + `sshd_config.d/` support for Ubuntu 22.04+
 
@@ -337,8 +351,8 @@ Uses `iptables-multiport` — faster than UFW
 🔥 **UFW + scanner protection**
 `deny all incoming` + blocking common scanners
 
-👻 **probe_resistance**
-Without login+password looks like a regular website
+👻 **Generic auth failures**
+Rejected proxy authentication is returned as a generic 404 response
 
 🎭 **Camouflage page**
 Technical blog — for random visitors
@@ -480,6 +494,7 @@ sudo bash yurich-panel.sh hysteria-install
 sudo bash yurich-panel.sh hysteria-config USER
 sudo bash yurich-panel.sh hysteria-port  # Default UDP/8443 or custom UDP port
 sudo bash yurich-panel.sh hysteria-status
+sudo bash yurich-panel.sh hysteria-repair
 sudo bash yurich-panel.sh hysteria-remove
 
 # === Subscriptions and pages ===
@@ -591,7 +606,7 @@ systemctl restart naiveproxy-bot
 <td valign="top">
 
 `/users` — List users
-`/adduser login pass` — Add
+`/adduser login [months]` — Generate a password and add a user
 `/deluser login` — Remove
 `/qr login` — QR code image
 `/sub login` — Subscription page
@@ -749,7 +764,7 @@ sudo bash yurich-panel.sh diagnose
   ✅ Caddyfile found: /etc/caddy/Caddyfile
   ✅ Correct format ':443, domain'
   ✅ order forward_proxy — OK
-  ✅ probe_resistance enabled
+  ✅ bcrypt proxy authentication enabled
   ✅ Users: 4
   ✅ Caddyfile valid
 
@@ -807,15 +822,23 @@ your-domain.com:443 { ... }
 
 :443, your-domain.com {
     tls your@email.com
-    forward_proxy {
-        basic_auth USERNAME PASSWORD
-        hide_ip
-        hide_via
-        probe_resistance
+    @naive_proxy method CONNECT
+    route @naive_proxy {
+        request_header Authorization "{http.request.header.Proxy-Authorization}"
+        basic_auth bcrypt {
+            USERNAME BCRYPT_HASH
+        }
+        request_header -Authorization
+        forward_proxy {
+            hide_ip
+            hide_via
+        }
     }
     file_server { root /var/www/html }
 }
 ```
+
+Let Yurich Panel generate and migrate these records. Do not place a plaintext password in `Caddyfile`.
 
 ---
 
@@ -976,7 +999,12 @@ For servers
 /etc/caddy/Caddyfile                           (chmod 600)
 /etc/naiveproxy/
 ├── naive.conf                                 ← Main config (chmod 600)
-├── users.conf                                 ← Users (chmod 600)
+├── users.conf                                 ← Caddy-compatible bcrypt records (chmod 600)
+├── credentials/                               ← RSA-OAEP credential vault (chmod 700)
+│   ├── private.pem                            ← Root-only decryption key (chmod 600)
+│   ├── public.pem
+│   ├── users.secrets                          ← Encrypted client secrets (chmod 600)
+│   └── users.active.htpasswd                  ← Active bcrypt records (chmod 600)
 ├── ssh_private_key                            ← SSH key ED25519
 ├── ssh_public_key
 ├── monitor.sh
@@ -1415,7 +1443,34 @@ for donors
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.6.62</b> — Security audit and transactional operations ← CURRENT</summary>
+<summary><b>v5.7.1</b> — Hysteria TLS sandbox repair ← CURRENT</summary>
+
+**Reliability and security:**
+- Stops referencing Caddy certificates directly from `/root` when `ProtectHome=true`
+- Validates certificate expiry and certificate/private-key matching before an atomic copy
+- Stores Hysteria TLS material in a root-only `700/600` directory
+- Synchronizes Caddy certificate renewals with a hardened systemd timer
+- Adds `hysteria-repair`, `diagnose --fix` integration and transactional post-update migration
+
+</details>
+
+<details>
+<summary><b>v5.7.0</b> — Hashed proxy credentials and safe migration</summary>
+
+**Credential security:**
+- Stores Caddy-compatible bcrypt records in `users.conf` and `users.disabled`
+- Keeps reversible client secrets in a root-only RSA-3072 OAEP-SHA256 vault
+- Uses standard Caddy `basic_auth bcrypt` without plaintext forward-proxy auth
+- Uses Hysteria command authentication backed by the same active bcrypt store
+- Creates new users in the protected format from the menu, admin bot and sales bot
+- Adds `credentials-status` and transactional `credentials-migrate` with runtime verification and rollback
+- Validates the complete credential state during import and synchronizes it atomically to nodes
+- Extends `security-audit` with legacy plaintext, vault-permission and runtime-auth checks
+
+</details>
+
+<details>
+<summary><b>v5.6.62</b> — Security audit and transactional operations</summary>
 
 **Security and reliability:**
 - Sanitizes imported nodes, aliases, metadata, protocol users, paths and URLs before privileged use

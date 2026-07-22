@@ -15,6 +15,8 @@ Never attach or paste:
 
 - `/etc/naiveproxy/naive.conf`
 - `/etc/naiveproxy/users.conf`
+- `/etc/naiveproxy/credentials/private.pem`
+- `/etc/naiveproxy/credentials/users.secrets`
 - `/etc/naiveproxy/users.d/*`
 - `/etc/naiveproxy/subscriptions/*`
 - `/etc/naiveproxy/nodes.conf`
@@ -31,6 +33,29 @@ Rotate the affected credential immediately:
 - Subscription URL: run `subscription-reset USER`.
 - SSH key: remove the public key from servers and issue a new key.
 - Server user password: rotate the user password and rebuild subscriptions.
+
+## Proxy Credential Storage
+
+- `/etc/naiveproxy/users.conf` contains only bcrypt records after migration.
+- Caddy uses its standard `basic_auth bcrypt` verifier; plaintext proxy passwords are not written to `Caddyfile`.
+- Hysteria 2 uses a root-owned command verifier against `/etc/naiveproxy/credentials/users.active.htpasswd`; passwords are read from stdin and are not passed in process arguments.
+- Hysteria 2 never reads TLS material directly from `/root`. A validated copy is kept in `/etc/naiveproxy/hysteria-tls` with directory/file modes `700/600`, and a hardened timer synchronizes Caddy renewals.
+- Reversible client secrets are RSA-OAEP-SHA256 encrypted in `/etc/naiveproxy/credentials/users.secrets`. The RSA private key is `root:root` mode `600`.
+- The vault protects against accidental plaintext disclosure. It does not protect against a root compromise because the ciphertext and decryption key are on the same host.
+- Generated subscription documents contain working client credentials by design. Treat every subscription URL and generated profile as a bearer secret, keep `Cache-Control: no-store`, and rotate both the password and subscription token after a leak.
+- State exports include the vault private key and must be stored like passwords. Prefer the encrypted `backup` command for off-host copies.
+
+Check and migrate an existing installation:
+
+```bash
+sudo bash yurich-panel.sh credentials-status
+sudo bash yurich-panel.sh backup
+sudo bash yurich-panel.sh credentials-migrate
+sudo bash yurich-panel.sh security-audit
+sudo bash yurich-panel.sh hysteria-repair
+```
+
+Do not delete the pre-migration backup until NaiveProxy, Hysteria 2 and subscription refresh have all been tested.
 
 ## Hardening Baseline
 

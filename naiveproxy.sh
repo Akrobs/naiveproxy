@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.6.62
+#   Yurich Panel v5.7.0
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="5.6.62"
+VERSION="5.7.1"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -128,6 +128,21 @@ CONFIG_FILE="/etc/naiveproxy/naive.conf"
 CONFIG_DIR="/etc/naiveproxy"
 USERS_FILE="/etc/naiveproxy/users.conf"
 DISABLED_USERS_FILE="/etc/naiveproxy/users.disabled"
+CREDENTIALS_DIR="/etc/naiveproxy/credentials"
+CREDENTIALS_PRIVATE_KEY="${CREDENTIALS_DIR}/private.pem"
+CREDENTIALS_PUBLIC_KEY="${CREDENTIALS_DIR}/public.pem"
+USERS_SECRETS_FILE="${CREDENTIALS_DIR}/users.secrets"
+ACTIVE_USERS_HASH_FILE="${CREDENTIALS_DIR}/users.active.htpasswd"
+CREDENTIALS_LOCK_FILE="${CREDENTIALS_DIR}/credentials.lock"
+CREDENTIALS_MIGRATION_RECEIPT="${CREDENTIALS_DIR}/migration.receipt"
+HYSTERIA_AUTH_HELPER="/usr/local/libexec/yurich-hysteria-auth"
+HYSTERIA_TLS_DIR="${CONFIG_DIR}/hysteria-tls"
+HYSTERIA_TLS_CERT="${HYSTERIA_TLS_DIR}/cert.pem"
+HYSTERIA_TLS_KEY="${HYSTERIA_TLS_DIR}/key.pem"
+HYSTERIA_TLS_SYNC_SCRIPT="/usr/local/sbin/yurich-hysteria-tls-sync"
+HYSTERIA_TLS_SYNC_SERVICE="/etc/systemd/system/yurich-hysteria-tls-sync.service"
+HYSTERIA_TLS_SYNC_TIMER="/etc/systemd/system/yurich-hysteria-tls-sync.timer"
+CREDENTIAL_BCRYPT_COST_DEFAULT="12"
 XRAY_USERS_FILE="/etc/naiveproxy/xray-users.conf"
 XRAY_DISABLED_USERS_FILE="/etc/naiveproxy/xray-users.disabled"
 XRAY_COMPAT_USERS_FILE="/etc/naiveproxy/xray-compat-users.conf"
@@ -1229,31 +1244,201 @@ save_config() {
 load_users() {
     if [[ ! -f "$USERS_FILE" ]]; then
         mkdir -p "$CONFIG_DIR"
-        echo "" > "$USERS_FILE"
+        : > "$USERS_FILE"
         chmod 600 "$USERS_FILE"
     fi
+    chown root:root "$USERS_FILE" 2>/dev/null || true
+    chmod 600 "$USERS_FILE" 2>/dev/null || true
 }
 
 get_users() {
     grep -v '^#\|^[[:space:]]*$' "$USERS_FILE" 2>/dev/null || true
 }
 
-get_active_users() {
-    local user pass
-    while IFS=: read -r user pass; do
-        [[ -z "$user" || -z "$pass" ]] && continue
+is_valid_proxy_hash() {
+    [[ "${1:-}" =~ ^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$ ]]
+}
+
+is_valid_encrypted_proxy_secret() {
+    local value="${1:-}"
+    [[ "${#value}" -ge 128 && "${#value}" -le 2048 ]] || return 1
+    [[ "$value" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]
+}
+
+credential_bcrypt_cost() {
+    local cost="${CREDENTIAL_BCRYPT_COST:-$CREDENTIAL_BCRYPT_COST_DEFAULT}"
+    [[ "$cost" =~ ^(10|11|12|13|14)$ ]] || cost="$CREDENTIAL_BCRYPT_COST_DEFAULT"
+    printf '%s\n' "$cost"
+}
+
+ensure_credential_tools() {
+    command -v openssl >/dev/null 2>&1 || { err "Для credential vault нужен openssl"; return 1; }
+    if ! command -v htpasswd >/dev/null 2>&1; then
+        info "Устанавливаю apache2-utils для bcrypt..."
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -q apache2-utils >/dev/null 2>&1 \
+            || { err "Для bcrypt нужен htpasswd (пакет apache2-utils)"; return 1; }
+    fi
+}
+
+ensure_credential_keypair() {
+    ensure_credential_tools || return 1
+    install -d -o root -g root -m 700 "$CREDENTIALS_DIR"
+    if [[ -s "$CREDENTIALS_PRIVATE_KEY" || -s "$CREDENTIALS_PUBLIC_KEY" ]]; then
+        if [[ ! -s "$CREDENTIALS_PRIVATE_KEY" || ! -s "$CREDENTIALS_PUBLIC_KEY" ]]; then
+            err "Credential keypair неполный; автоматическая замена запрещена"
+            return 1
+        fi
+        openssl pkey -in "$CREDENTIALS_PRIVATE_KEY" -check -noout >/dev/null 2>&1 || { err "Повреждён private key credential vault"; return 1; }
+        openssl pkey -pubin -in "$CREDENTIALS_PUBLIC_KEY" -noout >/dev/null 2>&1 || { err "Повреждён public key credential vault"; return 1; }
+        local derived_public_hash stored_public_hash
+        derived_public_hash=$(openssl pkey -in "$CREDENTIALS_PRIVATE_KEY" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+        stored_public_hash=$(openssl pkey -pubin -in "$CREDENTIALS_PUBLIC_KEY" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+        [[ -n "$derived_public_hash" && "$derived_public_hash" == "$stored_public_hash" ]] \
+            || { err "Private/public key credential vault не совпадают"; return 1; }
+        touch "$USERS_SECRETS_FILE" "$CREDENTIALS_LOCK_FILE"
+        chmod 600 "$CREDENTIALS_PRIVATE_KEY" "$USERS_SECRETS_FILE" "$CREDENTIALS_LOCK_FILE" 2>/dev/null || true
+        chmod 644 "$CREDENTIALS_PUBLIC_KEY" 2>/dev/null || true
+        return 0
+    fi
+
+    if [[ -s "$USERS_SECRETS_FILE" ]] \
+        || grep -Eq ':\$2[aby]\$' "$USERS_FILE" 2>/dev/null \
+        || grep -Eq ':\$2[aby]\$' "$DISABLED_USERS_FILE" 2>/dev/null; then
+        err "Credential vault key отсутствует для существующего protected store; автоматическая замена запрещена"
+        return 1
+    fi
+
+    local private_tmp public_tmp
+    private_tmp=$(mktemp "${CREDENTIALS_DIR}/private.pem.XXXXXX") || return 1
+    public_tmp=$(mktemp "${CREDENTIALS_DIR}/public.pem.XXXXXX") || { rm -f "$private_tmp"; return 1; }
+    chmod 600 "$private_tmp" "$public_tmp"
+    if ! openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$private_tmp" >/dev/null 2>&1 \
+        || ! openssl pkey -in "$private_tmp" -pubout -out "$public_tmp" >/dev/null 2>&1; then
+        rm -f "$private_tmp" "$public_tmp"
+        err "Не удалось создать RSA-OAEP keypair для credential vault"
+        return 1
+    fi
+    mv -f "$private_tmp" "$CREDENTIALS_PRIVATE_KEY"
+    mv -f "$public_tmp" "$CREDENTIALS_PUBLIC_KEY"
+    chown root:root "$CREDENTIALS_PRIVATE_KEY" "$CREDENTIALS_PUBLIC_KEY" 2>/dev/null || true
+    chmod 600 "$CREDENTIALS_PRIVATE_KEY"
+    chmod 644 "$CREDENTIALS_PUBLIC_KEY"
+    : > "$USERS_SECRETS_FILE"
+    chmod 600 "$USERS_SECRETS_FILE"
+    ok "Создан локальный RSA-OAEP credential vault"
+}
+
+hash_proxy_password() {
+    local user="$1" pass="$2" record hash
+    ensure_credential_tools || return 1
+    is_valid_proxy_user "$user" || return 1
+    is_valid_proxy_pass "$pass" || return 1
+    record=$(printf '%s\n' "$pass" | htpasswd -niBC "$(credential_bcrypt_cost)" "$user" 2>/dev/null) || return 1
+    hash="${record#*:}"
+    is_valid_proxy_hash "$hash" || return 1
+    printf '%s\n' "$hash"
+}
+
+verify_proxy_password_hash() {
+    local user="$1" pass="$2" hash="$3" verify_file
+    is_valid_proxy_user "$user" || return 1
+    is_valid_proxy_pass "$pass" || return 1
+    is_valid_proxy_hash "$hash" || return 1
+    ensure_credential_tools || return 1
+    verify_file=$(mktemp /tmp/yurich-credential-verify.XXXXXX) || return 1
+    chmod 600 "$verify_file"
+    printf '%s:%s\n' "$user" "$hash" > "$verify_file"
+    if printf '%s\n' "$pass" | htpasswd -vi "$verify_file" "$user" >/dev/null 2>&1; then
+        rm -f "$verify_file"
+        return 0
+    fi
+    rm -f "$verify_file"
+    return 1
+}
+
+encrypt_proxy_password() {
+    local pass="$1" encrypted
+    ensure_credential_keypair || return 1
+    is_valid_proxy_pass "$pass" || return 1
+    encrypted=$(printf '%s' "$pass" \
+        | openssl pkeyutl -encrypt -pubin -inkey "$CREDENTIALS_PUBLIC_KEY" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 2>/dev/null \
+        | base64 -w0) || return 1
+    is_valid_encrypted_proxy_secret "$encrypted" || return 1
+    printf '%s\n' "$encrypted"
+}
+
+decrypt_proxy_password_with_key() {
+    local encrypted="$1" private_key="$2" pass
+    is_valid_encrypted_proxy_secret "$encrypted" || return 1
+    [[ -s "$private_key" ]] || return 1
+    pass=$(printf '%s' "$encrypted" \
+        | base64 -d 2>/dev/null \
+        | openssl pkeyutl -decrypt -inkey "$private_key" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 2>/dev/null) || return 1
+    is_valid_proxy_pass "$pass" || return 1
+    printf '%s\n' "$pass"
+}
+
+decrypt_proxy_password() {
+    decrypt_proxy_password_with_key "$1" "$CREDENTIALS_PRIVATE_KEY"
+}
+
+credential_file_value() {
+    local file="$1" lookup_user="$2"
+    [[ -f "$file" ]] || return 1
+    awk -F: -v user="$lookup_user" '$1 == user {sub(/^[^:]*:/, ""); print; exit}' "$file"
+}
+
+get_user_hash() {
+    local lookup_user="$1" value
+    value=$(credential_file_value "$USERS_FILE" "$lookup_user" 2>/dev/null || true)
+    [[ -n "$value" ]] || return 1
+    if is_valid_proxy_hash "$value"; then
+        printf '%s\n' "$value"
+        return 0
+    fi
+    is_valid_proxy_pass "$value" || return 1
+    hash_proxy_password "$lookup_user" "$value"
+}
+
+get_user_pass() {
+    local lookup_user="$1" encrypted legacy_value
+    encrypted=$(credential_file_value "$USERS_SECRETS_FILE" "$lookup_user" 2>/dev/null || true)
+    if [[ -n "$encrypted" ]]; then
+        decrypt_proxy_password "$encrypted"
+        return $?
+    fi
+
+    # Read-only compatibility for pre-v5.7 installs. New writes never use plaintext.
+    legacy_value=$(credential_file_value "$USERS_FILE" "$lookup_user" 2>/dev/null || true)
+    if is_valid_proxy_pass "$legacy_value" && ! is_valid_proxy_hash "$legacy_value"; then
+        printf '%s\n' "$legacy_value"
+        return 0
+    fi
+    return 1
+}
+
+get_active_user_hashes() {
+    local user value hash
+    while IFS=: read -r user value; do
+        [[ -z "$user" || -z "$value" ]] && continue
         if ! user_is_expired "$user"; then
-            printf '%s:%s\n' "$user" "$pass"
+            hash=$(get_user_hash "$user" 2>/dev/null || true)
+            [[ -n "$hash" ]] && printf '%s:%s\n' "$user" "$hash"
         fi
     done < <(get_users)
 }
 
-get_user_pass() {
-    local lookup_user="$1"
-    while IFS=: read -r user pass; do
-        [[ "$user" == "$lookup_user" ]] && { printf '%s\n' "$pass"; return 0; }
+get_active_users() {
+    local user value pass
+    while IFS=: read -r user value; do
+        [[ -z "$user" || -z "$value" ]] && continue
+        if ! user_is_expired "$user"; then
+            pass=$(get_user_pass "$user" 2>/dev/null || true)
+            [[ -n "$pass" ]] && printf '%s:%s\n' "$user" "$pass"
+        fi
     done < <(get_users)
-    return 1
 }
 
 get_active_user_pass() {
@@ -1265,7 +1450,274 @@ get_active_user_pass() {
 }
 
 active_user_count() {
-    get_active_users | wc -l
+    get_active_user_hashes | wc -l
+}
+
+write_active_users_hash_file() {
+    local tmp
+    ensure_credential_keypair || return 1
+    tmp=$(mktemp "${CREDENTIALS_DIR}/users.active.XXXXXX") || return 1
+    {
+        echo "# Yurich Panel active bcrypt credentials"
+        get_active_user_hashes
+    } > "$tmp"
+    install -o root -g root -m 600 "$tmp" "$ACTIVE_USERS_HASH_FILE"
+    rm -f "$tmp"
+}
+
+credential_state_backup() {
+    local destination="$1"
+    mkdir -p "$destination"
+    chmod 700 "$destination"
+    local file name
+    for file in "$USERS_FILE" "$DISABLED_USERS_FILE"; do
+        name=$(basename "$file")
+        if [[ -e "$file" ]]; then cp -a "$file" "$destination/$name"; else : > "$destination/$name.missing"; fi
+    done
+    if [[ -d "$CREDENTIALS_DIR" ]]; then
+        cp -a "$CREDENTIALS_DIR" "$destination/credentials"
+    else
+        : > "$destination/credentials.missing"
+    fi
+}
+
+credential_state_restore() {
+    local source="$1" file name
+    for file in "$USERS_FILE" "$DISABLED_USERS_FILE"; do
+        name=$(basename "$file")
+        if [[ -f "$source/$name.missing" ]]; then
+            rm -f "$file"
+        elif [[ -f "$source/$name" ]]; then
+            install -o root -g root -m 600 "$source/$name" "$file"
+        fi
+    done
+    rm -rf "$CREDENTIALS_DIR"
+    if [[ -d "$source/credentials" ]]; then
+        cp -a "$source/credentials" "$CREDENTIALS_DIR"
+    fi
+}
+
+credential_set_user() {
+    local user="$1" pass="$2" hash encrypted users_tmp secrets_tmp users_old secrets_old lock_fd
+    is_valid_proxy_user "$user" || return 1
+    is_valid_proxy_pass "$pass" || return 1
+    ensure_credential_keypair || return 1
+    hash=$(hash_proxy_password "$user" "$pass") || { err "Не удалось создать bcrypt для $user"; return 1; }
+    encrypted=$(encrypt_proxy_password "$pass") || { err "Не удалось зашифровать secret для $user"; return 1; }
+
+    touch "$CREDENTIALS_LOCK_FILE" "$USERS_SECRETS_FILE"
+    chmod 600 "$CREDENTIALS_LOCK_FILE" "$USERS_SECRETS_FILE"
+    exec {lock_fd}>"$CREDENTIALS_LOCK_FILE"
+    flock -x "$lock_fd" || { exec {lock_fd}>&-; return 1; }
+    users_tmp=$(mktemp "${CONFIG_DIR}/users.conf.XXXXXX") || { flock -u "$lock_fd"; exec {lock_fd}>&-; return 1; }
+    secrets_tmp=$(mktemp "${CREDENTIALS_DIR}/users.secrets.XXXXXX") || { rm -f "$users_tmp"; flock -u "$lock_fd"; exec {lock_fd}>&-; return 1; }
+    users_old=$(mktemp "${CREDENTIALS_DIR}/users.old.XXXXXX") \
+        || { rm -f "$users_tmp" "$secrets_tmp"; flock -u "$lock_fd"; exec {lock_fd}>&-; return 1; }
+    secrets_old=$(mktemp "${CREDENTIALS_DIR}/secrets.old.XXXXXX") \
+        || { rm -f "$users_tmp" "$secrets_tmp" "$users_old"; flock -u "$lock_fd"; exec {lock_fd}>&-; return 1; }
+    cp -a "$USERS_FILE" "$users_old"
+    cp -a "$USERS_SECRETS_FILE" "$secrets_old"
+    awk -F: -v user="$user" '$1 != user' "$USERS_FILE" > "$users_tmp"
+    printf '%s:%s\n' "$user" "$hash" >> "$users_tmp"
+    awk -F: -v user="$user" '$1 != user' "$USERS_SECRETS_FILE" > "$secrets_tmp"
+    printf '%s:%s\n' "$user" "$encrypted" >> "$secrets_tmp"
+    if ! install -o root -g root -m 600 "$users_tmp" "$USERS_FILE" \
+        || ! install -o root -g root -m 600 "$secrets_tmp" "$USERS_SECRETS_FILE" \
+        || [[ "$(get_user_pass "$user" 2>/dev/null || true)" != "$pass" ]] \
+        || ! verify_proxy_password_hash "$user" "$pass" "$hash" \
+        || ! write_active_users_hash_file >/dev/null 2>&1; then
+        install -o root -g root -m 600 "$users_old" "$USERS_FILE" 2>/dev/null || true
+        install -o root -g root -m 600 "$secrets_old" "$USERS_SECRETS_FILE" 2>/dev/null || true
+        rm -f "$users_tmp" "$secrets_tmp" "$users_old" "$secrets_old"
+        flock -u "$lock_fd"; exec {lock_fd}>&-
+        err "Credential transaction для $user отменена"
+        return 1
+    fi
+    rm -f "$users_tmp" "$secrets_tmp" "$users_old" "$secrets_old"
+    flock -u "$lock_fd"; exec {lock_fd}>&-
+    return 0
+}
+
+credential_remove_user_secret() {
+    local user="$1" tmp lock_fd
+    [[ -f "$USERS_SECRETS_FILE" ]] || return 0
+    touch "$CREDENTIALS_LOCK_FILE"
+    chmod 600 "$CREDENTIALS_LOCK_FILE"
+    exec {lock_fd}>"$CREDENTIALS_LOCK_FILE"
+    flock -x "$lock_fd" || { exec {lock_fd}>&-; return 1; }
+    tmp=$(mktemp "${CREDENTIALS_DIR}/users.secrets.XXXXXX") \
+        || { flock -u "$lock_fd"; exec {lock_fd}>&-; return 1; }
+    awk -F: -v user="$user" '$1 != user' "$USERS_SECRETS_FILE" > "$tmp"
+    if ! install -o root -g root -m 600 "$tmp" "$USERS_SECRETS_FILE"; then
+        rm -f "$tmp"
+        flock -u "$lock_fd"; exec {lock_fd}>&-
+        return 1
+    fi
+    rm -f "$tmp"
+    flock -u "$lock_fd"; exec {lock_fd}>&-
+}
+
+credential_plaintext_count() {
+    local count=0 file user value
+    for file in "$USERS_FILE" "$DISABLED_USERS_FILE"; do
+        [[ -f "$file" ]] || continue
+        while IFS=: read -r user value; do
+            [[ -z "$user" || -z "$value" ]] && continue
+            is_valid_proxy_hash "$value" || count=$((count + 1))
+        done < <(grep -v '^#\|^[[:space:]]*$' "$file" 2>/dev/null || true)
+    done
+    printf '%s\n' "$count"
+}
+
+credential_store_integrity_check() {
+    local file user value encrypted pass
+    local -A seen=()
+    command -v htpasswd >/dev/null 2>&1 || { err "Credential integrity: htpasswd не найден"; return 1; }
+    [[ -s "$CREDENTIALS_PRIVATE_KEY" && -s "$CREDENTIALS_PUBLIC_KEY" && -f "$USERS_SECRETS_FILE" ]] \
+        || { err "Credential integrity: vault неполный"; return 1; }
+
+    local derived_public_hash stored_public_hash
+    derived_public_hash=$(openssl pkey -in "$CREDENTIALS_PRIVATE_KEY" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+    stored_public_hash=$(openssl pkey -pubin -in "$CREDENTIALS_PUBLIC_KEY" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+    [[ -n "$derived_public_hash" && "$derived_public_hash" == "$stored_public_hash" ]] \
+        || { err "Credential integrity: RSA keypair не совпадает"; return 1; }
+
+    for file in "$USERS_FILE" "$DISABLED_USERS_FILE"; do
+        [[ -f "$file" ]] || continue
+        while IFS=: read -r user value; do
+            [[ -z "$user" || -z "$value" || "$user" == \#* ]] && continue
+            [[ -z "${seen[$user]+x}" ]] || { err "Credential integrity: duplicate user $user"; return 1; }
+            seen[$user]=1
+            is_valid_proxy_hash "$value" || continue
+            encrypted=$(credential_file_value "$USERS_SECRETS_FILE" "$user" 2>/dev/null || true)
+            pass=$(decrypt_proxy_password "$encrypted" 2>/dev/null || true)
+            verify_proxy_password_hash "$user" "$pass" "$value" \
+                || { err "Credential integrity: bcrypt/vault mismatch for $user"; return 1; }
+        done < <(grep -v '^#\|^[[:space:]]*$' "$file" 2>/dev/null || true)
+    done
+}
+
+credential_migrate_store() (
+    local active_tmp disabled_tmp secrets_tmp file output user value hash encrypted pass migration_lock_fd
+    local -A seen=()
+    ensure_credential_keypair || return 1
+    exec {migration_lock_fd}>"$CREDENTIALS_LOCK_FILE"
+    flock -x "$migration_lock_fd" || return 1
+    active_tmp=$(mktemp "${CONFIG_DIR}/users.conf.migrate.XXXXXX") || return 1
+    disabled_tmp=$(mktemp "${CONFIG_DIR}/users.disabled.migrate.XXXXXX") || { rm -f "$active_tmp"; return 1; }
+    secrets_tmp=$(mktemp "${CREDENTIALS_DIR}/users.secrets.migrate.XXXXXX") || { rm -f "$active_tmp" "$disabled_tmp"; return 1; }
+    : > "$active_tmp"; : > "$disabled_tmp"; : > "$secrets_tmp"
+
+    for file in "$USERS_FILE" "$DISABLED_USERS_FILE"; do
+        [[ "$file" == "$USERS_FILE" ]] && output="$active_tmp" || output="$disabled_tmp"
+        [[ -f "$file" ]] || continue
+        while IFS=: read -r user value; do
+            [[ -z "$user" || -z "$value" || "$user" == \#* ]] && continue
+            is_valid_proxy_user "$user" || { err "Миграция: некорректный пользователь $user"; rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"; return 1; }
+            [[ -z "${seen[$user]+x}" ]] || { err "Миграция: пользователь $user встречается дважды"; rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"; return 1; }
+            seen[$user]=1
+            encrypted=$(credential_file_value "$USERS_SECRETS_FILE" "$user" 2>/dev/null || true)
+            if is_valid_proxy_hash "$value"; then
+                hash="$value"
+                is_valid_encrypted_proxy_secret "$encrypted" || { err "Миграция: для $user нет encrypted secret; сначала ротируй пароль"; rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"; return 1; }
+                pass=$(decrypt_proxy_password "$encrypted" 2>/dev/null || true)
+                verify_proxy_password_hash "$user" "$pass" "$hash" || { err "Миграция: encrypted secret $user не соответствует bcrypt"; rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"; return 1; }
+            else
+                pass="$value"
+                is_valid_proxy_pass "$pass" || { err "Миграция: некорректный legacy-пароль $user"; rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"; return 1; }
+                hash=$(hash_proxy_password "$user" "$pass") || { rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"; return 1; }
+                encrypted=$(encrypt_proxy_password "$pass") || { rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"; return 1; }
+            fi
+            printf '%s:%s\n' "$user" "$hash" >> "$output"
+            printf '%s:%s\n' "$user" "$encrypted" >> "$secrets_tmp"
+        done < <(grep -v '^#\|^[[:space:]]*$' "$file" 2>/dev/null || true)
+    done
+
+    if ! install -o root -g root -m 600 "$active_tmp" "$USERS_FILE" \
+        || ! install -o root -g root -m 600 "$disabled_tmp" "$DISABLED_USERS_FILE" \
+        || ! install -o root -g root -m 600 "$secrets_tmp" "$USERS_SECRETS_FILE"; then
+        rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"
+        return 1
+    fi
+    rm -f "$active_tmp" "$disabled_tmp" "$secrets_tmp"
+    write_active_users_hash_file
+)
+
+cmd_credentials_status() {
+    load_users
+    local total legacy encrypted=0 missing=0 user value
+    total=$(get_users | wc -l)
+    legacy=$(credential_plaintext_count)
+    while IFS=: read -r user value; do
+        [[ -z "$user" ]] && continue
+        if is_valid_encrypted_proxy_secret "$(credential_file_value "$USERS_SECRETS_FILE" "$user" 2>/dev/null || true)"; then
+            encrypted=$((encrypted + 1))
+        else
+            missing=$((missing + 1))
+        fi
+    done < <(get_users)
+    hr
+    echo -e "${BOLD}  Credential storage${RESET}"
+    hr
+    echo -e "  Пользователей:        ${CYAN}${total}${RESET}"
+    echo -e "  Bcrypt + vault:       ${GREEN}${encrypted}${RESET}"
+    echo -e "  Legacy plaintext:     $([[ "$legacy" -eq 0 ]] && echo -e "${GREEN}0${RESET}" || echo -e "${RED}${legacy}${RESET}")"
+    echo -e "  Без encrypted secret: $([[ "$missing" -eq 0 ]] && echo -e "${GREEN}0${RESET}" || echo -e "${RED}${missing}${RESET}")"
+    [[ -s "$CREDENTIALS_PRIVATE_KEY" ]] && ok "RSA-OAEP keypair: готов" || warn "RSA-OAEP keypair: ещё не создан"
+}
+
+cmd_credentials_migrate() {
+    load_config
+    load_users
+    local legacy runtime_backup caddy_had=0 hysteria_had=0
+    legacy=$(credential_plaintext_count)
+    if [[ "$legacy" -eq 0 ]]; then
+        if [[ "$(get_users | wc -l)" -gt 0 || -s "$DISABLED_USERS_FILE" ]]; then
+            credential_store_integrity_check || {
+                err "Protected credential store повреждён; миграция без восстановления запрещена"
+                return 1
+            }
+        fi
+        write_active_users_hash_file >/dev/null 2>&1 || return 1
+        ok "Credential store уже использует bcrypt + encrypted vault"
+        return 0
+    fi
+    runtime_backup=$(mktemp -d /run/yurich-credential-migration.XXXXXX) || return 1
+    chmod 700 "$runtime_backup"
+    credential_state_backup "$runtime_backup/state" || { rm -rf "$runtime_backup"; return 1; }
+    if [[ -f "$CADDYFILE" ]]; then cp -a "$CADDYFILE" "$runtime_backup/Caddyfile"; caddy_had=1; fi
+    if [[ -f "$HYSTERIA_CONFIG" ]]; then cp -a "$HYSTERIA_CONFIG" "$runtime_backup/hysteria.yaml"; hysteria_had=1; fi
+
+    info "Мигрирую ${legacy} legacy credentials в bcrypt + RSA-OAEP vault..."
+    if ! credential_migrate_store || ! apply_user_access_runtime; then
+        err "Миграция не применена; восстанавливаю прежнее состояние"
+        credential_state_restore "$runtime_backup/state" || true
+        [[ "$caddy_had" -eq 1 ]] && install -m 600 "$runtime_backup/Caddyfile" "$CADDYFILE"
+        [[ "$hysteria_had" -eq 1 ]] && install -m 600 "$runtime_backup/hysteria.yaml" "$HYSTERIA_CONFIG"
+        systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+        systemctl restart hysteria >/dev/null 2>&1 || true
+        rm -rf "$runtime_backup"
+        return 1
+    fi
+    if [[ "$(credential_plaintext_count)" -ne 0 ]] || grep -q 'type: userpass' "$HYSTERIA_CONFIG" 2>/dev/null; then
+        err "Post-migration audit не пройден; выполняю rollback"
+        credential_state_restore "$runtime_backup/state" || true
+        [[ "$caddy_had" -eq 1 ]] && install -m 600 "$runtime_backup/Caddyfile" "$CADDYFILE"
+        [[ "$hysteria_had" -eq 1 ]] && install -m 600 "$runtime_backup/hysteria.yaml" "$HYSTERIA_CONFIG"
+        systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy >/dev/null 2>&1 || true
+        systemctl restart hysteria >/dev/null 2>&1 || true
+        rm -rf "$runtime_backup"
+        return 1
+    fi
+    {
+        printf 'MIGRATED_AT=%q\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'USERS=%q\n' "$(get_users | wc -l)"
+        printf 'BCRYPT_COST=%q\n' "$(credential_bcrypt_cost)"
+        printf 'FORMAT=%q\n' "bcrypt+rsa-oaep-sha256"
+    } > "$CREDENTIALS_MIGRATION_RECEIPT"
+    chmod 600 "$CREDENTIALS_MIGRATION_RECEIPT"
+    rm -rf "$runtime_backup"
+    ok "Миграция завершена: plaintext credentials удалены из user store, Caddy и Hysteria config"
 }
 
 is_valid_user_months() {
@@ -2309,7 +2761,7 @@ check_domain() {
 install_deps() {
     info "Обновляю пакеты и ставлю зависимости..."
     apt-get update -qq
-    if ! apt-get install -y -qq curl wget unzip tar ufw openssl dnsutils ca-certificates python3 jq 2>/dev/null; then
+    if ! apt-get install -y -qq curl wget unzip tar ufw openssl dnsutils ca-certificates python3 jq apache2-utils 2>/dev/null; then
         err "Не удалось установить обязательные системные зависимости"
         return 1
     fi
@@ -2455,23 +2907,23 @@ write_caddyfile_multi() {
 
     install_camouflage_page
 
-    # Собираем auth блоки
+    # Caddy core basic_auth принимает bcrypt; plaintext в Caddyfile не попадает.
     local auth_blocks=""
     local auth_count=0
     while IFS=: read -r u p; do
         [[ -z "$u" ]] && continue
-        if ! is_valid_proxy_user "$u" || ! is_valid_proxy_pass "$p"; then
-            err "Небезопасная запись пользователя в $USERS_FILE: $u"
-            err "Логин: 2-32 символа [A-Za-z0-9_-], пароль: 8-64 символа [A-Za-z0-9_-]"
+        if ! is_valid_proxy_user "$u" || ! is_valid_proxy_hash "$p"; then
+            err "Некорректная bcrypt-запись пользователя в $USERS_FILE: $u"
             return 1
         fi
-        auth_blocks+="        basic_auth ${u} ${p}"$'\n'
+        auth_blocks+="      ${u} ${p}"$'\n'
         auth_count=$((auth_count+1))
-    done < <(get_active_users)
+    done < <(get_active_user_hashes)
     if [[ "$auth_count" -lt 1 ]]; then
-        local disabled_pass
+        local disabled_pass disabled_hash
         disabled_pass=$(random_safe_token 32)
-        auth_blocks+="        basic_auth __disabled__ ${disabled_pass}"$'\n'
+        disabled_hash=$(hash_proxy_password "__disabled__" "$disabled_pass") || return 1
+        auth_blocks+="      __disabled__ ${disabled_hash}"$'\n'
         auth_count=1
         warn "Нет активных пользователей. Caddy proxy закрыт placeholder-auth."
     fi
@@ -2546,10 +2998,16 @@ EOF
 ${dom}:443 {
     tls ${EMAIL}
 
-  forward_proxy {
-${auth_blocks}${caddy_upstream}    hide_ip
-    hide_via
-    probe_resistance
+  @naive_proxy method CONNECT
+  route @naive_proxy {
+    request_header Authorization "{http.request.header.Proxy-Authorization}"
+    basic_auth bcrypt {
+${auth_blocks}    }
+    request_header -Authorization
+    forward_proxy {
+${caddy_upstream}      hide_ip
+      hide_via
+    }
   }
 
   header /s/* {
@@ -2579,6 +3037,15 @@ ${xhttp_block}
 
   file_server {
     root ${WEBROOT}
+  }
+
+    handle_errors {
+    @proxy_auth_error expression {http.error.status_code} == 401
+    handle @proxy_auth_error {
+      log_append yurich_auth_failure "1"
+      header -WWW-Authenticate
+      respond "Not Found" 404
+    }
   }
 
     log {
@@ -2836,23 +3303,23 @@ write_caddyfile() {
         return 1
     fi
 
-    # Собираем блоки basic_auth
+    # Caddy core basic_auth принимает bcrypt; plaintext в Caddyfile не попадает.
     local auth_blocks=""
     local auth_count=0
     while IFS=: read -r u p; do
         [[ -z "$u" ]] && continue
-        if ! is_valid_proxy_user "$u" || ! is_valid_proxy_pass "$p"; then
-            err "Небезопасная запись пользователя в $USERS_FILE: $u"
-            err "Логин: 2-32 символа [A-Za-z0-9_-], пароль: 8-64 символа [A-Za-z0-9_-]"
+        if ! is_valid_proxy_user "$u" || ! is_valid_proxy_hash "$p"; then
+            err "Некорректная bcrypt-запись пользователя в $USERS_FILE: $u"
             return 1
         fi
-        auth_blocks+="        basic_auth ${u} ${p}"$'\n'
+        auth_blocks+="        ${u} ${p}"$'\n'
         auth_count=$((auth_count+1))
-    done < <(get_active_users)
+    done < <(get_active_user_hashes)
     if [[ "$auth_count" -lt 1 ]]; then
-        local disabled_pass
+        local disabled_pass disabled_hash
         disabled_pass=$(random_safe_token 32)
-        auth_blocks+="        basic_auth __disabled__ ${disabled_pass}"$'\n'
+        disabled_hash=$(hash_proxy_password "__disabled__" "$disabled_pass") || return 1
+        auth_blocks+="        __disabled__ ${disabled_hash}"$'\n'
         auth_count=1
         warn "Нет активных пользователей. Caddy proxy закрыт placeholder-auth."
     fi
@@ -2932,10 +3399,16 @@ ${site_label} {
 ${tls_line}
 ${caddy_bind_line}
 
-    forward_proxy {
-${auth_blocks}${caddy_upstream}        hide_ip
-        hide_via
-        probe_resistance
+    @naive_proxy method CONNECT
+    route @naive_proxy {
+        request_header Authorization "{http.request.header.Proxy-Authorization}"
+        basic_auth bcrypt {
+${auth_blocks}        }
+        request_header -Authorization
+        forward_proxy {
+${caddy_upstream}            hide_ip
+            hide_via
+        }
     }
 
     header /s/* {
@@ -2965,6 +3438,15 @@ ${xhttp_block}
 
     file_server {
         root ${WEBROOT}
+    }
+
+    handle_errors {
+        @proxy_auth_error expression {http.error.status_code} == 401
+        handle @proxy_auth_error {
+            log_append yurich_auth_failure "1"
+            header -WWW-Authenticate
+            respond "Not Found" 404
+        }
     }
 
     log {
@@ -3106,6 +3588,10 @@ EOF
 [Definition]
 failregex = ^.*"remote_ip":"<HOST>".*"status":(?:401|407).*
             ^.*"client_ip":"<HOST>".*"status":(?:401|407).*
+            ^.*"remote_ip":"<HOST>".*"yurich_auth_failure":"1".*
+            ^.*"yurich_auth_failure":"1".*"remote_ip":"<HOST>".*
+            ^.*"client_ip":"<HOST>".*"yurich_auth_failure":"1".*
+            ^.*"yurich_auth_failure":"1".*"client_ip":"<HOST>".*
 ignoreregex =
 EOF
 
@@ -4039,6 +4525,11 @@ defaults
     timeout client-fin 30s
     timeout server-fin 30s
 
+frontend yurich_http_80
+    bind *:80
+    mode tcp
+    default_backend caddy_http
+
 frontend yurich_tls_443
     bind *:443 backlog 8192
     mode tcp
@@ -4049,6 +4540,10 @@ frontend yurich_tls_443
 ${github_test_acl}
 ${mobile_alt_acl}    use_backend caddy_tls if { req.ssl_sni -i ${caddy_sni_domains} }
     default_backend ${default_backend_name}
+
+backend caddy_http
+    mode tcp
+    server caddy_http 127.0.0.1:80 check inter 2s fall 3 rise 2
 
 backend caddy_tls
     mode tcp
@@ -4648,6 +5143,56 @@ cmd_security_audit() {
         warn_count=$((warn_count + 1))
     fi
 
+    local legacy_credentials
+    legacy_credentials=$(credential_plaintext_count)
+    if [[ "$legacy_credentials" -eq 0 ]]; then
+        ok "Proxy user store: plaintext credentials не найдены"
+    else
+        warn "Proxy user store: ${legacy_credentials} legacy plaintext записей; запусти credentials-migrate"
+        warn_count=$((warn_count + 1))
+    fi
+    if [[ -s "$CREDENTIALS_PRIVATE_KEY" ]]; then
+        [[ "$(stat -c '%a' "$CREDENTIALS_DIR" 2>/dev/null || echo 0)" == "700" ]] \
+            && ok "Credential vault directory: mode 700" \
+            || { err "Credential vault directory имеет небезопасные права"; failed=$((failed + 1)); }
+        [[ "$(stat -c '%a' "$CREDENTIALS_PRIVATE_KEY" 2>/dev/null || echo 0)" == "600" ]] \
+            && ok "Credential vault private key: mode 600" \
+            || { err "Credential vault private key имеет небезопасные права"; failed=$((failed + 1)); }
+        [[ -s "$USERS_SECRETS_FILE" ]] \
+            && ok "Encrypted credential vault: доступен" \
+            || { err "Encrypted credential vault отсутствует"; failed=$((failed + 1)); }
+        if [[ "$legacy_credentials" -eq 0 ]]; then
+            credential_store_integrity_check \
+                && ok "Credential vault integrity: bcrypt/keypair/ciphertext OK" \
+                || failed=$((failed + 1))
+        fi
+    elif [[ "$(get_users | wc -l)" -gt 0 && "$legacy_credentials" -eq 0 ]]; then
+        err "Credential vault key отсутствует при bcrypt users.conf"
+        failed=$((failed + 1))
+    fi
+    if grep -Eq '^[[:space:]]+basic_auth[[:space:]]+[A-Za-z0-9_-]{2,32}[[:space:]]+[A-Za-z0-9_-]{8,64}[[:space:]]*$' "$CADDYFILE" 2>/dev/null; then
+        err "Caddyfile содержит legacy plaintext proxy auth"
+        failed=$((failed + 1))
+    else
+        ok "Caddy auth config: bcrypt/no plaintext"
+    fi
+    if grep -q 'type: userpass' "$HYSTERIA_CONFIG" 2>/dev/null; then
+        warn "Hysteria использует legacy userpass; запусти credentials-migrate"
+        warn_count=$((warn_count + 1))
+    elif [[ -f "$HYSTERIA_CONFIG" ]]; then
+        grep -q 'type: command' "$HYSTERIA_CONFIG" \
+            && ok "Hysteria auth: bcrypt verifier" \
+            || { warn "Hysteria auth backend не распознан"; warn_count=$((warn_count + 1)); }
+    fi
+    if [[ -f "$HYSTERIA_CONFIG" ]]; then
+        if hysteria_tls_layout_needs_repair; then
+            err "Hysteria TLS sandbox несовместим с текущим cert path; запусти hysteria-repair"
+            failed=$((failed + 1))
+        else
+            ok "Hysteria TLS: изолирован, mode 700/600, sync timer enabled"
+        fi
+    fi
+
     [[ -d "$BACKUP_DIR" ]] && ok "Backup dir exists: $BACKUP_DIR" || { warn "Backup dir отсутствует: $BACKUP_DIR"; warn_count=$((warn_count + 1)); }
     [[ -f "$PROTOCOL_BENCHMARK_CRON" ]] && ok "Protocol benchmark cron installed" || warn "Protocol benchmark cron не установлен"
     [[ -f "$EXPIRY_NOTIFY_CRON" ]] && ok "Expiry notify cron installed" || warn "Expiry notify cron не установлен"
@@ -4664,7 +5209,7 @@ cmd_backup_encrypted() {
     mkdir -p "$BACKUP_DIR"
     chmod 700 "$BACKUP_DIR"
 
-    local pass pass_file ts backup_file item includes=()
+    local pass pass_file ts backup_file backup_tmp item includes=()
     if [[ -n "${NAIVEPROXY_BACKUP_PASSPHRASE:-}" ]]; then
         pass="$NAIVEPROXY_BACKUP_PASSPHRASE"
     else
@@ -4684,11 +5229,15 @@ cmd_backup_encrypted() {
     printf '%s' "$pass" > "$pass_file"
     ts=$(date +%Y%m%d_%H%M%S)
     backup_file="$BACKUP_DIR/naiveproxy-full-${ts}.tar.gz.enc"
-    if tar -czf - "${includes[@]}" 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -salt -out "$backup_file" -pass "file:$pass_file"; then
-        chmod 600 "$backup_file"
+    backup_tmp=$(mktemp "/var/tmp/naiveproxy-full-${ts}.XXXXXX.tar.gz.enc") || { rm -f "$pass_file"; return 1; }
+    chmod 600 "$backup_tmp"
+    if tar --exclude="${BACKUP_DIR#/}" --exclude="${EXPORT_DIR#/}" -czf - "${includes[@]}" 2>/dev/null \
+        | openssl enc -aes-256-cbc -pbkdf2 -salt -out "$backup_tmp" -pass "file:$pass_file" \
+        && install -o root -g root -m 600 "$backup_tmp" "$backup_file"; then
+        rm -f "$backup_tmp"
         ok "Encrypted backup создан: $backup_file"
     else
-        rm -f "$backup_file" 2>/dev/null || true
+        rm -f "$backup_tmp" "$backup_file" 2>/dev/null || true
         err "Encrypted backup не создан"
         rm -f "$pass_file"
         return 1
@@ -4702,7 +5251,7 @@ cmd_export_state() {
     local ts out items=()
     ts=$(date +%Y%m%d_%H%M%S)
     out="$EXPORT_DIR/naiveproxy-state-${ts}.tar.gz"
-    for item in naive.conf users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled bridge.conf nodes.conf; do
+    for item in naive.conf users.conf credentials users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled bridge.conf nodes.conf; do
         [[ -e "$CONFIG_DIR/$item" ]] && items+=("$item")
     done
     [[ "${#items[@]}" -gt 0 ]] || { err "Нет данных для export"; return 1; }
@@ -5056,7 +5605,7 @@ sanitize_imported_colon_file() {
             return 1
         fi
         case "$mode" in
-            proxy) is_valid_proxy_pass "$secret" || { err "Import: некорректный пароль для $user"; rm -f "$tmp"; return 1; } ;;
+            proxy) { is_valid_proxy_pass "$secret" || is_valid_proxy_hash "$secret"; } || { err "Import: некорректный proxy credential для $user"; rm -f "$tmp"; return 1; } ;;
             xray) is_valid_xray_uuid "$secret" || { err "Import: некорректный Xray UUID для $user"; rm -f "$tmp"; return 1; } ;;
             *) rm -f "$tmp"; return 1 ;;
         esac
@@ -5114,6 +5663,88 @@ sanitize_imported_aliases_file() {
     rm -f "$tmp"
 }
 
+sanitize_imported_credentials_dir() {
+    local source_dir="$1" output_dir="$2" file name private_key public_key secrets_file active_file tmp line user encrypted extra pass count=0
+    local -A seen=()
+    [[ -d "$source_dir" && ! -L "$source_dir" ]] || return 1
+    while IFS= read -r file; do
+        name=$(basename "$file")
+        case "$name" in
+            private.pem|public.pem|users.secrets|users.active.htpasswd|credentials.lock|migration.receipt) ;;
+            *) err "Import: неизвестный файл credential vault: $name"; return 1 ;;
+        esac
+        [[ -f "$file" && ! -L "$file" ]] || { err "Import: credential vault содержит не обычный файл"; return 1; }
+        [[ "$(stat -c '%s' "$file" 2>/dev/null || echo 0)" -le 4194304 ]] || { err "Import: credential-файл слишком большой: $name"; return 1; }
+    done < <(find "$source_dir" -mindepth 1 -maxdepth 1 -print)
+
+    private_key="$source_dir/private.pem"
+    public_key="$source_dir/public.pem"
+    secrets_file="$source_dir/users.secrets"
+    active_file="$source_dir/users.active.htpasswd"
+    [[ -s "$private_key" && -s "$public_key" && -f "$secrets_file" ]] || { err "Import: credential vault неполный"; return 1; }
+    openssl pkey -in "$private_key" -check -noout >/dev/null 2>&1 || { err "Import: private key vault повреждён"; return 1; }
+    openssl pkey -pubin -in "$public_key" -noout >/dev/null 2>&1 || { err "Import: public key vault повреждён"; return 1; }
+    local derived_hash public_hash
+    derived_hash=$(openssl pkey -in "$private_key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+    public_hash=$(openssl pkey -pubin -in "$public_key" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')
+    [[ -n "$derived_hash" && "$derived_hash" == "$public_hash" ]] || { err "Import: private/public key vault не совпадают"; return 1; }
+
+    mkdir -p "$output_dir"
+    chmod 700 "$output_dir"
+    tmp="$output_dir/users.secrets.tmp"
+    : > "$tmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+        IFS=: read -r user encrypted extra <<< "$line"
+        is_valid_proxy_user "$user" && is_valid_encrypted_proxy_secret "$encrypted" && [[ -z "$extra" ]] \
+            || { err "Import: некорректная encrypted credential-запись"; rm -f "$tmp"; return 1; }
+        [[ -z "${seen[$user]+x}" ]] || { err "Import: duplicate encrypted credential $user"; rm -f "$tmp"; return 1; }
+        pass=$(decrypt_proxy_password_with_key "$encrypted" "$private_key" 2>/dev/null || true)
+        is_valid_proxy_pass "$pass" || { err "Import: encrypted credential $user не расшифровывается"; rm -f "$tmp"; return 1; }
+        seen[$user]=1
+        count=$((count + 1)); (( count <= 10000 )) || { rm -f "$tmp"; return 1; }
+        printf '%s:%s\n' "$user" "$encrypted" >> "$tmp"
+    done < "$secrets_file"
+    install -m 600 "$private_key" "$output_dir/private.pem"
+    install -m 644 "$public_key" "$output_dir/public.pem"
+    install -m 600 "$tmp" "$output_dir/users.secrets"
+    rm -f "$tmp"
+    if [[ -f "$active_file" ]]; then
+        sanitize_imported_colon_file "$active_file" "$output_dir/users.active.htpasswd" proxy || return 1
+    fi
+    : > "$output_dir/credentials.lock"
+    chmod 600 "$output_dir/credentials.lock"
+}
+
+validate_imported_user_vault() {
+    local users_file="$1" credentials_dir="$2" user hash encrypted pass
+    [[ -f "$users_file" && -d "$credentials_dir" ]] || return 0
+    while IFS=: read -r user hash; do
+        [[ -z "$user" || "$user" == \#* ]] && continue
+        encrypted=$(credential_file_value "$credentials_dir/users.secrets" "$user" 2>/dev/null || true)
+        if is_valid_proxy_hash "$hash"; then
+            pass=$(decrypt_proxy_password_with_key "$encrypted" "$credentials_dir/private.pem" 2>/dev/null || true)
+            if ! verify_proxy_password_hash "$user" "$pass" "$hash"; then
+                err "Import: vault credential $user не соответствует bcrypt в $(basename "$users_file")"
+                return 1
+            fi
+        elif [[ -n "$encrypted" ]]; then
+            pass=$(decrypt_proxy_password_with_key "$encrypted" "$credentials_dir/private.pem" 2>/dev/null || true)
+            if [[ "$pass" != "$hash" ]]; then
+                err "Import: legacy credential $user конфликтует с encrypted vault"
+                return 1
+            fi
+        else
+            continue
+        fi
+        if [[ -z "$pass" ]]; then
+            err "Import: vault credential $user не соответствует bcrypt в $(basename "$users_file")"
+            return 1
+        fi
+    done < "$users_file"
+}
+
 sanitize_imported_token_file() {
     local source_file="$1" output_file="$2" token
     [[ -f "$source_file" && ! -L "$source_file" ]] || return 1
@@ -5147,8 +5778,8 @@ sanitize_imported_user_meta_file() {
 }
 
 cmd_import_state() {
-    local archive="${1:-}" name import_work_dir import_archive payload archive_size archive_stats entry_count unpacked_size safe_naive safe_bridge safe_nodes safe_aliases state_file
-    local existing_state=0
+    local archive="${1:-}" name import_work_dir import_archive payload archive_size archive_stats entry_count unpacked_size safe_naive safe_bridge safe_nodes safe_aliases safe_credentials state_file
+    local existing_state=0 imported_has_bcrypt=0
     [[ -n "$archive" ]] || { echo -ne "${CYAN}Путь к export .tar.gz: ${RESET}"; read -r archive; }
     [[ -f "$archive" ]] || { err "Файл не найден: $archive"; return 1; }
 
@@ -5183,7 +5814,7 @@ cmd_import_state() {
         return 1
     fi
     if ! timeout 30s tar -tzf "$import_archive" 2>/dev/null \
-        | awk '/^(naive\.conf|users\.conf|users\.disabled|xray-users\.conf|xray-compat-users\.conf|xray-users\.disabled|bridge\.conf|nodes\.conf|subscription-aliases\.conf|users\.d\/|users\.d\/[A-Za-z0-9_-]+\.env|subscriptions\/|subscriptions\/[A-Za-z0-9_-]+\.token)$/ { next } { bad=1 } END { exit bad ? 1 : 0 }'; then
+        | awk '/^(naive\.conf|users\.conf|users\.disabled|xray-users\.conf|xray-compat-users\.conf|xray-users\.disabled|bridge\.conf|nodes\.conf|subscription-aliases\.conf|credentials\/|credentials\/(private\.pem|public\.pem|users\.secrets|users\.active\.htpasswd|credentials\.lock|migration\.receipt)|users\.d\/|users\.d\/[A-Za-z0-9_-]+\.env|subscriptions\/|subscriptions\/[A-Za-z0-9_-]+\.token)$/ { next } { bad=1 } END { exit bad ? 1 : 0 }'; then
         err "Архив содержит неизвестные файлы. Импорт остановлен."
         return 1
     fi
@@ -5212,10 +5843,36 @@ cmd_import_state() {
         safe_aliases="${import_work_dir}/subscription-aliases.conf.safe"
         sanitize_imported_aliases_file "$payload/subscription-aliases.conf" "$safe_aliases" || return 1
     fi
+    if [[ -d "$payload/credentials" ]]; then
+        safe_credentials="${import_work_dir}/credentials.safe"
+        sanitize_imported_credentials_dir "$payload/credentials" "$safe_credentials" || return 1
+    fi
     for name in users.conf users.disabled; do
         [[ -f "$payload/$name" ]] || continue
         sanitize_imported_colon_file "$payload/$name" "${import_work_dir}/${name}.safe" proxy || return 1
     done
+    if [[ -n "${safe_credentials:-}" && ! -f "${import_work_dir}/users.conf.safe" ]]; then
+        err "Import: credential vault без users.conf запрещён"
+        return 1
+    fi
+    for name in users.conf users.disabled; do
+        if [[ -f "${import_work_dir}/${name}.safe" ]] \
+            && awk -F: 'NF >= 2 && $1 !~ /^#/ && $2 ~ /^\$2[aby]\$/ {found=1} END {exit found ? 0 : 1}' "${import_work_dir}/${name}.safe"; then
+            imported_has_bcrypt=1
+        fi
+    done
+    if [[ "$imported_has_bcrypt" -eq 1 && -z "${safe_credentials:-}" ]]; then
+        err "Import: bcrypt users.conf требует каталог credentials с encrypted vault"
+        return 1
+    fi
+    if [[ -n "${safe_credentials:-}" ]]; then
+        if [[ -f "${import_work_dir}/users.conf.safe" ]]; then
+            validate_imported_user_vault "${import_work_dir}/users.conf.safe" "$safe_credentials" || return 1
+        fi
+        if [[ -f "${import_work_dir}/users.disabled.safe" ]]; then
+            validate_imported_user_vault "${import_work_dir}/users.disabled.safe" "$safe_credentials" || return 1
+        fi
+    fi
     for name in xray-users.conf xray-compat-users.conf xray-users.disabled; do
         [[ -f "$payload/$name" ]] || continue
         sanitize_imported_colon_file "$payload/$name" "${import_work_dir}/${name}.safe" xray || return 1
@@ -5224,7 +5881,7 @@ cmd_import_state() {
     echo -ne "${YELLOW}Импорт перезапишет users/subscriptions/config. Продолжить? [y/N]: ${RESET}"
     read -r ans
     [[ "${ans,,}" == "y" ]] || return 0
-    for state_file in naive.conf users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled bridge.conf nodes.conf; do
+    for state_file in naive.conf users.conf credentials users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled bridge.conf nodes.conf; do
         [[ -e "$CONFIG_DIR/$state_file" ]] && { existing_state=1; break; }
     done
     if [[ "$existing_state" -eq 1 ]]; then
@@ -5251,6 +5908,17 @@ cmd_import_state() {
             *) [[ -f "$payload/$name" ]] && install -m 600 "$payload/$name" "$CONFIG_DIR/$name" ;;
         esac
     done
+    if [[ -n "${safe_credentials:-}" && -d "$safe_credentials" ]]; then
+        rm -rf "$CREDENTIALS_DIR"
+        cp -a "$safe_credentials" "$CREDENTIALS_DIR"
+        chown -R root:root "$CREDENTIALS_DIR" 2>/dev/null || true
+        chmod 700 "$CREDENTIALS_DIR"
+        chmod 600 "$CREDENTIALS_PRIVATE_KEY" "$USERS_SECRETS_FILE" "$ACTIVE_USERS_HASH_FILE" "$CREDENTIALS_LOCK_FILE" 2>/dev/null || true
+        chmod 644 "$CREDENTIALS_PUBLIC_KEY" 2>/dev/null || true
+    elif [[ -f "${import_work_dir}/users.conf.safe" ]]; then
+        # A legacy import must not inherit encrypted secrets from the previous install.
+        rm -rf "$CREDENTIALS_DIR"
+    fi
     if [[ -d "$payload/users.d" ]]; then
         mkdir -p "$USER_META_DIR"
         chmod 700 "$USER_META_DIR"
@@ -5778,7 +6446,9 @@ cmd_nodes_sync_users() {
     load_users
     nodes_ensure_file
     [[ -f "$USERS_FILE" ]] || { err "users.conf не найден, нечего синхронизировать"; return 1; }
-    for item in users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled; do
+    ensure_credential_keypair || return 1
+    write_active_users_hash_file || return 1
+    for item in users.conf credentials users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled; do
         [[ -e "$CONFIG_DIR/$item" ]] && items+=("$item")
     done
     [[ "${#items[@]}" -gt 0 ]] || { err "Нет файлов состояния для sync"; return 1; }
@@ -5811,7 +6481,7 @@ cmd_nodes_sync_users() {
             failed=1
             continue
         fi
-        if nodes_ssh "$line" "${sudo_cmd}mkdir -p ${CONFIG_DIR} ${BACKUP_DIR} ${USER_META_DIR} ${SUBS_DIR} && ${sudo_cmd}tar -C ${CONFIG_DIR} -czf ${BACKUP_DIR}/node-sync-before-\$(date +%Y%m%d_%H%M%S).tar.gz users.conf users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled 2>/dev/null || true; ${sudo_cmd}tar -C ${CONFIG_DIR} -xzf ${remote_tmp}; ${sudo_cmd}chmod 700 ${CONFIG_DIR} ${USER_META_DIR} ${SUBS_DIR} 2>/dev/null || true; ${sudo_cmd}chmod 600 ${USERS_FILE} ${DISABLED_USERS_FILE} ${XRAY_USERS_FILE} ${XRAY_COMPAT_USERS_FILE} ${XRAY_DISABLED_USERS_FILE} ${SUBS_ALIASES_FILE} ${USER_META_DIR}/*.env ${SUBS_DIR}/*.token 2>/dev/null || true; sync_status=0; if [ -x ${SCRIPT_PATH} ]; then if [ -x ${CADDY_BIN} ] && [ -f ${CADDYFILE} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} safe-apply || sync_status=20; fi; if [ -x ${HYSTERIA_BIN} ] || [ -f ${HYSTERIA_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} hysteria-sync >/dev/null 2>&1 || sync_status=21; fi; if [ -x ${XRAY_BIN} ] || [ -f ${XRAY_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} xray-rebuild >/dev/null 2>&1 || sync_status=22; fi; ${sudo_cmd}bash ${SCRIPT_PATH} nodes-subscriptions >/dev/null 2>&1 || sync_status=23; else sync_status=24; fi; ${sudo_cmd}rm -f ${remote_tmp}; exit \$sync_status"; then
+        if nodes_ssh "$line" "trap 'rm -f ${remote_tmp}' EXIT; ${sudo_cmd}chmod 600 ${remote_tmp} || exit 16; ${sudo_cmd}mkdir -p ${CONFIG_DIR} ${BACKUP_DIR} ${USER_META_DIR} ${SUBS_DIR} || exit 17; ${sudo_cmd}tar -tzf ${remote_tmp} >/dev/null || exit 18; ${sudo_cmd}tar -C ${CONFIG_DIR} -czf ${BACKUP_DIR}/node-sync-before-\$(date +%Y%m%d_%H%M%S).tar.gz users.conf credentials users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled 2>/dev/null || true; ${sudo_cmd}find ${BACKUP_DIR} -maxdepth 1 -type f -name 'node-sync-before-*.tar.gz' -exec chmod 600 {} +; ${sudo_cmd}tar -C ${CONFIG_DIR} -xzf ${remote_tmp} || exit 19; ${sudo_cmd}chmod 700 ${CONFIG_DIR} ${CREDENTIALS_DIR} ${USER_META_DIR} ${SUBS_DIR} 2>/dev/null || true; ${sudo_cmd}chmod 600 ${USERS_FILE} ${DISABLED_USERS_FILE} ${CREDENTIALS_PRIVATE_KEY} ${USERS_SECRETS_FILE} ${ACTIVE_USERS_HASH_FILE} ${CREDENTIALS_LOCK_FILE} ${XRAY_USERS_FILE} ${XRAY_COMPAT_USERS_FILE} ${XRAY_DISABLED_USERS_FILE} ${SUBS_ALIASES_FILE} ${USER_META_DIR}/*.env ${SUBS_DIR}/*.token 2>/dev/null || true; ${sudo_cmd}chmod 644 ${CREDENTIALS_PUBLIC_KEY} 2>/dev/null || true; sync_status=0; if [ -x ${SCRIPT_PATH} ]; then if [ -x ${CADDY_BIN} ] && [ -f ${CADDYFILE} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} safe-apply || sync_status=20; fi; if [ -x ${HYSTERIA_BIN} ] || [ -f ${HYSTERIA_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} hysteria-sync >/dev/null 2>&1 || sync_status=21; fi; if [ -x ${XRAY_BIN} ] || [ -f ${XRAY_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} xray-rebuild >/dev/null 2>&1 || sync_status=22; fi; ${sudo_cmd}bash ${SCRIPT_PATH} nodes-subscriptions >/dev/null 2>&1 || sync_status=23; else sync_status=24; fi; exit \$sync_status"; then
             ok "Users synced: ${node_name}"
         else
             err "Sync failed: ${node_name}"
@@ -7020,6 +7690,7 @@ node_location_label() {
         usa|us|america|california|fremont) printf 'USA California' ;;
         poland|pl|warsaw) printf 'Poland' ;;
         poland2|pl2|usa2|test-go-it|test) printf 'Poland 2' ;;
+        uk|gb|united-kingdom|united_kingdom|great-britain|britain|london) printf 'United Kingdom' ;;
         *) printf '%s' "$node" ;;
     esac
 }
@@ -7071,6 +7742,7 @@ happ_location_code() {
         *poland*|*warsaw*|*polska*) printf 'PL' ;;
         *finland*|*helsinki*|*suomi*|*dns-ai*) printf 'FI' ;;
         *germany*|*deutschland*|*berlin*|*frankfurt*|*plus-dns*) printf 'DE' ;;
+        *united-kingdom*|*united\ kingdom*|*great\ britain*|*london*) printf 'GB' ;;
         *netherlands*|*holland*|*amsterdam*|*net-it*) printf 'NL' ;;
         *usa*|*united\ states*|*america*|*california*|*fremont*) printf 'US' ;;
         *) printf 'VPN' ;;
@@ -7116,6 +7788,8 @@ def loc_code(host, label):
         return "FI"
     if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
         return "DE"
+    if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
+        return "GB"
     if "netherlands" in text or "amsterdam" in text or "net-it" in text:
         return "NL"
     return "VPN"
@@ -7138,6 +7812,8 @@ def loc_label(host, label):
         return "🇫🇮 Finland"
     if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
         return "🇩🇪 Germany"
+    if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
+        return "🇬🇧 United Kingdom"
     if "netherlands" in text or "amsterdam" in text or "net-it" in text:
         return "🇳🇱 Netherlands"
     return "🌐 VPN"
@@ -7198,6 +7874,7 @@ PY
 }
 
 hiddify_compat_links() {
+    local force_xray_core="${1:-0}"
     if ! command -v python3 >/dev/null 2>&1; then
         cat
         return 0
@@ -7205,9 +7882,11 @@ hiddify_compat_links() {
     local tmp_input
     tmp_input=$(mktemp /tmp/yurich_hiddify_links_XXXXXX.txt) || return 1
     cat > "$tmp_input"
-    python3 - "$tmp_input" <<'PY'
+    python3 - "$tmp_input" "$force_xray_core" <<'PY'
 import sys
 import urllib.parse
+
+force_xray_core = len(sys.argv) > 2 and sys.argv[2] == "1"
 
 def loc_code(host, label):
     text = f"{host} {label}".lower()
@@ -7225,6 +7904,8 @@ def loc_code(host, label):
         return "FI"
     if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
         return "DE"
+    if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
+        return "GB"
     if "netherlands" in text or "amsterdam" in text or "net-it" in text:
         return "NL"
     return "VPN"
@@ -7247,6 +7928,8 @@ def loc_label(host, label):
         return "🇫🇮 Finland"
     if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
         return "🇩🇪 Germany"
+    if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
+        return "🇬🇧 United Kingdom"
     if "netherlands" in text or "amsterdam" in text or "net-it" in text:
         return "🇳🇱 Netherlands"
     return "🌐 VPN"
@@ -7300,6 +7983,9 @@ def one(line):
         pairs = [(k, v) for k, v in urllib.parse.parse_qsl(split.query, keep_blank_values=True) if k not in drop]
         query_map = urllib.parse.parse_qs(split.query, keep_blank_values=True)
         proto = "XHTTP" if first(query_map, "type").lower() == "xhttp" else "Reality"
+        if proto == "XHTTP" and force_xray_core:
+            pairs = [(k, v) for k, v in pairs if k.lower() != "core"]
+            pairs.append(("core", "xray"))
         query = urllib.parse.urlencode(pairs)
         return urllib.parse.urlunsplit((split.scheme, netloc, split.path, query, clean_label(host, old_label, proto)))
     return raw
@@ -7445,7 +8131,7 @@ print_client_config() {
         first_pass=$(get_user_pass "$selected_user")
     else
         first_user=$(get_users | head -1 | cut -d: -f1)
-        first_pass=$(get_users | head -1 | cut -d: -f2)
+        first_pass=$(get_user_pass "$first_user" 2>/dev/null || true)
     fi
 
     if [[ -z "${first_user:-}" ]]; then
@@ -7543,7 +8229,10 @@ EOF
     if [[ -z "$selected_user" && $count -gt 1 ]]; then
         echo
         info "Все пользователи ($count):"
-        while IFS=: read -r u p; do
+        local p
+        while IFS=: read -r u _; do
+            p=$(get_user_pass "$u" 2>/dev/null || true)
+            [[ -n "$p" ]] || { warn "Encrypted secret для $u недоступен"; continue; }
             echo -e "  [USER] ${BOLD}$u${RESET} : Yurich $(yurich_proxy_uri "$u" "$p" "${u}-yurich")"
             echo -e "     native: naive+https://${u}:${p}@${DOMAIN}:443"
         done < <(get_users)
@@ -7644,29 +8333,176 @@ install_hysteria_bin() {
     info "Hysteria release pin: ${HYSTERIA_VERSION_PIN:-latest}"
 }
 
+install_hysteria_auth_helper() {
+    ensure_credential_tools || return 1
+    write_active_users_hash_file || return 1
+    install -d -o root -g root -m 755 "$(dirname "$HYSTERIA_AUTH_HELPER")"
+    cat > "$HYSTERIA_AUTH_HELPER" <<EOF
+#!/bin/bash
+set -euo pipefail
+
+ACTIVE_USERS_FILE='${ACTIVE_USERS_HASH_FILE}'
+auth="\${2:-}"
+[[ "\$auth" == *:* ]] || exit 1
+user="\${auth%%:*}"
+pass="\${auth#*:}"
+[[ "\$user" =~ ^[A-Za-z0-9_-]{2,32}\$ ]] || exit 1
+[[ "\$pass" =~ ^[A-Za-z0-9_-]{8,64}\$ ]] || exit 1
+[[ -r "\$ACTIVE_USERS_FILE" ]] || exit 1
+
+if printf '%s\n' "\$pass" | /usr/bin/htpasswd -vi "\$ACTIVE_USERS_FILE" "\$user" >/dev/null 2>&1; then
+    printf '%s\n' "\$user"
+    exit 0
+fi
+exit 1
+EOF
+    chown root:root "$HYSTERIA_AUTH_HELPER" 2>/dev/null || true
+    chmod 700 "$HYSTERIA_AUTH_HELPER"
+}
+
+install_hysteria_tls_sync() {
+    local source_cert source_key
+    source_cert=$(find_caddy_cert "${DOMAIN:-}" || true)
+    source_key=$(find_caddy_key "${DOMAIN:-}" || true)
+    if [[ -z "$source_cert" || -z "$source_key" ]]; then
+        err "Не нашёл TLS сертификат Caddy для ${DOMAIN:-не задан}"
+        err "Сначала дождись выпуска TLS: sudo bash yurich-panel.sh cert"
+        return 1
+    fi
+
+    install -d -o root -g root -m 700 "$HYSTERIA_TLS_DIR"
+    install -d -o root -g root -m 755 "$(dirname "$HYSTERIA_TLS_SYNC_SCRIPT")"
+    cat > "$HYSTERIA_TLS_SYNC_SCRIPT" <<EOF
+#!/bin/bash
+set -euo pipefail
+
+CONFIG_FILE='${CONFIG_FILE}'
+SOURCE_ROOT='/root/.local/share/caddy/certificates'
+TLS_DIR='${HYSTERIA_TLS_DIR}'
+CERT_DEST='${HYSTERIA_TLS_CERT}'
+KEY_DEST='${HYSTERIA_TLS_KEY}'
+MODE="\${1:---restart-if-changed}"
+
+[[ -r "\$CONFIG_FILE" ]] || { echo "Hysteria TLS sync: config is not readable" >&2; exit 1; }
+# shellcheck disable=SC1090
+source "\$CONFIG_FILE"
+domain="\${DOMAIN:-}"
+[[ "\$domain" =~ ^[A-Za-z0-9.-]{1,253}\$ && "\$domain" == *.* && "\$domain" != .* && "\$domain" != *..* ]] \
+    || { echo "Hysteria TLS sync: invalid DOMAIN" >&2; exit 1; }
+
+source_cert=\$(find "\$SOURCE_ROOT" -xdev -type f -path "*/\${domain}/\${domain}.crt" -print -quit 2>/dev/null || true)
+source_key=\$(find "\$SOURCE_ROOT" -xdev -type f -path "*/\${domain}/\${domain}.key" -print -quit 2>/dev/null || true)
+[[ -n "\$source_cert" && -n "\$source_key" && -r "\$source_cert" && -r "\$source_key" ]] \
+    || { echo "Hysteria TLS sync: Caddy certificate is unavailable for \$domain" >&2; exit 1; }
+
+install -d -o root -g root -m 700 "\$TLS_DIR"
+tmp_dir=\$(mktemp -d "\${TLS_DIR}/.sync.XXXXXX")
+trap 'rm -rf -- "\$tmp_dir"' EXIT
+install -o root -g root -m 600 "\$source_cert" "\$tmp_dir/cert.pem"
+install -o root -g root -m 600 "\$source_key" "\$tmp_dir/key.pem"
+
+openssl x509 -in "\$tmp_dir/cert.pem" -noout >/dev/null
+openssl pkey -in "\$tmp_dir/key.pem" -noout >/dev/null
+openssl x509 -in "\$tmp_dir/cert.pem" -checkend 86400 -noout >/dev/null \
+    || { echo "Hysteria TLS sync: certificate expires in less than 24 hours" >&2; exit 1; }
+cert_pub=\$(openssl x509 -in "\$tmp_dir/cert.pem" -pubkey -noout \
+    | openssl pkey -pubin -outform DER 2>/dev/null \
+    | sha256sum | awk '{print \$1}')
+key_pub=\$(openssl pkey -in "\$tmp_dir/key.pem" -pubout -outform DER 2>/dev/null \
+    | sha256sum | awk '{print \$1}')
+[[ -n "\$cert_pub" && "\$cert_pub" == "\$key_pub" ]] \
+    || { echo "Hysteria TLS sync: certificate and private key do not match" >&2; exit 1; }
+
+changed=0
+if [[ ! -s "\$CERT_DEST" || ! -s "\$KEY_DEST" ]] \
+    || ! cmp -s "\$tmp_dir/cert.pem" "\$CERT_DEST" \
+    || ! cmp -s "\$tmp_dir/key.pem" "\$KEY_DEST"; then
+    mv -f -- "\$tmp_dir/cert.pem" "\$CERT_DEST"
+    mv -f -- "\$tmp_dir/key.pem" "\$KEY_DEST"
+    chown root:root "\$CERT_DEST" "\$KEY_DEST"
+    chmod 600 "\$CERT_DEST" "\$KEY_DEST"
+    changed=1
+fi
+
+if [[ "\$changed" -eq 1 ]]; then
+    echo "Hysteria TLS sync: certificate updated for \$domain"
+    if [[ "\$MODE" == "--restart-if-changed" ]] && systemctl is-active --quiet hysteria.service; then
+        systemctl restart hysteria.service
+    fi
+fi
+EOF
+    chown root:root "$HYSTERIA_TLS_SYNC_SCRIPT"
+    chmod 700 "$HYSTERIA_TLS_SYNC_SCRIPT"
+
+    cat > "$HYSTERIA_TLS_SYNC_SERVICE" <<EOF
+[Unit]
+Description=Yurich Hysteria TLS certificate sync
+Documentation=https://github.com/ivan-yurich/naiveproxy
+After=caddy.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=${HYSTERIA_TLS_SYNC_SCRIPT} --restart-if-changed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=${CONFIG_FILE}
+ReadOnlyPaths=-/root/.local/share/caddy/certificates
+ReadWritePaths=${HYSTERIA_TLS_DIR}
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX
+EOF
+
+    cat > "$HYSTERIA_TLS_SYNC_TIMER" <<EOF
+[Unit]
+Description=Periodic Yurich Hysteria TLS certificate sync
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+AccuracySec=1min
+Persistent=true
+Unit=yurich-hysteria-tls-sync.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    if ! "$HYSTERIA_TLS_SYNC_SCRIPT" --no-restart; then
+        err "Не удалось подготовить изолированную TLS-копию для Hysteria 2"
+        return 1
+    fi
+    systemctl enable --now yurich-hysteria-tls-sync.timer >/dev/null 2>&1 || {
+        err "Не удалось включить автоматическую синхронизацию TLS Hysteria 2"
+        return 1
+    }
+    ok "Hysteria TLS изолирован от /root и синхронизируется автоматически"
+}
+
 write_hysteria_config() {
     load_config
     load_users
-    local cert_file key_file users_for_hysteria hy_warp_enabled=0 hysteria_config_backup=""
+    local hy_warp_enabled=0 hysteria_config_backup=""
     ensure_hysteria_secrets || return 1
+    install_hysteria_auth_helper || return 1
+    install_hysteria_tls_sync || return 1
     save_config
-    cert_file=$(find_caddy_cert "${DOMAIN:-}" || true)
-    key_file=$(find_caddy_key "${DOMAIN:-}" || true)
-    users_for_hysteria=$(get_active_users 2>/dev/null || true)
     if [[ "${HYSTERIA_WARP_ENABLED:-0}" == "1" || "${WARP_PROXY_ENABLED:-0}" == "1" ]]; then
         hy_warp_enabled=1
     fi
-
-    if [[ -z "$cert_file" || -z "$key_file" ]]; then
-        err "Не нашёл TLS сертификат Caddy для ${DOMAIN:-не задан}"
-        err "Сначала запусти Yurich Panel и дождись TLS: sudo bash yurich-panel.sh install"
-        return 1
-    fi
-    if [[ -z "$users_for_hysteria" ]]; then
-        users_for_hysteria="__disabled__:$(random_safe_token 32)"
-        warn "Нет активных пользователей. Hysteria 2 закрыт placeholder-auth."
-    fi
-
     mkdir -p "$CONFIG_DIR"
     if [[ -f "$HYSTERIA_CONFIG" ]]; then
         hysteria_config_backup=$(mktemp /tmp/yurich_hysteria_backup_XXXXXX.yaml)
@@ -7678,20 +8514,14 @@ write_hysteria_config() {
 listen: :${HYSTERIA_PORT:-8443}
 
 tls:
-  cert: ${cert_file}
-  key: ${key_file}
+  cert: ${HYSTERIA_TLS_CERT}
+  key: ${HYSTERIA_TLS_KEY}
   sniGuard: strict
 
 auth:
+  type: command
+  command: ${HYSTERIA_AUTH_HELPER}
 EOF
-    cat >> "$HYSTERIA_CONFIG" <<EOF
-  type: userpass
-  userpass:
-EOF
-    while IFS=: read -r h_user h_pass; do
-        [[ -z "$h_user" || -z "$h_pass" ]] && continue
-        printf '    "%s": "%s"\n' "$h_user" "$h_pass" >> "$HYSTERIA_CONFIG"
-    done <<< "$users_for_hysteria"
 
     cat >> "$HYSTERIA_CONFIG" <<EOF
 
@@ -7764,6 +8594,9 @@ Description=Hysteria 2 Proxy
 Documentation=https://v2.hysteria.network/
 After=network-online.target
 Wants=network-online.target
+ConditionPathIsDirectory=${HYSTERIA_TLS_DIR}
+ConditionPathExists=${HYSTERIA_TLS_CERT}
+ConditionPathExists=${HYSTERIA_TLS_KEY}
 
 [Service]
 Type=simple
@@ -7780,6 +8613,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=full
 ProtectHome=true
+ReadOnlyPaths=${HYSTERIA_TLS_DIR}
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -7794,6 +8628,148 @@ EOF
     systemctl daemon-reload
     systemctl enable hysteria --quiet
     ok "systemd сервис Hysteria 2 настроен"
+}
+
+hysteria_tls_layout_needs_repair() {
+    [[ -f "$HYSTERIA_CONFIG" ]] || return 1
+    grep -Fq "  cert: ${HYSTERIA_TLS_CERT}" "$HYSTERIA_CONFIG" 2>/dev/null || return 0
+    grep -Fq "  key: ${HYSTERIA_TLS_KEY}" "$HYSTERIA_CONFIG" 2>/dev/null || return 0
+    [[ -s "$HYSTERIA_TLS_CERT" && -s "$HYSTERIA_TLS_KEY" ]] || return 0
+    [[ -f "$HYSTERIA_SERVICE" ]] || return 0
+    grep -Fq "ReadOnlyPaths=${HYSTERIA_TLS_DIR}" "$HYSTERIA_SERVICE" 2>/dev/null || return 0
+    [[ -x "$HYSTERIA_TLS_SYNC_SCRIPT" && -f "$HYSTERIA_TLS_SYNC_TIMER" ]] || return 0
+    systemctl is-enabled --quiet yurich-hysteria-tls-sync.timer 2>/dev/null || return 0
+    return 1
+}
+
+rewrite_hysteria_tls_paths_only() {
+    local staging
+    [[ -s "$HYSTERIA_CONFIG" ]] || { err "Hysteria config отсутствует"; return 1; }
+    install_hysteria_tls_sync || return 1
+    staging=$(mktemp "${CONFIG_DIR}/.hysteria-tls-migrate.XXXXXX") || return 1
+    if ! sed -E \
+        -e "s#^([[:space:]]*cert:).*#\\1 ${HYSTERIA_TLS_CERT}#" \
+        -e "s#^([[:space:]]*key:).*#\\1 ${HYSTERIA_TLS_KEY}#" \
+        "$HYSTERIA_CONFIG" > "$staging"; then
+        rm -f "$staging"
+        return 1
+    fi
+    if ! grep -Fq "  cert: ${HYSTERIA_TLS_CERT}" "$staging" \
+        || ! grep -Fq "  key: ${HYSTERIA_TLS_KEY}" "$staging" \
+        || grep -Eq '^[[:space:]]*(cert|key):[[:space:]]*/(root|run)/' "$staging"; then
+        rm -f "$staging"
+        err "Не удалось безопасно переписать TLS-пути Hysteria"
+        return 1
+    fi
+    install -o root -g root -m 600 "$staging" "$HYSTERIA_CONFIG"
+    rm -f "$staging"
+}
+
+restore_hysteria_repair_snapshot() {
+    local snapshot="$1" was_active="$2" was_enabled="$3" timer_was_enabled="$4" id path
+    systemctl stop hysteria.service >/dev/null 2>&1 || true
+    systemctl disable --now yurich-hysteria-tls-sync.timer >/dev/null 2>&1 || true
+    while IFS='|' read -r id path; do
+        [[ -n "$id" && -n "$path" ]] || continue
+        rm -f -- "$path" 2>/dev/null || true
+        if [[ -f "$snapshot/files/$id" ]]; then
+            install -d -m 755 "$(dirname "$path")"
+            cp -a -- "$snapshot/files/$id" "$path"
+        fi
+    done < "$snapshot/manifest"
+    rm -rf -- "$HYSTERIA_TLS_DIR" 2>/dev/null || true
+    [[ -d "$snapshot/hysteria-tls" ]] && cp -a -- "$snapshot/hysteria-tls" "$HYSTERIA_TLS_DIR"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if [[ "$was_enabled" == "1" ]]; then
+        systemctl enable hysteria.service >/dev/null 2>&1 || true
+    else
+        systemctl disable hysteria.service >/dev/null 2>&1 || true
+    fi
+    if [[ "$timer_was_enabled" == "1" ]]; then
+        systemctl enable --now yurich-hysteria-tls-sync.timer >/dev/null 2>&1 || true
+    fi
+    if [[ "$was_active" == "1" ]]; then
+        systemctl restart hysteria.service >/dev/null 2>&1 || true
+    fi
+}
+
+cmd_hysteria_repair() {
+    load_config
+    load_users
+    if [[ ! -f "$HYSTERIA_CONFIG" && ! -x "$HYSTERIA_BIN" ]]; then
+        info "Hysteria 2 не установлен — исправление не требуется"
+        return 0
+    fi
+    [[ -n "${DOMAIN:-}" ]] || { err "DOMAIN не задан"; return 1; }
+
+    local snapshot was_active=0 was_enabled=0 timer_was_enabled=0 should_run=0 id path
+    snapshot=$(mktemp -d /run/yurich-hysteria-repair.XXXXXX) || return 1
+    chmod 700 "$snapshot"
+    install -d -m 700 "$snapshot/files"
+    printf '%s|%s\n' \
+        config "$HYSTERIA_CONFIG" \
+        service "$HYSTERIA_SERVICE" \
+        sync-script "$HYSTERIA_TLS_SYNC_SCRIPT" \
+        sync-service "$HYSTERIA_TLS_SYNC_SERVICE" \
+        sync-timer "$HYSTERIA_TLS_SYNC_TIMER" > "$snapshot/manifest"
+    while IFS='|' read -r id path; do
+        [[ -f "$path" ]] && cp -a -- "$path" "$snapshot/files/$id"
+    done < "$snapshot/manifest"
+    [[ -d "$HYSTERIA_TLS_DIR" ]] && cp -a -- "$HYSTERIA_TLS_DIR" "$snapshot/hysteria-tls"
+    systemctl is-active --quiet hysteria.service 2>/dev/null && was_active=1
+    systemctl is-enabled --quiet hysteria.service 2>/dev/null && was_enabled=1
+    systemctl is-enabled --quiet yurich-hysteria-tls-sync.timer 2>/dev/null && timer_was_enabled=1
+    if [[ "$was_active" == "1" || "$was_enabled" == "1" || "${HYSTERIA_ENABLED:-0}" == "1" ]]; then
+        should_run=1
+    fi
+
+    info "Исправляю доступ Hysteria 2 к TLS без раскрытия каталога /root..."
+    if [[ "$(credential_plaintext_count)" -eq 0 ]] && ! grep -q 'type: userpass' "$HYSTERIA_CONFIG" 2>/dev/null; then
+        write_hysteria_config || {
+            restore_hysteria_repair_snapshot "$snapshot" "$was_active" "$was_enabled" "$timer_was_enabled"
+            rm -rf -- "$snapshot"
+            return 1
+        }
+    else
+        warn "Legacy credentials сохранены без изменения; после ремонта запусти credentials-migrate"
+        rewrite_hysteria_tls_paths_only || {
+            restore_hysteria_repair_snapshot "$snapshot" "$was_active" "$was_enabled" "$timer_was_enabled"
+            rm -rf -- "$snapshot"
+            return 1
+        }
+    fi
+    if ! write_hysteria_service \
+        || ! systemd-analyze verify "$HYSTERIA_SERVICE" "$HYSTERIA_TLS_SYNC_SERVICE" "$HYSTERIA_TLS_SYNC_TIMER" >/dev/null 2>&1; then
+        err "Проверка systemd Hysteria не пройдена; выполняю rollback"
+        restore_hysteria_repair_snapshot "$snapshot" "$was_active" "$was_enabled" "$timer_was_enabled"
+        rm -rf -- "$snapshot"
+        return 1
+    fi
+
+    if [[ "$should_run" == "1" ]]; then
+        if ! systemctl restart hysteria.service || ! sleep 2 || ! systemctl is-active --quiet hysteria.service; then
+            err "Hysteria 2 не запустился после исправления; выполняю rollback"
+            journalctl -u hysteria.service -n 20 --no-pager 2>/dev/null || true
+            restore_hysteria_repair_snapshot "$snapshot" "$was_active" "$was_enabled" "$timer_was_enabled"
+            rm -rf -- "$snapshot"
+            return 1
+        fi
+    else
+        systemctl stop hysteria.service >/dev/null 2>&1 || true
+    fi
+
+    systemctl reset-failed hysteria.service >/dev/null 2>&1 || true
+    rm -rf -- "$snapshot"
+    ok "Hysteria TLS исправлен: закрытая копия + автоматическая синхронизация"
+}
+
+cmd_post_update() {
+    load_config 2>/dev/null || true
+    load_users 2>/dev/null || true
+    if hysteria_tls_layout_needs_repair; then
+        info "Обнаружена старая TLS-схема Hysteria 2; запускаю безопасную миграцию"
+        cmd_hysteria_repair || return 1
+    fi
 }
 
 hysteria_user_auth() {
@@ -7849,8 +8825,16 @@ validate_hysteria_config() {
     fi
     grep -q '^listen:' "$config" || { err "Hysteria config: нет listen"; return 1; }
     grep -q '^tls:' "$config" || { err "Hysteria config: нет tls"; return 1; }
+    grep -Fq "  cert: ${HYSTERIA_TLS_CERT}" "$config" || { err "Hysteria config: TLS cert не из изолированного каталога"; return 1; }
+    grep -Fq "  key: ${HYSTERIA_TLS_KEY}" "$config" || { err "Hysteria config: TLS key не из изолированного каталога"; return 1; }
+    [[ -s "$HYSTERIA_TLS_CERT" && -s "$HYSTERIA_TLS_KEY" ]] || { err "Hysteria config: изолированные TLS-файлы отсутствуют"; return 1; }
+    [[ "$(stat -c '%a' "$HYSTERIA_TLS_DIR" 2>/dev/null || echo 0)" == "700" ]] || { err "Hysteria TLS directory: ожидается mode 700"; return 1; }
+    [[ "$(stat -c '%a' "$HYSTERIA_TLS_CERT" 2>/dev/null || echo 0)" == "600" ]] || { err "Hysteria TLS cert: ожидается mode 600"; return 1; }
+    [[ "$(stat -c '%a' "$HYSTERIA_TLS_KEY" 2>/dev/null || echo 0)" == "600" ]] || { err "Hysteria TLS key: ожидается mode 600"; return 1; }
     grep -q '^auth:' "$config" || { err "Hysteria config: нет auth"; return 1; }
-    grep -q 'type: userpass' "$config" || { err "Hysteria config: auth не userpass"; return 1; }
+    grep -q 'type: command' "$config" || { err "Hysteria config: auth не command"; return 1; }
+    grep -Fq "command: ${HYSTERIA_AUTH_HELPER}" "$config" || { err "Hysteria config: неверный auth helper"; return 1; }
+    [[ -x "$HYSTERIA_AUTH_HELPER" ]] || { err "Hysteria auth helper не исполняемый"; return 1; }
     grep -q '^obfs:' "$config" || { err "Hysteria config: нет obfs"; return 1; }
 
     if [[ ! -x "$HYSTERIA_BIN" ]]; then
@@ -7882,6 +8866,7 @@ validate_hysteria_config() {
     fi
 
     sed -E "0,/^listen:/s#^listen:.*#listen: 127.0.0.1:${test_port}#" "$config" > "$test_config"
+
     if timeout 3s "$HYSTERIA_BIN" server -c "$test_config" >"$test_log" 2>&1; then
         rc=0
     else
@@ -8055,10 +9040,15 @@ sync_hysteria_users_if_active() {
     load_config
     if [[ "${HYSTERIA_ENABLED:-1}" != "1" ]]; then
         systemctl stop hysteria 2>/dev/null || true
+        if [[ -f "$HYSTERIA_CONFIG" ]] && grep -q 'type: userpass' "$HYSTERIA_CONFIG" 2>/dev/null; then
+            info "Очищаю legacy Hysteria userpass в неактивной конфигурации..."
+            write_hysteria_config || return 1
+            systemctl stop hysteria 2>/dev/null || true
+        fi
         return 0
     fi
     if [[ -f "$HYSTERIA_CONFIG" || -x "$HYSTERIA_BIN" ]]; then
-        info "Обновляю Hysteria 2 userpass по текущим пользователям..."
+        info "Обновляю Hysteria 2 auth по текущему bcrypt store..."
         if write_hysteria_config && apply_hysteria_port_hop && systemctl restart hysteria 2>/dev/null; then
             ok "Hysteria 2 обновлён для пользователей"
             return 0
@@ -8310,10 +9300,15 @@ cmd_hysteria_status() {
     fi
     [[ -f "$HYSTERIA_CONFIG" ]] && ok "Конфиг: $HYSTERIA_CONFIG" || warn "Конфиг не найден"
     if [[ -f "$HYSTERIA_CONFIG" ]]; then
-        if grep -q 'type: userpass' "$HYSTERIA_CONFIG"; then
-            ok "Auth: userpass ($(grep -c '^    \".*\":' "$HYSTERIA_CONFIG" 2>/dev/null || echo 0) пользователей)"
+        if hysteria_tls_layout_needs_repair; then
+            warn "TLS: старая/неполная схема — запусти hysteria-repair"
         else
-            warn "Auth: общий password"
+            ok "TLS: изолированная копия + systemd timer"
+        fi
+        if grep -q 'type: command' "$HYSTERIA_CONFIG"; then
+            ok "Auth: bcrypt verifier ($(get_active_user_hashes | wc -l) пользователей)"
+        else
+            warn "Auth: legacy/plaintext — запусти credentials-migrate"
         fi
         if grep -q 'name: warp-socks5' "$HYSTERIA_CONFIG"; then
             ok "Outbound: WARP SOCKS5 127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
@@ -8344,8 +9339,11 @@ cmd_hysteria_remove() {
     load_config
     systemctl stop hysteria 2>/dev/null || true
     systemctl disable hysteria 2>/dev/null || true
+    systemctl disable --now yurich-hysteria-tls-sync.timer >/dev/null 2>&1 || true
     remove_hysteria_port_hop_rules
-    rm -f "$HYSTERIA_SERVICE" "$HYSTERIA_BIN" "$HYSTERIA_CONFIG"
+    rm -f "$HYSTERIA_SERVICE" "$HYSTERIA_BIN" "$HYSTERIA_CONFIG" \
+        "$HYSTERIA_TLS_SYNC_SCRIPT" "$HYSTERIA_TLS_SYNC_SERVICE" "$HYSTERIA_TLS_SYNC_TIMER"
+    rm -rf -- "$HYSTERIA_TLS_DIR"
     ufw delete allow "${HYSTERIA_PORT:-8443}/udp" >/dev/null 2>&1 || true
     HYSTERIA_PORT=""
     HYSTERIA_PASSWORD=""
@@ -8416,6 +9414,7 @@ cmd_hysteria_menu() {
         echo -e "  ${BOLD}8)${RESET} Выключить Port Hopping"
         echo -e "  ${BOLD}9)${RESET} Включить WARP только для Hysteria 2"
         echo -e "  ${BOLD}10)${RESET} Выключить WARP только для Hysteria 2"
+        echo -e "  ${BOLD}11)${RESET} Исправить TLS / systemd с rollback"
         echo -e "  ${BOLD}0)${RESET} Назад"
         hr
         echo -ne "${CYAN}Выбор: ${RESET}"
@@ -8439,6 +9438,7 @@ cmd_hysteria_menu() {
             8) cmd_hysteria_hop_disable ;;
             9) cmd_hysteria_warp_enable ;;
             10) cmd_hysteria_warp_disable ;;
+            11) cmd_hysteria_repair ;;
             0) return ;;
             *) err "Неверный выбор" ;;
         esac
@@ -9642,6 +10642,7 @@ subscription_active_locations_label() {
             *poland*|*warsaw*|*polska*) location="🇵🇱 Poland" ;;
             *finland*|*helsinki*|*suomi*) location="🇫🇮 Finland" ;;
             *plus-dns*|*germany*|*deutschland*|*frankfurt*) location="🇩🇪 Germany" ;;
+            *united-kingdom*|*united\ kingdom*|*great\ britain*|*london*) location="🇬🇧 United Kingdom" ;;
             *net-it*|*netherlands*|*amsterdam*) location="🇳🇱 Netherlands" ;;
         esac
         printf '%s\n' "$location"
@@ -10074,7 +11075,7 @@ EOF
 
 subscription_user_exists() {
     local user="$1"
-    get_user_pass "$user" >/dev/null 2>&1 && return 0
+    get_user_hash "$user" >/dev/null 2>&1 && return 0
     [[ -n "$(get_xray_user_uuid "$user" 2>/dev/null || true)" ]] && return 0
     return 1
 }
@@ -10204,7 +11205,7 @@ delete_subscription_user_everywhere() {
         return 1
     fi
 
-    get_user_pass "$target" >/dev/null 2>&1 && { has_naive=1; found=1; }
+    get_user_hash "$target" >/dev/null 2>&1 && { has_naive=1; found=1; }
     [[ -n "$(get_xray_user_uuid "$target" 2>/dev/null || true)" ]] && { has_xray=1; found=1; }
     [[ -n "$(get_xray_compat_user_uuid "$target" 2>/dev/null || true)" ]] && { has_xray=1; found=1; }
     awk -F: -v user="$target" '$1 == user {found=1} END {exit found ? 0 : 1}' "$DISABLED_USERS_FILE" 2>/dev/null && found=1
@@ -10234,6 +11235,8 @@ delete_subscription_user_everywhere() {
 
     remove_user_from_colon_file "$USERS_FILE" "$target" && naive_changed=1
     remove_user_from_colon_file "$DISABLED_USERS_FILE" "$target" || true
+    credential_remove_user_secret "$target" || { warn "Не удалось удалить encrypted secret $target"; apply_failed=1; }
+    write_active_users_hash_file >/dev/null 2>&1 || true
     remove_user_from_colon_file "$XRAY_USERS_FILE" "$target" && xray_changed=1
     remove_user_from_colon_file "$XRAY_COMPAT_USERS_FILE" "$target" && xray_changed=1
     remove_user_from_colon_file "$XRAY_DISABLED_USERS_FILE" "$target" || true
@@ -10421,7 +11424,7 @@ generate_subscription_page() {
         rm -f "$pingtunnel_file"
     fi
 
-    local subscription_domain sub_url links_url hiddify_url streisand_url nekobox_url v2rayng_url pingtunnel_url hiddify_open_url hiddify_expire_epoch hiddify_used_bytes hiddify_used_human hiddify_links title display_profile_label active_locations safe_active_locations safe_user safe_domain safe_expiry_label safe_days_left safe_hiddify_used_human
+    local subscription_domain sub_url links_url hiddify_url streisand_url nekobox_url v2rayng_url pingtunnel_url hiddify_open_url hiddify_expire_epoch hiddify_used_bytes hiddify_used_human hiddify_links streisand_links title display_profile_label active_locations safe_active_locations safe_user safe_domain safe_expiry_label safe_days_left safe_hiddify_used_human
     local safe_android_url safe_windows_url safe_streisand_url safe_karing_url safe_telegram_url safe_donation_url safe_tg_bot_url safe_tg_id_bot_url
     local traffic_summary safe_traffic_summary profile_cards_html profile_count qr_cards_html recommendations_html recommendations_all_html
     local subscription_logo_source subscription_logo_name subscription_logo_html subscription_header_logo_html
@@ -10444,6 +11447,8 @@ generate_subscription_page() {
     hiddify_used_bytes=$(user_meta_get "$user" TRAFFIC_USED_BYTES 2>/dev/null || true)
     [[ "$hiddify_used_bytes" =~ ^[0-9]+$ ]] || hiddify_used_bytes="0"
     hiddify_used_human=$(subscription_human_bytes "$hiddify_used_bytes")
+    hiddify_links=$(printf '%s\n' "$app_links" | awk 'NF && !seen[$0]++' | hiddify_compat_links 1)
+    streisand_links=$(printf '%s\n' "$app_links" | awk 'NF && !seen[$0]++' | hiddify_compat_links)
     {
         printf '#profile-title: Yurich Connect %s\n' "$user"
         printf '#profile-update-interval: 12\n'
@@ -10452,7 +11457,6 @@ generate_subscription_page() {
         fi
         printf '#support-url: %s\n' "$TELEGRAM_COMMUNITY_URL"
         printf '#profile-web-page-url: %s\n' "$sub_url"
-        hiddify_links=$(printf '%s\n' "$app_links" | awk 'NF && !seen[$0]++' | hiddify_compat_links)
         printf '%s\n' "$hiddify_links"
     } > "$hiddify_file"
     {
@@ -10463,7 +11467,7 @@ generate_subscription_page() {
         fi
         printf '#support-url: %s\n' "$TELEGRAM_COMMUNITY_URL"
         printf '#profile-web-page-url: %s\n' "$sub_url"
-        printf '%s\n' "$hiddify_links"
+        printf '%s\n' "$streisand_links"
     } > "$streisand_file"
     chmod 644 "$hiddify_file" "$streisand_file"
     qr_links_png="${page_dir}/qr-links.png"
@@ -13079,7 +14083,8 @@ prompt_params() {
 
     while true; do
         echo -ne "${CYAN}Пароль (Enter = случайный): ${RESET}"
-        read -r first_pass
+        read -rs first_pass
+        echo
         if [[ -z "$first_pass" ]]; then
             first_pass=$(random_safe_token 20)
             info "Сгенерирован пароль: $first_pass"
@@ -13092,8 +14097,11 @@ prompt_params() {
     first_months=$(prompt_user_term_months 12) || return 1
 
     load_users
-    echo "${first_user}:${first_pass}" > "$USERS_FILE"
-    chmod 600 "$USERS_FILE"
+    ensure_credential_keypair || return 1
+    : > "$USERS_FILE"
+    : > "$USERS_SECRETS_FILE"
+    chmod 600 "$USERS_FILE" "$USERS_SECRETS_FILE"
+    credential_set_user "$first_user" "$first_pass" || return 1
     set_user_expiry_months "$first_user" "$first_months" || true
 }
 
@@ -13188,7 +14196,11 @@ cmd_domains() {
 # ─── УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ────────────────────────────────
 restore_user_credentials_backup() {
     local backup_dir="$1"
-    cp -a "$backup_dir/users.conf" "$USERS_FILE"
+    if [[ -d "$backup_dir/credential-state" ]]; then
+        credential_state_restore "$backup_dir/credential-state"
+    else
+        cp -a "$backup_dir/users.conf" "$USERS_FILE"
+    fi
     if [[ -f "$backup_dir/xray-users.conf" ]]; then
         cp -a "$backup_dir/xray-users.conf" "$XRAY_USERS_FILE"
     else
@@ -13205,17 +14217,18 @@ rotate_user_credentials() {
     local target="$1" new_pass="$2" backup_dir tmp new_uuid changed_xray=0
     is_valid_proxy_user "$target" || return 1
     is_valid_proxy_pass "$new_pass" || return 1
-    get_user_pass "$target" >/dev/null 2>&1 || { err "Пользователь $target не найден"; return 1; }
+    get_user_hash "$target" >/dev/null 2>&1 || { err "Пользователь $target не найден"; return 1; }
     backup_dir=$(mktemp -d /tmp/yurich-rotate-user.XXXXXX)
     chmod 700 "$backup_dir"
-    cp -a "$USERS_FILE" "$backup_dir/users.conf"
+    credential_state_backup "$backup_dir/credential-state"
     [[ -f "$XRAY_USERS_FILE" ]] && cp -a "$XRAY_USERS_FILE" "$backup_dir/xray-users.conf"
     [[ -f "$XRAY_COMPAT_USERS_FILE" ]] && cp -a "$XRAY_COMPAT_USERS_FILE" "$backup_dir/xray-compat-users.conf"
 
-    tmp=$(mktemp)
-    awk -F: -v OFS=: -v user="$target" -v pass="$new_pass" '$1 == user {$2=pass} {print}' "$USERS_FILE" > "$tmp"
-    install -m 600 "$tmp" "$USERS_FILE"
-    rm -f "$tmp"
+    if ! credential_set_user "$target" "$new_pass"; then
+        restore_user_credentials_backup "$backup_dir"
+        rm -rf -- "$backup_dir"
+        return 1
+    fi
 
     if [[ -n "$(get_xray_user_uuid "$target" 2>/dev/null || true)" ]]; then
         if ! new_uuid=$(xray_generate_uuid); then
@@ -13278,6 +14291,8 @@ cmd_users() {
         echo -e "  ${BOLD}3)${RESET} Удалить пользователя"
         echo -e "  ${BOLD}4)${RESET} Ротировать пароль и VLESS UUID"
         echo -e "  ${BOLD}5)${RESET} Показать ссылку пользователя"
+        echo -e "  ${BOLD}6)${RESET} Статус защищённого хранения"
+        echo -e "  ${BOLD}7)${RESET} Мигрировать legacy-пароли в bcrypt + vault"
         echo -e "  ${BOLD}0)${RESET} Назад"
         hr
         echo -ne "${CYAN}Выбор: ${RESET}"
@@ -13286,9 +14301,14 @@ cmd_users() {
         case "$choice" in
             1)
                 local count=0
-                while IFS=: read -r u p; do
+                while IFS=: read -r u _; do
                     count=$((count+1))
-                    echo -e "  ${count}. ${BOLD}${u}${RESET} : $p  ${DIM}срок: $(user_expiry_label "$u")${RESET}"
+                    local store_label="${GREEN}bcrypt+vault${RESET}"
+                    if ! is_valid_proxy_hash "$(credential_file_value "$USERS_FILE" "$u" 2>/dev/null || true)" \
+                        || ! is_valid_encrypted_proxy_secret "$(credential_file_value "$USERS_SECRETS_FILE" "$u" 2>/dev/null || true)"; then
+                        store_label="${YELLOW}legacy/needs migration${RESET}"
+                    fi
+                    echo -e "  ${count}. ${BOLD}${u}${RESET}  ${store_label}  ${DIM}срок: $(user_expiry_label "$u")${RESET}"
                 done < <(get_users)
                 [[ $count -eq 0 ]] && warn "Нет пользователей"
                 echo -e "  Итого: $count"
@@ -13301,11 +14321,11 @@ cmd_users() {
                     err "Логин: 2-32 символа, только A-Z a-z 0-9 _ -"
                     continue
                 fi
-                if get_user_pass "$new_user" >/dev/null; then
+                if get_user_hash "$new_user" >/dev/null; then
                     err "Пользователь $new_user уже существует"
                     continue
                 fi
-                echo -ne "${CYAN}Пароль (Enter = случайный): ${RESET}"; read -r new_pass
+                echo -ne "${CYAN}Пароль (Enter = случайный): ${RESET}"; read -rs new_pass; echo
                 if [[ -z "$new_pass" ]]; then
                     new_pass=$(random_safe_token 20)
                     info "Сгенерирован пароль: $new_pass"
@@ -13317,25 +14337,31 @@ cmd_users() {
                 local new_months
                 new_months=$(prompt_user_term_months 12) || continue
                 local users_backup
-                users_backup=$(mktemp)
-                cp "$USERS_FILE" "$users_backup"
-                printf '%s:%s\n' "${new_user}" "${new_pass}" >> "$USERS_FILE"
+                users_backup=$(mktemp -d /run/yurich-add-user.XXXXXX)
+                credential_state_backup "$users_backup/credential-state"
+                if ! credential_set_user "$new_user" "$new_pass"; then
+                    rm -rf "$users_backup"
+                    err "Пользователь $new_user не создан"
+                    continue
+                fi
                 set_user_expiry_months "$new_user" "$new_months" || true
                 backup_config
                 if ! rewrite_caddyfile_current; then
-                    mv "$users_backup" "$USERS_FILE"
+                    credential_state_restore "$users_backup/credential-state"
+                    rm -rf "$users_backup"
                     cleanup_user_metadata "$new_user"
                     err "Caddyfile не собрался, пользователь $new_user отменён"
                     continue
                 fi
                 if ! systemctl reload caddy 2>/dev/null && ! systemctl restart caddy 2>/dev/null; then
-                    mv "$users_backup" "$USERS_FILE"
+                    credential_state_restore "$users_backup/credential-state"
+                    rm -rf "$users_backup"
                     cleanup_user_metadata "$new_user"
                     rewrite_caddyfile_current >/dev/null 2>&1 || true
                     err "Caddy не перезагрузился, пользователь $new_user отменён"
                     continue
                 fi
-                rm -f "$users_backup"
+                rm -rf "$users_backup"
                 ok "Пользователь $new_user добавлен"
                 local hy_added=0
                 if [[ -f "$HYSTERIA_CONFIG" || -x "$HYSTERIA_BIN" ]]; then
@@ -13386,7 +14412,7 @@ cmd_users() {
                 ;;
             4)
                 echo -ne "${CYAN}Логин: ${RESET}"; read -r chg_user
-                if ! is_valid_proxy_user "$chg_user" || ! get_user_pass "$chg_user" >/dev/null; then
+                if ! is_valid_proxy_user "$chg_user" || ! get_user_hash "$chg_user" >/dev/null; then
                     err "Пользователь $chg_user не найден"; continue
                 fi
                 echo -ne "${CYAN}Новый пароль (Enter = случайный): ${RESET}"; read -rs chg_pass; echo
@@ -13404,6 +14430,8 @@ cmd_users() {
                 echo -ne "${CYAN}Логин: ${RESET}"; read -r show_user
                 print_client_config "$show_user"
                 ;;
+            6) cmd_credentials_status ;;
+            7) cmd_credentials_migrate ;;
             0) break ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -13621,27 +14649,64 @@ device_enable_user() {
         return 0
     fi
     local restored=0
-    if get_user_pass "$target" >/dev/null; then
+    if get_user_hash "$target" >/dev/null; then
         warn "Пользователь $target уже активен"
         restored=1
     fi
 
-    local line pass tmp
+    local line credential tmp credential_backup restored_pass
     if [[ -f "$DISABLED_USERS_FILE" ]]; then
         line=$(awk -F: -v user="$target" '$1 == user {print; exit}' "$DISABLED_USERS_FILE")
         if [[ -n "$line" ]]; then
-            pass=$(printf '%s\n' "$line" | cut -d: -f2 | awk '{print $1}')
-            if is_valid_proxy_pass "$pass"; then
-                printf '%s:%s\n' "$target" "$pass" >> "$USERS_FILE"
+            credential="${line#*:}"
+            if is_valid_proxy_hash "$credential" || is_valid_proxy_pass "$credential"; then
+                if is_valid_proxy_hash "$credential" \
+                    && ! is_valid_encrypted_proxy_secret "$(credential_file_value "$USERS_SECRETS_FILE" "$target" 2>/dev/null || true)"; then
+                    warn "Encrypted secret отключенного пользователя $target отсутствует; сначала ротируй пароль"
+                    return 1
+                fi
+                credential_backup=$(mktemp -d /run/yurich-enable-user.XXXXXX) || return 1
+                chmod 700 "$credential_backup"
+                credential_state_backup "$credential_backup/state" || { rm -rf "$credential_backup"; return 1; }
+                if is_valid_proxy_hash "$credential"; then
+                    restored_pass=$(get_user_pass "$target" 2>/dev/null || true)
+                    if ! verify_proxy_password_hash "$target" "$restored_pass" "$credential" \
+                        || ! credential_set_user "$target" "$restored_pass"; then
+                        credential_state_restore "$credential_backup/state" >/dev/null 2>&1 || true
+                        rm -rf "$credential_backup"
+                        err "Не удалось проверить bcrypt/vault для $target"
+                        return 1
+                    fi
+                elif ! credential_set_user "$target" "$credential"; then
+                    credential_state_restore "$credential_backup/state" >/dev/null 2>&1 || true
+                    rm -rf "$credential_backup"
+                    err "Не удалось мигрировать legacy credential $target при включении"
+                    return 1
+                fi
                 tmp=$(mktemp)
-                awk -F: -v user="$target" '$1 != user' "$DISABLED_USERS_FILE" > "$tmp" && mv "$tmp" "$DISABLED_USERS_FILE"
+                if ! awk -F: -v user="$target" '$1 != user' "$DISABLED_USERS_FILE" > "$tmp" \
+                    || ! install -m 600 "$tmp" "$DISABLED_USERS_FILE"; then
+                    rm -f "$tmp"
+                    credential_state_restore "$credential_backup/state" >/dev/null 2>&1 || true
+                    rm -rf "$credential_backup"
+                    err "Не удалось включить $target; credential store восстановлен"
+                    return 1
+                fi
+                rm -f "$tmp"
                 chmod 600 "$USERS_FILE" "$DISABLED_USERS_FILE"
+                if ! write_active_users_hash_file >/dev/null 2>&1; then
+                    credential_state_restore "$credential_backup/state" >/dev/null 2>&1 || true
+                    rm -rf "$credential_backup"
+                    err "Не удалось обновить bcrypt runtime; credential store восстановлен"
+                    return 1
+                fi
+                rm -rf "$credential_backup"
                 rewrite_caddyfile_current
                 systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null || true
                 restored=1
                 ok "Naive пользователь $target снова активен"
             else
-                warn "Naive пароль отключенного пользователя повреждён"
+                warn "Naive credential отключенного пользователя повреждён"
             fi
         fi
     fi
@@ -14199,6 +15264,13 @@ cmd_self_update() {
         return 1
     fi
 
+    info "Запускаю безопасные post-update миграции..."
+    if ! bash "$current_script" post-update "$VERSION"; then
+        err "Post-update миграция не пройдена. Возвращаю предыдущую версию скрипта."
+        install -m 755 "$backup_path" "$current_script"
+        return 1
+    fi
+
     # Обновляем основной путь и legacy alias, чтобы старые установки не ломались.
     if [[ "$current_script" != "$SCRIPT_PATH" ]]; then
         install -m 755 "$current_script" "$SCRIPT_PATH" 2>/dev/null || warn "Не удалось синхронизировать $SCRIPT_PATH"
@@ -14280,6 +15352,15 @@ cmd_diagnose_fix() {
         fi
     else
         warn "Caddy binary или Caddyfile отсутствует. Если модуль forward_proxy пропал — запусти: sudo bash yurich-panel.sh update"
+    fi
+
+    if hysteria_tls_layout_needs_repair; then
+        info "Исправляю TLS sandbox Hysteria 2..."
+        if cmd_hysteria_repair; then
+            changed=1
+        else
+            warn "Автофикс Hysteria не выполнен; рабочее состояние восстановлено"
+        fi
     fi
 
     if command -v ufw >/dev/null 2>&1; then
@@ -15811,7 +16892,7 @@ EOF
 sales_restore_issue_state() {
     local user="$1" users_backup="$2" meta_backup="$3" meta_existed="$4" meta_file
     meta_file=$(user_meta_file "$user")
-    [[ -f "$users_backup" ]] && cp -a "$users_backup" "$USERS_FILE"
+    [[ -d "$users_backup/credential-state" ]] && credential_state_restore "$users_backup/credential-state"
     if [[ "$meta_existed" == "1" && -f "$meta_backup" ]]; then
         cp -a "$meta_backup" "$meta_file"
     else
@@ -15845,14 +16926,13 @@ sales_issue_subscription() {
         apply_user_access_runtime || return 1
         sub_url=$(generate_subscription_page "$user" 2>/dev/null || true)
         [[ -n "$sub_url" ]] || return 1
-        pass=$(get_user_pass "$user" 2>/dev/null || true)
-        printf 'USER=%s\nPASS=%s\nCREATED=0\nSUB_URL=%s\nSYNC_NOTE=%s\n' "$user" "$pass" "$sub_url" "Заявка уже была применена; повторное продление не выполнялось."
+        printf 'USER=%s\nCREATED=0\nSUB_URL=%s\nSYNC_NOTE=%s\n' "$user" "$sub_url" "Заявка уже была применена; повторное продление не выполнялось."
         return 0
     fi
 
     pass=$(get_user_pass "$user" 2>/dev/null || true)
-    users_backup=$(mktemp)
-    cp "$USERS_FILE" "$users_backup"
+    users_backup=$(mktemp -d /run/yurich-sales-user.XXXXXX)
+    credential_state_backup "$users_backup/credential-state"
     meta_file=$(user_meta_file "$user")
     meta_backup=$(mktemp)
     if [[ -f "$meta_file" ]]; then
@@ -15861,23 +16941,23 @@ sales_issue_subscription() {
     fi
     if [[ -z "$pass" ]]; then
         pass=$(random_safe_token 20)
-        printf '%s:%s\n' "$user" "$pass" >> "$USERS_FILE"
+        credential_set_user "$user" "$pass" || { rm -rf "$users_backup"; rm -f "$meta_backup"; return 1; }
         created=1
     fi
-    set_user_expiry_extend_term "$user" "$term" || { sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"; rm -f "$users_backup" "$meta_backup"; return 1; }
-    [[ "$order_id" == "manual" ]] || user_meta_set "$user" LAST_SALES_ORDER_ID "$order_id" || { sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"; rm -f "$users_backup" "$meta_backup"; return 1; }
+    set_user_expiry_extend_term "$user" "$term" || { sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"; rm -rf "$users_backup"; rm -f "$meta_backup"; return 1; }
+    [[ "$order_id" == "manual" ]] || user_meta_set "$user" LAST_SALES_ORDER_ID "$order_id" || { sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"; rm -rf "$users_backup"; rm -f "$meta_backup"; return 1; }
 
     if ! rewrite_caddyfile_current >/dev/null 2>&1; then
         sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"
-        rm -f "$users_backup" "$meta_backup"
+        rm -rf "$users_backup"; rm -f "$meta_backup"
         return 1
     fi
     if ! systemctl reload caddy >/dev/null 2>&1 && ! systemctl restart caddy >/dev/null 2>&1; then
         sales_restore_issue_state "$user" "$users_backup" "$meta_backup" "$meta_existed"
-        rm -f "$users_backup" "$meta_backup"
+        rm -rf "$users_backup"; rm -f "$meta_backup"
         return 1
     fi
-    rm -f "$users_backup" "$meta_backup"
+    rm -rf "$users_backup"; rm -f "$meta_backup"
 
     if [[ -f "$HYSTERIA_CONFIG" || -x "$HYSTERIA_BIN" ]]; then
         sync_hysteria_users_if_active >/dev/null 2>&1 || { err "Hysteria не применил пользователя $user"; return 1; }
@@ -15901,7 +16981,7 @@ sales_issue_subscription() {
     fi
     sub_url=$(generate_subscription_page "$user" 2>/dev/null || true)
     [[ -n "$sub_url" ]] || return 1
-    printf 'USER=%s\nPASS=%s\nCREATED=%s\nSUB_URL=%s\nSYNC_NOTE=%s\n' "$user" "$pass" "$created" "$sub_url" "$sync_note"
+    printf 'USER=%s\nCREATED=%s\nSUB_URL=%s\nSYNC_NOTE=%s\n' "$user" "$created" "$sub_url" "$sync_note"
 }
 
 sales_approve_order() {
@@ -16535,7 +17615,7 @@ Windows: ${WINDOWS_APP_RELEASES_URL}" "user"
 /cert — статус TLS сертификата
 
 👥 <b>Пользователи</b>
-/adduser логин [пароль] [1-12 мес] — добавить пользователя + QR + подписка
+/adduser логин [1-12 мес] — создать безопасный пароль, QR и подписку
 /deluser логин — удалить пользователя + страницу
 /qr логин — QR код для подключения
 /sub логин — страница подписки пользователя
@@ -16735,20 +17815,17 @@ ${user_list}"
             new_user=$(echo "${args}" | awk '{print $1}')
             arg2=$(echo "${args}" | awk '{print $2}')
             arg3=$(echo "${args}" | awk '{print $3}')
-            new_months="${arg3:-12}"
-            if [[ -n "$arg2" && -z "$arg3" && $(is_valid_user_months "$arg2"; echo $?) -eq 0 ]]; then
-                new_pass=""
-                new_months="$arg2"
-            else
-                new_pass="$arg2"
-            fi
+            new_months="${arg2:-12}"
 
             if [[ -z "${new_user}" ]]; then
-                tg_reply "${chat_id}" "❌ Использование: /adduser логин [пароль] [месяцы 1-12]
-Пароль можно не указывать — бот сгенерирует безопасный.
-Примеры:
-<code>/adduser alice 6</code>
-<code>/adduser alice MyPass123 12</code>"
+                tg_reply "${chat_id}" "❌ Использование: /adduser логин [месяцы 1-12]
+Бот сам создаёт безопасный пароль и показывает его один раз.
+Пример: <code>/adduser alice 6</code>"
+                return
+            fi
+            if [[ -n "$arg3" ]]; then
+                tg_reply "${chat_id}" "❌ Пароль больше нельзя передавать в Telegram-команде.
+Используй: <code>/adduser ${new_user} 12</code>"
                 return
             fi
             if ! is_valid_user_months "$new_months"; then
@@ -16763,18 +17840,9 @@ ${user_list}"
                 return
             fi
 
-            # Валидация пароля (если указан)
-            if [[ -z "${new_pass}" ]]; then
-                # Авто-генерация
-                new_pass=$(random_safe_token 20)
-                tg_reply "${chat_id}" "🔑 Пароль не указан, сгенерирован автоматически"
-            elif ! is_valid_proxy_pass "${new_pass}"; then
-                tg_reply "${chat_id}" "❌ Неверный пароль
-Только буквы, цифры, _, - (8-64 символа)"
-                return
-            fi
+            new_pass=$(random_safe_token 20)
 
-            if get_user_pass "${new_user}" >/dev/null; then
+            if get_user_hash "${new_user}" >/dev/null; then
                 tg_reply "${chat_id}" "❌ Пользователь <code>${new_user}</code> уже существует"
                 return
             fi
@@ -16785,20 +17853,25 @@ ${user_list}"
             chmod 600 "${USERS_FILE}"
 
             local users_backup
-            users_backup=$(mktemp)
-            cp "${USERS_FILE}" "$users_backup"
-            printf '%s:%s\n' "${new_user}" "${new_pass}" >> "${USERS_FILE}"
+            users_backup=$(mktemp -d /run/yurich-bot-add-user.XXXXXX)
+            credential_state_backup "$users_backup/credential-state"
+            if ! credential_set_user "${new_user}" "${new_pass}"; then
+                rm -rf "$users_backup"
+                tg_reply "${chat_id}" "❌ Не удалось безопасно сохранить credentials пользователя <code>${new_user}</code>."
+                return
+            fi
             set_user_expiry_months "${new_user}" "${new_months}" || true
 
             if rewrite_caddyfile_current 2>/dev/null; then
                 if ! systemctl reload caddy 2>/dev/null && ! systemctl restart caddy 2>/dev/null; then
-                    mv "$users_backup" "${USERS_FILE}"
+                    credential_state_restore "$users_backup/credential-state"
+                    rm -rf "$users_backup"
                     cleanup_user_metadata "${new_user}"
                     rewrite_caddyfile_current >/dev/null 2>&1 || true
                     tg_reply "${chat_id}" "❌ Caddy не перезагрузился. Пользователь <code>${new_user}</code> отменён."
                     return
                 fi
-                rm -f "$users_backup"
+                rm -rf "$users_backup"
                 local uri branded_uri sub_url sub_links xray_note xray_tmp xray_ok hy_note hy_uri hy_ok
                 uri="naive+https://${new_user}:${new_pass}@${DOMAIN}:443"
                 branded_uri=$(yurich_proxy_uri "${new_user}" "${new_pass}" "${new_user}-yurich")
@@ -16830,6 +17903,8 @@ ${user_list}"
                 tg_reply "${chat_id}" "✅ <b>Пользователь добавлен</b>
 👤 Логин: <code>${new_user}</code>
 🔑 Пароль: <code>${new_pass}</code>
+🔒 На сервере: bcrypt + encrypted vault
+⚠️ Пароль показан в этом сообщении для настройки клиента.
 📅 Срок: <code>$(user_expiry_label "${new_user}")</code>
 ${hy_note}
 ${xray_note}
@@ -16862,7 +17937,8 @@ Raw links:
                 fi
                 [[ -n "${xray_tmp:-}" ]] && rm -f "$xray_tmp"
             else
-                mv "$users_backup" "${USERS_FILE}"
+                credential_state_restore "$users_backup/credential-state"
+                rm -rf "$users_backup"
                 cleanup_user_metadata "${new_user}"
                 tg_reply "${chat_id}" "❌ Caddyfile не обновлён. Пользователь <code>${new_user}</code> отменён."
             fi
@@ -16898,7 +17974,7 @@ Raw links:
             fi
 
             if [[ -z "${qr_user}" ]]; then
-                tg_reply "${chat_id}" "❌ Нет пользователей. Добавь: /adduser логин пароль"
+                tg_reply "${chat_id}" "❌ Нет пользователей. Добавь: /adduser логин [месяцы]"
                 return
             fi
 
@@ -19264,6 +20340,15 @@ show_menu() {
     fi
     echo -e "   Multi-server nodes: ${nodes_str}"
     echo -e "   Режим 443: ${GREEN}$(edge_routing_mode_label)${RESET}"
+    local credential_str
+    if [[ "$(credential_plaintext_count)" -eq 0 && -s "$CREDENTIALS_PRIVATE_KEY" ]]; then
+        credential_str="${GREEN}bcrypt + encrypted vault${RESET}"
+    elif [[ "$(credential_plaintext_count)" -gt 0 ]]; then
+        credential_str="${YELLOW}legacy, нужна миграция${RESET}"
+    else
+        credential_str="${YELLOW}будет создан при первом пользователе${RESET}"
+    fi
+    echo -e "   Credentials: ${credential_str}"
     hr
     echo -e "   ${BOLD}1)${RESET}  $(t "Установить Yurich Panel" "Install Yurich Panel")"
     echo -e "   ${BOLD}2)${RESET}  $(t "Статус" "Status")"
@@ -19316,7 +20401,7 @@ main() {
             help|--help|-h)
                 echo "Yurich Panel v${VERSION}"
                 echo "Usage: sudo bash yurich-panel.sh [command]"
-                echo "Commands: install status config [user] reload restart update remove logs monitor routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users hysteria hy2 hysteria-sync hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
+                echo "Commands: install status config [user] reload restart update remove logs monitor credentials-status credentials-migrate routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users hysteria hy2 hysteria-sync hysteria-repair hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
                 return 0
                 ;;
         esac
@@ -19343,10 +20428,13 @@ main() {
             haproxy-logs|sni-logs) cmd_haproxy_logs ;;
             haproxy-tg|haproxy-telegram) cmd_haproxy_tg ;;
             users)     cmd_users ;;
+            credentials-status|credential-status) cmd_credentials_status ;;
+            credentials-migrate|credential-migrate) cmd_credentials_migrate ;;
             hysteria|hy2) cmd_hysteria_menu ;;
             hysteria-install|hy2-install) cmd_hysteria_install ;;
             hysteria-config|hy2-config) print_hysteria_client_config "${2:-}" ;;
             hysteria-status|hy2-status) cmd_hysteria_status ;;
+            hysteria-repair|hy2-repair) cmd_hysteria_repair ;;
             hysteria-logs|hy2-logs) cmd_hysteria_logs ;;
             hysteria-sync|hy2-sync) cmd_hysteria_sync_cli ;;
             hysteria-port|hy2-port) cmd_hysteria_change_port "${2:-}" ;;
@@ -19467,6 +20555,7 @@ main() {
             fail2ban|f2b|security) setup_fail2ban "$(current_ssh_port)" ;;
             language|lang) cmd_language ;;
             self-update)  load_config; cmd_self_update ;;
+            post-update)  cmd_post_update "${2:-unknown}" ;;
             camouflage)   install_camouflage_page ;;
             version)
                 echo "Yurich Panel v${VERSION}"
@@ -19475,7 +20564,7 @@ main() {
                 echo "GitHub:   ${PROJECT_GITHUB_SHORT}"
                 ;;
             *) err "Неизвестная команда: $1"
-               echo "Доступные: install status config [user] reload restart update remove logs monitor routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users hysteria hy2 hysteria-sync hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-compat-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
+               echo "Доступные: install status config [user] reload restart update remove logs monitor credentials-status credentials-migrate routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users hysteria hy2 hysteria-sync hysteria-repair hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-compat-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
                exit 1 ;;
         esac
         exit 0
@@ -19529,4 +20618,6 @@ main() {
     done
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

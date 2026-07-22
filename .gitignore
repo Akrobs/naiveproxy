@@ -44,6 +44,9 @@ bridge.conf
 xray-users.conf
 xray-compat-users.conf
 xray-users.disabled
+credentials/
+users.secrets
+users.active.htpasswd
 subscription-aliases.conf
 users.d/
 subscriptions/
