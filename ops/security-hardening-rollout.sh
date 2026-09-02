@@ -4,10 +4,9 @@ set -Eeuo pipefail
 LABEL="${1:-$(hostname)}"
 PROFILE="${2:-standard}"
 MASTER_IP="${3:-}"
-HYSTERIA_TAG="app%2Fv2.10.0"
+HYSTERIA_TAG="app%2Fv2.12.1"
 HYSTERIA_ASSET="hysteria-linux-amd64"
-HYSTERIA_SHA256="04f7804159ef1d798de12a817d73aab4b9040ebe45fc62e223000c5c59e987fe"
-HYSTERIA_STAGED="/tmp/yurich-hysteria-v2.10.0-amd64"
+HYSTERIA_SHA256="ffc032c7ca6b78676d337097ca7f61bebc3a90a4f3a656693adf368f304cdbc7"
 
 case "$PROFILE" in
     standard) XRAY_XHTTP_VALUE=0; LOCK_EDGE_SSH=1 ;;
@@ -17,7 +16,7 @@ case "$PROFILE" in
 esac
 
 [[ $EUID -eq 0 ]] || { echo "Run as root" >&2; exit 1; }
-for command_name in apt-get curl sha256sum python3 systemctl timeout tar awk grep install \
+for command_name in apt-get curl sha256sum python3 systemctl timeout tar awk grep install stat \
     jq ss sshd ufw caddy haproxy xray unbound-checkconf augenrules sysctl flock; do
     command -v "$command_name" >/dev/null || { echo "Missing: $command_name" >&2; exit 1; }
 done
@@ -80,16 +79,14 @@ echo "[$LABEL 2/7] hysteria"
 hysteria_url="https://github.com/apernet/hysteria/releases/download/${HYSTERIA_TAG}"
 temp_dir=$(mktemp -d)
 trap 'rm -rf "${temp_dir:-}"' EXIT
-if [[ -f "$HYSTERIA_STAGED" ]]; then
-    cp "$HYSTERIA_STAGED" "$temp_dir/hysteria"
-else
-    curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 \
-        "$hysteria_url/$HYSTERIA_ASSET" -o "$temp_dir/hysteria"
-fi
+curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 \
+    "$hysteria_url/$HYSTERIA_ASSET" -o "$temp_dir/hysteria"
+hysteria_size=$(stat -c '%s' "$temp_dir/hysteria")
+(( hysteria_size >= 1048576 && hysteria_size <= 67108864 ))
 actual_hash=$(sha256sum "$temp_dir/hysteria" | awk '{print $1}')
 [[ "$HYSTERIA_SHA256" == "$actual_hash" ]]
 chmod 755 "$temp_dir/hysteria"
-"$temp_dir/hysteria" version 2>&1 | grep -q 'Version:.*v2.10.0'
+"$temp_dir/hysteria" version 2>&1 | grep -q 'Version:.*v2.12.1'
 install -m 755 "$temp_dir/hysteria" /usr/local/bin/hysteria.next
 mv -f /usr/local/bin/hysteria.next /usr/local/bin/hysteria
 if ! systemctl restart hysteria \
@@ -267,7 +264,7 @@ caddy validate --config /etc/caddy/Caddyfile >/dev/null
 haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null
 xray run -test -config /etc/xray/config.json >/dev/null
 unbound-checkconf >/dev/null
-hysteria version 2>&1 | grep -q 'Version:.*v2.10.0'
+hysteria version 2>&1 | grep -q 'Version:.*v2.12.1'
 [[ $(apt list --upgradable 2>/dev/null | tail -n +2 | wc -l) -eq 0 ]]
 
 test_user="${YURICH_ROLLOUT_TEST_USER:-}"
@@ -279,4 +276,4 @@ bash /usr/local/bin/yurich-panel.sh health
 bash /usr/local/bin/yurich-panel.sh protocol-validate
 bash /usr/local/bin/yurich-panel.sh protocol-benchmark "$test_user" 3
 
-echo "ROLLOUT_OK label=$LABEL profile=$PROFILE backup=$backup_dir hysteria=v2.10.0 ssh_port=$ssh_port test_user=$test_user"
+echo "ROLLOUT_OK label=$LABEL profile=$PROFILE backup=$backup_dir hysteria=v2.12.1 ssh_port=$ssh_port test_user=$test_user"

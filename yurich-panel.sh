@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.7.0
+#   Yurich Panel v5.8.0
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="5.7.2"
+VERSION="5.8.0"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -45,7 +45,7 @@ CADDY_VERSION_PIN="${NAIVEPROXY_CADDY_VERSION:-v2.11.4}"
 XCADDY_VERSION_PIN="${NAIVEPROXY_XCADDY_VERSION:-v0.4.6}"
 FORWARDPROXY_REF_PIN="${NAIVEPROXY_FORWARDPROXY_REF:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
 XRAY_VERSION_PIN="${NAIVEPROXY_XRAY_VERSION:-v26.3.27}"
-HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.10.0}"
+HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.12.1}"
 PINGTUNNEL_DEFAULT_VERSION="master-2c83808a81b56784d639c952b70baada6601e2d7"
 PINGTUNNEL_VERSION_PIN="${NAIVEPROXY_PINGTUNNEL_VERSION:-$PINGTUNNEL_DEFAULT_VERSION}"
 PINGTUNNEL_SHA256_AMD64="5d5847a17099b9359c55a959f85a1994232cf8a089642bd632bfa64e5bdfe8af"
@@ -779,6 +779,15 @@ is_valid_domain() {
     [[ "${1:-}" =~ ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$ ]]
 }
 
+domain_in_space_list_ci() {
+    local domains="${1:-}" needle="${2:-}" domain
+    is_valid_domain "$needle" || return 1
+    for domain in $domains; do
+        [[ "${domain,,}" == "${needle,,}" ]] && return 0
+    done
+    return 1
+}
+
 subscription_public_domain() {
     local domain="${SUBSCRIPTION_DOMAIN:-${DOMAIN:-}}"
     is_valid_domain "$domain" || return 1
@@ -912,6 +921,13 @@ is_valid_port() {
 is_valid_local_proxy_port() {
     local value="${1:-}"
     is_valid_port "$value" && (( 10#$value >= 1024 ))
+}
+
+local_tcp_endpoint_ready() {
+    local port="${1:-}"
+    is_valid_port "$port" || return 1
+    command -v timeout >/dev/null 2>&1 || return 1
+    timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/${port}" >/dev/null 2>&1
 }
 
 is_canonical_uint_in_range() {
@@ -1115,6 +1131,19 @@ save_config() {
         printf 'SUBSCRIPTION_REMWAVE_PREVIEW_USERS=%q\n' "${SUBSCRIPTION_REMWAVE_PREVIEW_USERS:-all}"
         printf '# Режим входящего 443: caddy = Caddy держит 443; haproxy = HAProxy SNI mux держит 443\n'
         printf 'EDGE_ROUTING_MODE=%q\n' "${EDGE_ROUTING_MODE:-caddy}"
+        printf '# 1 = стандартный HTTP 407 для Chrome/Edge browser proxy; 0 = stealth 404\n'
+        printf 'BROWSER_PROXY_COMPAT=%q\n' "${BROWSER_PROXY_COMPAT:-0}"
+        printf '# Optional isolated browser proxy route behind HAProxy SNI mux; empty domain = disabled\n'
+        printf 'BROWSER_PROXY_SNI_DOMAIN=%q\n' "${BROWSER_PROXY_SNI_DOMAIN:-}"
+        printf 'BROWSER_PROXY_BACKEND_PORT=%q\n' "${BROWSER_PROXY_BACKEND_PORT:-7444}"
+        printf '# Enable only when the local backend explicitly accepts PROXY protocol v2; default = 0\n'
+        printf 'BROWSER_PROXY_SEND_PROXY_V2=%q\n' "${BROWSER_PROXY_SEND_PROXY_V2:-0}"
+        printf '# Browser subscriptions: host|node-name entries separated by semicolons; empty = disabled\n'
+        printf 'BROWSER_SUBSCRIPTION_PROFILES=%q\n' "${BROWSER_SUBSCRIPTION_PROFILES:-}"
+        printf '# VLESS relay profiles: source-node|relay-host|relay-port|reality,xhttp entries separated by semicolons\n'
+        printf 'VLESS_RELAY_PROFILES=%q\n' "${VLESS_RELAY_PROFILES:-}"
+        printf '# Users allowed to receive relay profiles: *, all or a space/comma-separated list\n'
+        printf 'VLESS_RELAY_USERS=%q\n' "${VLESS_RELAY_USERS:-}"
         printf '# Автомониторинг протоколов: тестовый пользователь, повторы, порог средней задержки в мс\n'
         printf 'PROTOCOL_BENCHMARK_USER=%q\n' "${PROTOCOL_BENCHMARK_USER:-}"
         printf 'PROTOCOL_BENCHMARK_ROUNDS=%q\n' "${PROTOCOL_BENCHMARK_ROUNDS:-3}"
@@ -1218,7 +1247,7 @@ save_config() {
         printf 'XCADDY_VERSION_PIN=%q\n' "${XCADDY_VERSION_PIN:-v0.4.6}"
         printf 'FORWARDPROXY_REF_PIN=%q\n' "${FORWARDPROXY_REF_PIN:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
         printf 'XRAY_VERSION_PIN=%q\n' "${XRAY_VERSION_PIN:-v26.3.27}"
-        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.10.0}"
+        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.12.1}"
         printf 'BRIDGE_ENABLED=%q\n' "${BRIDGE_ENABLED:-0}"
         printf 'BRIDGE_NAME=%q\n' "${BRIDGE_NAME:-}"
         printf 'BRIDGE_ENTRY_PROTOCOL=%q\n' "${BRIDGE_ENTRY_PROTOCOL:-naive}"
@@ -2895,6 +2924,35 @@ build_caddy() (
 )
 
 
+# Browser extensions require a standards-compliant proxy auth challenge.
+# Keep stealth 404 as the default for existing public installations.
+caddy_proxy_auth_error_block() {
+    if [[ "${BROWSER_PROXY_COMPAT:-0}" == "1" ]]; then
+        cat <<'EOF'
+    handle_errors {
+        @proxy_auth_error expression {http.error.status_code} == 401
+        handle @proxy_auth_error {
+            log_append yurich_auth_failure "1"
+            header -WWW-Authenticate
+            header Proxy-Authenticate "Basic realm=\"Yurich Connect Browser\""
+            respond "" 407
+        }
+    }
+EOF
+    else
+        cat <<'EOF'
+    handle_errors {
+        @proxy_auth_error expression {http.error.status_code} == 401
+        handle @proxy_auth_error {
+            log_append yurich_auth_failure "1"
+            header -WWW-Authenticate
+            respond "Not Found" 404
+        }
+    }
+EOF
+    fi
+}
+
 # ── Мультидомен: генерация Caddyfile ─────────────────────────
 write_caddyfile_multi() {
     mkdir -p "$CADDY_DIR" "$WEBROOT" "$LOG_DIR"
@@ -2932,6 +2990,8 @@ write_caddyfile_multi() {
         caddy_upstream="    upstream socks5://127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"$'\n'
     fi
     local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling=""
+    local proxy_auth_error_block
+    proxy_auth_error_block=$(caddy_proxy_auth_error_block)
     if [[ "${HYSTERIA_PORT:-8443}" == "443" ]]; then
         caddy_protocols="h1 h2"
     fi
@@ -3039,14 +3099,7 @@ ${xhttp_block}
     root ${WEBROOT}
   }
 
-    handle_errors {
-    @proxy_auth_error expression {http.error.status_code} == 401
-    handle @proxy_auth_error {
-      log_append yurich_auth_failure "1"
-      header -WWW-Authenticate
-      respond "Not Found" 404
-    }
-  }
+${proxy_auth_error_block}
 
     log {
         output file ${LOG_DIR}/naive_${dom//./_}.log {
@@ -3328,6 +3381,8 @@ write_caddyfile() {
         caddy_upstream="        upstream socks5://127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"$'\n'
     fi
     local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling="" caddy_bind_line=""
+    local proxy_auth_error_block
+    proxy_auth_error_block=$(caddy_proxy_auth_error_block)
     local caddy_server_port="443"
     if [[ "${HYSTERIA_PORT:-8443}" == "443" ]]; then
         caddy_protocols="h1 h2"
@@ -3440,14 +3495,7 @@ ${xhttp_block}
         root ${WEBROOT}
     }
 
-    handle_errors {
-        @proxy_auth_error expression {http.error.status_code} == 401
-        handle @proxy_auth_error {
-            log_append yurich_auth_failure "1"
-            header -WWW-Authenticate
-            respond "Not Found" 404
-        }
-    }
+${proxy_auth_error_block}
 
     log {
         output file ${LOG_DIR}/naive.log {
@@ -4459,30 +4507,25 @@ write_haproxy_sni_mux_config() {
                 err "Некорректный домен для HAProxy SNI mux: $dom"
                 return 1
             fi
-            if ! printf '%s\n' "$caddy_sni_domains" | tr ' ' '\n' | grep -Fqx "$dom"; then
+            if ! domain_in_space_list_ci "$caddy_sni_domains" "$dom"; then
                 caddy_sni_domains+=" ${dom}"
             fi
         done < <(printf '%s\n' "$DOMAINS" | tr ',' '\n')
     fi
     local caddy_port="${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
     local reality_port="${XRAY_REALITY_PORT:-$XRAY_REALITY_PORT_DEFAULT}"
+    local reality_sni="${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}"
     local mobile_alt_port="${XRAY_MOBILE_ALT_PORT:-$XRAY_MOBILE_ALT_PORT_DEFAULT}"
     local mobile_alt_sni="${XRAY_MOBILE_ALT_SERVER_NAME:-$XRAY_MOBILE_ALT_SERVER_NAME_DEFAULT}"
     local github_test_port="${XRAY_GITHUB_TEST_PORT:-$XRAY_GITHUB_TEST_PORT_DEFAULT}"
     local github_test_sni="${XRAY_GITHUB_TEST_SERVER_NAME:-$XRAY_GITHUB_TEST_SERVER_NAME_DEFAULT}"
+    local browser_sni_domain="${BROWSER_PROXY_SNI_DOMAIN:-}"
+    local browser_backend_port="${BROWSER_PROXY_BACKEND_PORT:-7444}"
+    local browser_send_proxy_v2="${BROWSER_PROXY_SEND_PROXY_V2:-0}"
     local backup_file="" nbthread_value="" nbthread_block="" mobile_alt_acl="" mobile_alt_backend="" github_test_acl="" github_test_backend=""
+    local browser_acl="" browser_backend="" browser_server_args=""
     local default_backend_name="caddy_tls" reality_backend=""
 
-    mkdir -p /etc/haproxy "$BACKUP_DIR"
-    if [[ -f "$HAPROXY_CFG" ]]; then
-        backup_file="${BACKUP_DIR}/haproxy-before-sni-mux-$(date '+%Y%m%d_%H%M%S').cfg"
-        cp -p "$HAPROXY_CFG" "$backup_file"
-    fi
-    apply_haproxy_kernel_tuning
-    nbthread_value=$(haproxy_optimal_nbthread)
-    if [[ -n "$nbthread_value" ]]; then
-        nbthread_block="    nbthread ${nbthread_value}"$'\n'
-    fi
     if [[ "${XRAY_REALITY_ENABLED:-1}" == "1" && "${XRAY_MOBILE_ALT_ENABLED:-0}" == "1" && -s "$XRAY_COMPAT_USERS_FILE" ]]; then
         mobile_alt_acl="    use_backend xray_reality_mobile_alt if { req.ssl_sni -i ${mobile_alt_sni} }"$'\n'
         mobile_alt_backend=$'\n'"backend xray_reality_mobile_alt"$'\n'"    mode tcp"$'\n'"    server xray_mobile_alt 127.0.0.1:${mobile_alt_port} check inter 2s fall 3 rise 2"$'\n'
@@ -4495,9 +4538,58 @@ write_haproxy_sni_mux_config() {
         github_test_acl="    use_backend xray_reality_github_test if { req.ssl_sni -i ${github_test_sni} }"$'\n'
         github_test_backend=$'\n'"backend xray_reality_github_test"$'\n'"    mode tcp"$'\n'"    option tcp-check"$'\n'"    server xray_github 127.0.0.1:${github_test_port} check inter 2s fall 3 rise 2"$'\n'
     fi
+    if [[ -n "$browser_sni_domain" ]]; then
+        if ! is_valid_domain "$browser_sni_domain"; then
+            err "Некорректный BROWSER_PROXY_SNI_DOMAIN: $browser_sni_domain"
+            return 1
+        fi
+        if domain_in_space_list_ci "$caddy_sni_domains" "$browser_sni_domain"; then
+            err "BROWSER_PROXY_SNI_DOMAIN конфликтует с основным Caddy SNI: $browser_sni_domain"
+            return 1
+        fi
+        if [[ "${XRAY_REALITY_ENABLED:-1}" == "1" && "${browser_sni_domain,,}" == "${reality_sni,,}" ]]; then
+            err "BROWSER_PROXY_SNI_DOMAIN конфликтует с REALITY SNI: $browser_sni_domain"
+            return 1
+        fi
+        if [[ "${XRAY_MOBILE_ALT_ENABLED:-0}" == "1" && "${browser_sni_domain,,}" == "${mobile_alt_sni,,}" ]]; then
+            err "BROWSER_PROXY_SNI_DOMAIN конфликтует с Mobile Alt SNI: $browser_sni_domain"
+            return 1
+        fi
+        if [[ "${XRAY_GITHUB_TEST_ENABLED:-0}" == "1" && "${browser_sni_domain,,}" == "${github_test_sni,,}" ]]; then
+            err "BROWSER_PROXY_SNI_DOMAIN конфликтует с GitHub Test SNI: $browser_sni_domain"
+            return 1
+        fi
+        if ! is_valid_local_proxy_port "$browser_backend_port"; then
+            err "Некорректный BROWSER_PROXY_BACKEND_PORT: $browser_backend_port"
+            return 1
+        fi
+        if [[ ! "$browser_send_proxy_v2" =~ ^[01]$ ]]; then
+            err "BROWSER_PROXY_SEND_PROXY_V2 должен быть 0 или 1"
+            return 1
+        fi
+        if ! local_tcp_endpoint_ready "$browser_backend_port"; then
+            err "Browser proxy backend не отвечает на 127.0.0.1:${browser_backend_port}"
+            warn "Сначала запусти совместимый локальный backend или очисти BROWSER_PROXY_SNI_DOMAIN"
+            return 1
+        fi
+        [[ "$browser_send_proxy_v2" == "1" ]] && browser_server_args=" send-proxy-v2"
+        browser_acl="    use_backend browser_proxy_tls if { req.ssl_sni -i ${browser_sni_domain} }"$'\n'
+        browser_backend=$'\n'"backend browser_proxy_tls"$'\n'"    mode tcp"$'\n'"    server browser_proxy 127.0.0.1:${browser_backend_port} check inter 2s fall 3 rise 2${browser_server_args}"$'\n'
+    fi
     if [[ "${XRAY_REALITY_ENABLED:-1}" == "1" ]]; then
         default_backend_name="xray_reality"
         reality_backend=$'\n'"backend xray_reality"$'\n'"    mode tcp"$'\n'"    server xray 127.0.0.1:${reality_port} check inter 2s fall 3 rise 2"$'\n'
+    fi
+
+    mkdir -p /etc/haproxy "$BACKUP_DIR"
+    if [[ -f "$HAPROXY_CFG" ]]; then
+        backup_file="${BACKUP_DIR}/haproxy-before-sni-mux-$(date '+%Y%m%d_%H%M%S').cfg"
+        cp -p "$HAPROXY_CFG" "$backup_file"
+    fi
+    apply_haproxy_kernel_tuning
+    nbthread_value=$(haproxy_optimal_nbthread)
+    if [[ -n "$nbthread_value" ]]; then
+        nbthread_block="    nbthread ${nbthread_value}"$'\n'
     fi
 
     cat > "$HAPROXY_CFG" <<EOF
@@ -4536,8 +4628,8 @@ frontend yurich_tls_443
     tcp-request inspect-delay 1s
     tcp-request content set-var(sess.ssl_sni) req.ssl_sni if { req.ssl_hello_type 1 }
     tcp-request content accept if { req.ssl_hello_type 1 }
-    log-format "client=hidden ts=%t frontend=%ft backend=%b server=%s sni=%[var(sess.ssl_sni),lower] bytes=%B term=%ts conn=%ac/%fc/%bc/%sc/%rc timers=%Tw/%Tc/%Tt queues=%sq/%bq"
-${github_test_acl}
+  log-format "client=hidden ts=%t frontend=%ft backend=%b server=%s sni=%[var(sess.ssl_sni),lower] bytes=%B term=%ts conn=%ac/%fc/%bc/%sc/%rc timers=%Tw/%Tc/%Tt queues=%sq/%bq"
+${browser_acl}${github_test_acl}
 ${mobile_alt_acl}    use_backend caddy_tls if { req.ssl_sni -i ${caddy_sni_domains} }
     default_backend ${default_backend_name}
 
@@ -4551,6 +4643,7 @@ backend caddy_tls
 ${reality_backend}
 ${mobile_alt_backend}
 ${github_test_backend}
+${browser_backend}
 EOF
 
     if ! haproxy -c -f "$HAPROXY_CFG"; then
@@ -4644,11 +4737,12 @@ haproxy_stats_text() {
         return 1
     fi
 
-    python3 - "$info_file" "$stat_file" <<'PY'
+    python3 - "$info_file" "$stat_file" "${BROWSER_PROXY_SNI_DOMAIN:+1}" <<'PY'
 import csv
 import sys
 
 info_path, stat_path = sys.argv[1], sys.argv[2]
+require_browser = len(sys.argv) > 3 and sys.argv[3] == "1"
 
 info = {}
 with open(info_path, "r", encoding="utf-8", errors="replace") as fh:
@@ -4690,6 +4784,8 @@ caddy = pick("caddy_tls", "caddy")
 xray = pick("xray_reality", "xray")
 caddy_backend = pick("caddy_tls", "BACKEND")
 xray_backend = pick("xray_reality", "BACKEND")
+browser = pick("browser_proxy_tls", "browser_proxy")
+browser_backend = pick("browser_proxy_tls", "BACKEND")
 
 print("HAProxy: active")
 print(f"Uptime: {info.get('Uptime', 'n/a')}")
@@ -4698,6 +4794,8 @@ print(f"Frontend 443: current={val(frontend, 'scur')} total={val(frontend, 'stot
 print("Routes:")
 print(f"  Naive/Caddy: status={val(caddy, 'status', 'n/a')} current={val(caddy_backend, 'scur')} total={val(caddy_backend, 'stot')} in={human_bytes(val(caddy_backend, 'bin'))} out={human_bytes(val(caddy_backend, 'bout'))}")
 print(f"  Reality/Xray: status={val(xray, 'status', 'n/a')} current={val(xray_backend, 'scur')} total={val(xray_backend, 'stot')} in={human_bytes(val(xray_backend, 'bin'))} out={human_bytes(val(xray_backend, 'bout'))}")
+if require_browser:
+    print(f"  Browser proxy: status={val(browser, 'status', 'n/a')} current={val(browser_backend, 'scur')} total={val(browser_backend, 'stot')} in={human_bytes(val(browser_backend, 'bin'))} out={human_bytes(val(browser_backend, 'bout'))}")
 PY
     rm -f "$info_file" "$stat_file"
 
@@ -4717,7 +4815,8 @@ haproxy_backends_healthy() {
     systemctl is-active --quiet haproxy 2>/dev/null || { echo "HAProxy service is not active"; return 1; }
     [[ -S "$HAPROXY_STATS_SOCKET" ]] || { echo "HAProxy stats socket not found: $HAPROXY_STATS_SOCKET"; return 1; }
 
-    local stat_file rc=0 require_reality="${XRAY_REALITY_ENABLED:-1}"
+    local stat_file rc=0 require_reality="${XRAY_REALITY_ENABLED:-1}" require_browser="0"
+    [[ -n "${BROWSER_PROXY_SNI_DOMAIN:-}" ]] && require_browser="1"
     stat_file=$(mktemp)
     if ! haproxy_socket_cmd "show stat" > "$stat_file" 2>/dev/null; then
         rm -f "$stat_file"
@@ -4725,12 +4824,13 @@ haproxy_backends_healthy() {
         return 1
     fi
 
-    python3 - "$stat_file" "$require_reality" <<'PY'
+    python3 - "$stat_file" "$require_reality" "$require_browser" <<'PY'
 import csv
 import sys
 
 path = sys.argv[1]
 require_reality = sys.argv[2] == "1"
+require_browser = sys.argv[3] == "1"
 raw = open(path, "r", encoding="utf-8", errors="replace").read().splitlines()
 if not raw:
     print("HAProxy stats are empty")
@@ -4747,6 +4847,8 @@ def status(px, sv):
 backends = [("caddy_tls", "caddy", "Naive/Caddy")]
 if require_reality:
     backends.append(("xray_reality", "xray", "Reality/Xray"))
+if require_browser:
+    backends.append(("browser_proxy_tls", "browser_proxy", "Browser proxy"))
 
 failed = []
 for px, sv, label in backends:
@@ -5423,6 +5525,7 @@ sanitize_imported_shell_data_file() {
         if [[ "$mode" == "naive" ]]; then
             for bool_key in \
                 SUBSCRIPTION_LOCAL_ENABLED SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE SUBSCRIPTION_XHTTP_MAIN_ENABLED \
+                BROWSER_PROXY_COMPAT BROWSER_PROXY_SEND_PROXY_V2 \
                 PROTOCOL_BENCHMARK_RECOVERY_ALERT PROTOCOL_MONITOR_RECOVERY_ALERT HYSTERIA_ENABLED \
                 HYSTERIA_WARP_ENABLED HYSTERIA_PORT_HOP_ENABLED UNBOUND_ENABLED UNBOUND_ADBLOCK \
                 UNBOUND_MANAGED_GATEWAY UNBOUND_VPN_ENABLED UNBOUND_FILTER_ENABLED WARP_PROXY_ENABLED \
@@ -5434,7 +5537,7 @@ sanitize_imported_shell_data_file() {
                 [[ "$import_value" =~ ^[01]$ ]] || { err "Import: $bool_key должен быть 0 или 1"; exit 1; }
             done
 
-            for port_key in HYSTERIA_PORT WARP_PROXY_PORT XRAY_REALITY_PORT XRAY_REALITY_PUBLIC_PORT \
+            for port_key in HYSTERIA_PORT WARP_PROXY_PORT BROWSER_PROXY_BACKEND_PORT XRAY_REALITY_PORT XRAY_REALITY_PUBLIC_PORT \
                 XRAY_MKCP_PORT XRAY_VISION_PORT XRAY_XHTTP_PORT XRAY_WS_PORT XRAY_HTTPUPGRADE_PORT \
                 XRAY_CADDY_FALLBACK_PORT XRAY_GITHUB_TEST_PORT; do
                 [[ -n "${seen_keys[$port_key]+x}" ]] || continue
@@ -5517,6 +5620,7 @@ sanitize_imported_shell_data_file() {
             fi
             if [[ -n "${DOMAIN:-}" ]] && ! is_valid_domain "$DOMAIN"; then err "Import: некорректный DOMAIN"; exit 1; fi
             if [[ -n "${SUBSCRIPTION_DOMAIN:-}" ]] && ! is_valid_domain "$SUBSCRIPTION_DOMAIN"; then err "Import: некорректный SUBSCRIPTION_DOMAIN"; exit 1; fi
+            if [[ -n "${BROWSER_PROXY_SNI_DOMAIN:-}" ]] && ! is_valid_domain "$BROWSER_PROXY_SNI_DOMAIN"; then err "Import: некорректный BROWSER_PROXY_SNI_DOMAIN"; exit 1; fi
             if [[ -n "${DOMAINS:-}" ]]; then
                 while IFS= read -r dom; do
                     dom="${dom//[[:space:]]/}"
@@ -6243,7 +6347,7 @@ nodes_ensure_host_key() {
 nodes_ssh() {
     local line="$1" remote_cmd="$2"
     local node_name node_host node_port node_user node_domain node_role node_weight node_enabled
-    local ssh_timeout="${NODES_SSH_TIMEOUT_SECONDS:-180}"
+    local ssh_timeout="${NODES_SSH_TIMEOUT_SECONDS:-600}"
     nodes_validate_line "$line" || { err "Небезопасная node-запись"; return 1; }
     nodes_ensure_host_key "$line" || return 1
     IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
@@ -6384,9 +6488,10 @@ cmd_nodes_remove() {
 }
 
 cmd_nodes_test() {
-    local name="${1:-}" line failed=0
+    local name="${1:-}" line failed=0 explicit_target=0
     nodes_ensure_file
     if [[ -n "$name" && "$name" != "all" ]]; then
+        explicit_target=1
         line=$(nodes_get_line "$name") || { err "Node не найдена: $name"; return 1; }
         set -- "$line"
     else
@@ -6400,6 +6505,10 @@ cmd_nodes_test() {
     for line in "$@"; do
         local node_name node_host node_port node_user node_domain node_role node_weight node_enabled
         IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
+        if [[ "$node_enabled" != "1" && "$explicit_target" != "1" ]]; then
+            info "Node ${node_name} выключена, пропускаю"
+            continue
+        fi
         hr
         echo -e "${BOLD}  Node status: ${node_name}${RESET} (${node_user}@${node_host}:${node_port})"
         hr
@@ -6513,6 +6622,41 @@ node_links_for_user() {
     done
 }
 
+browser_subscription_links_for_user() {
+    local user="$1" pass="$2" configured entry host node emit_profiles=1
+    local -a entries=()
+    local -A seen_hosts=()
+
+    is_valid_proxy_user "$user" || return 1
+    configured="${BROWSER_SUBSCRIPTION_PROFILES:-}"
+    [[ -n "$configured" ]] || return 0
+    if [[ -z "$pass" ]]; then
+        emit_profiles=0
+    else
+        is_valid_proxy_pass "$pass" || return 1
+    fi
+
+    IFS=';' read -r -a entries <<< "$configured"
+    for entry in "${entries[@]}"; do
+        entry=$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        [[ -n "$entry" ]] || continue
+        [[ "$entry" == *"|"* ]] || return 1
+        host="${entry%%|*}"
+        node="${entry#*|}"
+        host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        node=$(printf '%s' "$node" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        is_valid_domain "$host" || return 1
+        [[ "$node" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || return 1
+        [[ -z "${seen_hosts[$host]+x}" ]] || continue
+        seen_hosts["$host"]=1
+        if [[ "$emit_profiles" == "1" ]]; then
+            uri_with_profile_name \
+                "https://${user}:${pass}@${host}:443" \
+                "$(pretty_profile_name "$user" "Browser HTTPS" "$node")"
+        fi
+    done
+}
+
 node_xhttp_link_for_user() {
     local user="$1" node_name="$2" node_domain="$3" uuid
     [[ -n "$user" && -n "$node_domain" ]] || return 0
@@ -6587,6 +6731,59 @@ node_app_links_for_user() {
                 break
             fi
             sleep 2
+        done
+    done
+}
+
+subscription_vless_relay_links_for_user() {
+    local user="$1" source_links="$2" configured entry source_node relay_host relay_port transports
+    local node_line node_host node_port node_user source_domain node_role node_weight node_enabled
+    local transport source_link relay_link protocol_label
+    local -a entries=()
+    local -A seen=()
+
+    [[ -n "$user" ]] || return 0
+    subscription_name_in_list "$user" "${VLESS_RELAY_USERS:-}" || return 0
+    configured="${VLESS_RELAY_PROFILES:-}"
+    [[ -n "$configured" ]] || return 0
+
+    IFS=';' read -r -a entries <<< "$configured"
+    for entry in "${entries[@]}"; do
+        entry=$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        [[ -n "$entry" ]] || continue
+        IFS='|' read -r source_node relay_host relay_port transports <<< "$entry"
+        [[ "$source_node" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || return 1
+        is_valid_domain "$relay_host" || return 1
+        [[ "$relay_port" =~ ^[0-9]{2,5}$ ]] && ((relay_port >= 1024 && relay_port <= 65535)) || return 1
+        node_line=$(nodes_get_line "$source_node" 2>/dev/null) || return 1
+        IFS='|' read -r _ node_host node_port node_user source_domain node_role node_weight node_enabled <<< "$node_line"
+        [[ "$node_enabled" == "1" ]] || continue
+        is_valid_domain "$source_domain" || return 1
+
+        transports="${transports//,/ }"
+        for transport in $transports; do
+            case "$transport" in
+                reality)
+                    source_link=$(printf '%s\n' "$source_links" | awk -v authority="@${source_domain}:443?" '
+                        /^vless:\/\// && index($0, authority) && /security=reality/ && /type=tcp/ {print; exit}
+                    ')
+                    protocol_label="Reality Relay TEST"
+                    ;;
+                xhttp)
+                    source_link=$(printf '%s\n' "$source_links" | awk -v authority="@${source_domain}:443?" '
+                        /^vless:\/\// && index($0, authority) && /security=tls/ && /type=xhttp/ {print; exit}
+                    ')
+                    protocol_label="XHTTP Relay TEST"
+                    ;;
+                *) return 1 ;;
+            esac
+            [[ -n "$source_link" ]] || continue
+            relay_link="${source_link%%#*}"
+            relay_link="${relay_link/@${source_domain}:443/@${relay_host}:${relay_port}}"
+            relay_link=$(uri_with_profile_name "$relay_link" "$(pretty_profile_name "$user" "$protocol_label" "$source_node")")
+            [[ -z "${seen[$relay_link]+x}" ]] || continue
+            seen["$relay_link"]=1
+            printf '%s\n' "$relay_link"
         done
     done
 }
@@ -7133,6 +7330,10 @@ protocol_benchmark_default_user() {
 cmd_protocol_benchmark_monitor() {
     load_config
     load_users
+    if [[ -e "${YURICH_MAINTENANCE_FILE:-/run/yurich-maintenance}" ]]; then
+        info "Protocol benchmark пропущен: включён maintenance mode"
+        return 0
+    fi
     local user="${1:-}" rounds="${2:-${PROTOCOL_BENCHMARK_ROUNDS:-3}}" max_ms="${PROTOCOL_BENCHMARK_MAX_AVG_MS:-2500}"
     local min_rounds="${PROTOCOL_BENCHMARK_MONITOR_MIN_ROUNDS:-3}" slow_min_hits="${PROTOCOL_BENCHMARK_SLOW_MIN_HITS:-2}"
     local warn_min_ok="${PROTOCOL_BENCHMARK_WARN_MIN_OK_HITS:-2}"
@@ -7456,6 +7657,10 @@ cmd_protocol_health() {
 
 cmd_protocol_monitor() {
     load_config
+    if [[ -e "${YURICH_MAINTENANCE_FILE:-/run/yurich-maintenance}" ]]; then
+        info "Protocol monitor пропущен: включён maintenance mode"
+        return 0
+    fi
     local tmp rc alert_state="${PROTOCOL_MONITOR_ALERT_STATE:-$CONFIG_DIR/protocol-health-alert.state}"
     local alert_cooldown_minutes="${PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:-60}" recovery_alert="${PROTOCOL_MONITOR_RECOVERY_ALERT:-1}"
     local cooldown_sec now_ts fingerprint state_line state_a state_b state_c state_d state_e
@@ -7665,8 +7870,9 @@ profile_flag_for_label() {
     local label="${1:-}" lowered
     lowered=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')
     case "$lowered" in
-        *finland*|*helsinki*|*suomi*) printf '🇫🇮' ;;
+        fin|*finland*|*helsinki*|*suomi*) printf '🇫🇮' ;;
         swe|*sweden*|*stockholm*) printf '🇸🇪' ;;
+        estonia|ee|*estonia*|*tallinn*) printf '🇪🇪' ;;
         *germany*|*deutschland*|*berlin*|*frankfurt*) printf '🇩🇪' ;;
         *netherlands*|*holland*|*amsterdam*) printf '🇳🇱' ;;
         *united\ states*|*america*|*california*|*fremont*|*new\ york*) printf '🇺🇸' ;;
@@ -7683,13 +7889,16 @@ node_location_label() {
     lowered=$(printf '%s' "$node" | tr '[:upper:]' '[:lower:]')
     case "$lowered" in
         germany|de|main) printf 'Germany' ;;
-        finland|fi) printf 'Finland' ;;
-        finland2|finland-2|helsinki|n8n) printf 'Finland 2' ;;
+        germany2|germany-2|de2) printf 'Germany 2' ;;
+        fin|finland|fi) printf 'Finland' ;;
+        finland2|finland-2|helsinki|fi2) printf 'Finland 2' ;;
         swe|sweden|finland3|finland-3) printf 'SWE' ;;
-        netit|net-it|netherlands|nl) printf 'Netherlands' ;;
+        estonia|ee|tallinn) printf 'Estonia' ;;
+        netherlands|nl|holland|amsterdam) printf 'Netherlands' ;;
         usa|us|america|california|fremont) printf 'USA California' ;;
         poland|pl|warsaw) printf 'Poland' ;;
-        poland2|pl2|usa2|test-go-it|test) printf 'Poland 2' ;;
+        poland2|pl2|usa2|test) printf 'Poland 2' ;;
+        france|fr|paris) printf 'France' ;;
         uk|gb|united-kingdom|united_kingdom|great-britain|britain|london) printf 'United Kingdom' ;;
         *) printf '%s' "$node" ;;
     esac
@@ -7738,12 +7947,14 @@ happ_location_code() {
     lowered=$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]')
     case "$lowered" in
         *swe*|*stockholm*) printf 'SWE' ;;
-        *finland\ 2*|*finland2*|*n8n*) printf 'FI2' ;;
+        *estonia*|*tallinn*) printf 'EE' ;;
+        *finland\ 2*|*finland2*|*fi2*) printf 'FI2' ;;
         *poland*|*warsaw*|*polska*) printf 'PL' ;;
-        *finland*|*helsinki*|*suomi*|*dns-ai*) printf 'FI' ;;
-        *germany*|*deutschland*|*berlin*|*frankfurt*|*plus-dns*) printf 'DE' ;;
+        *finland*|*helsinki*|*suomi*) printf 'FI' ;;
+        *germany*|*deutschland*|*berlin*|*frankfurt*) printf 'DE' ;;
         *united-kingdom*|*united\ kingdom*|*great\ britain*|*london*) printf 'GB' ;;
-        *netherlands*|*holland*|*amsterdam*|*net-it*) printf 'NL' ;;
+        *france*|*paris*) printf 'FR' ;;
+        *netherlands*|*holland*|*amsterdam*) printf 'NL' ;;
         *usa*|*united\ states*|*america*|*california*|*fremont*) printf 'US' ;;
         *) printf 'VPN' ;;
     esac
@@ -7774,47 +7985,55 @@ import urllib.parse
 
 def loc_code(host, label):
     text = f"{host} {label}".lower()
-    if "swe.go-it" in text or "sweden" in text or "stockholm" in text or "swe •" in text:
+    if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "SWE"
-    if "finland 2" in text or "finland2" in text or "n8n" in text:
+    if "estonia" in text or "tallinn" in text:
+        return "EE"
+    if "finland 2" in text or "finland2" in text or "fi2" in text:
         return "FI2"
     if "poland" in text or "warsaw" in text or "polska" in text:
         return "PL"
     if "usa" in text or "america" in text or "california" in text:
         return "US"
-    if "russia" in text or "russian" in text or "moscow" in text or "rus.go-it" in text or "ru " in text:
+    if "russia" in text or "russian" in text or "moscow" in text or "ru " in text:
         return "RU"
-    if "finland" in text or "helsinki" in text or "suomi" in text or "dns-ai" in text:
+    if "finland" in text or "helsinki" in text or "suomi" in text:
         return "FI"
-    if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
+    if "germany" in text or "deutschland" in text or "frankfurt" in text:
         return "DE"
     if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
         return "GB"
-    if "netherlands" in text or "amsterdam" in text or "net-it" in text:
+    if "france" in text or "paris" in text:
+        return "FR"
+    if "netherlands" in text or "amsterdam" in text:
         return "NL"
     return "VPN"
 
 def loc_label(host, label):
     text = f"{host} {label}".lower()
-    if "swe.go-it" in text or "sweden" in text or "stockholm" in text or "swe •" in text:
+    if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "🇸🇪 SWE"
-    if "finland 2" in text or "finland2" in text or "n8n" in text:
+    if "estonia" in text or "tallinn" in text:
+        return "🇪🇪 Estonia"
+    if "finland 2" in text or "finland2" in text or "fi2" in text:
         return "🇫🇮 Finland 2"
-    if "poland 2" in text or "test.go-it" in text:
+    if "poland 2" in text or "poland2" in text or "pl2" in text:
         return "🇵🇱 Poland 2"
     if "poland" in text or "warsaw" in text or "polska" in text:
         return "🇵🇱 Poland"
     if "usa" in text or "america" in text or "california" in text:
         return "🇺🇸 USA California"
-    if "russia" in text or "russian" in text or "moscow" in text or "rus.go-it" in text or "ru " in text:
+    if "russia" in text or "russian" in text or "moscow" in text or "ru " in text:
         return "🇷🇺 Russia"
-    if "finland" in text or "helsinki" in text or "suomi" in text or "dns-ai" in text:
+    if "finland" in text or "helsinki" in text or "suomi" in text:
         return "🇫🇮 Finland"
-    if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
+    if "germany" in text or "deutschland" in text or "frankfurt" in text:
         return "🇩🇪 Germany"
     if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
         return "🇬🇧 United Kingdom"
-    if "netherlands" in text or "amsterdam" in text or "net-it" in text:
+    if "france" in text or "paris" in text:
+        return "🇫🇷 France"
+    if "netherlands" in text or "amsterdam" in text:
         return "🇳🇱 Netherlands"
     return "🌐 VPN"
 
@@ -7890,47 +8109,55 @@ force_xray_core = len(sys.argv) > 2 and sys.argv[2] == "1"
 
 def loc_code(host, label):
     text = f"{host} {label}".lower()
-    if "swe.go-it" in text or "sweden" in text or "stockholm" in text or "swe •" in text:
+    if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "SWE"
-    if "finland 2" in text or "finland2" in text or "n8n" in text:
+    if "estonia" in text or "tallinn" in text:
+        return "EE"
+    if "finland 2" in text or "finland2" in text or "fi2" in text:
         return "FI2"
     if "poland" in text or "warsaw" in text or "polska" in text:
         return "PL"
     if "usa" in text or "america" in text or "california" in text:
         return "US"
-    if "russia" in text or "russian" in text or "moscow" in text or "rus.go-it" in text or "ru " in text:
+    if "russia" in text or "russian" in text or "moscow" in text or "ru " in text:
         return "RU"
-    if "finland" in text or "helsinki" in text or "suomi" in text or "dns-ai" in text:
+    if "finland" in text or "helsinki" in text or "suomi" in text:
         return "FI"
-    if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
+    if "germany" in text or "deutschland" in text or "frankfurt" in text:
         return "DE"
     if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
         return "GB"
-    if "netherlands" in text or "amsterdam" in text or "net-it" in text:
+    if "france" in text or "paris" in text:
+        return "FR"
+    if "netherlands" in text or "amsterdam" in text:
         return "NL"
     return "VPN"
 
 def loc_label(host, label):
     text = f"{host} {label}".lower()
-    if "swe.go-it" in text or "sweden" in text or "stockholm" in text or "swe •" in text:
+    if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "🇸🇪 SWE"
-    if "finland 2" in text or "finland2" in text or "n8n" in text:
+    if "estonia" in text or "tallinn" in text:
+        return "🇪🇪 Estonia"
+    if "finland 2" in text or "finland2" in text or "fi2" in text:
         return "🇫🇮 Finland 2"
-    if "poland 2" in text or "test.go-it" in text:
+    if "poland 2" in text or "poland2" in text or "pl2" in text:
         return "🇵🇱 Poland 2"
     if "poland" in text or "warsaw" in text or "polska" in text:
         return "🇵🇱 Poland"
     if "usa" in text or "america" in text or "california" in text:
         return "🇺🇸 USA California"
-    if "russia" in text or "russian" in text or "moscow" in text or "rus.go-it" in text or "ru " in text:
+    if "russia" in text or "russian" in text or "moscow" in text or "ru " in text:
         return "🇷🇺 Russia"
-    if "finland" in text or "helsinki" in text or "suomi" in text or "dns-ai" in text:
+    if "finland" in text or "helsinki" in text or "suomi" in text:
         return "🇫🇮 Finland"
-    if "germany" in text or "deutschland" in text or "frankfurt" in text or "plus-dns" in text:
+    if "germany" in text or "deutschland" in text or "frankfurt" in text:
         return "🇩🇪 Germany"
     if "united-kingdom" in text or "united kingdom" in text or "great britain" in text or "london" in text:
         return "🇬🇧 United Kingdom"
-    if "netherlands" in text or "amsterdam" in text or "net-it" in text:
+    if "france" in text or "paris" in text:
+        return "🇫🇷 France"
+    if "netherlands" in text or "amsterdam" in text:
         return "🇳🇱 Netherlands"
     return "🌐 VPN"
 
@@ -8588,6 +8815,12 @@ EOF
 }
 
 write_hysteria_service() {
+    local capability_block
+    if is_valid_port "${HYSTERIA_PORT:-8443}" && (( 10#${HYSTERIA_PORT:-8443} < 1024 )); then
+        capability_block=$'CapabilityBoundingSet=CAP_NET_BIND_SERVICE\nAmbientCapabilities=CAP_NET_BIND_SERVICE'
+    else
+        capability_block=$'CapabilityBoundingSet=\nAmbientCapabilities='
+    fi
     cat > "$HYSTERIA_SERVICE" <<EOF
 [Unit]
 Description=Hysteria 2 Proxy
@@ -8619,8 +8852,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-CapabilityBoundingSet=
-AmbientCapabilities=
+${capability_block}
 
 [Install]
 WantedBy=multi-user.target
@@ -9726,7 +9958,15 @@ xray_clients_json_compat_only() {
 }
 
 xray_reality_key_valid() {
-    [[ "${1:-}" =~ ^[A-Za-z0-9_-]{20,100}$ ]]
+    local key="${1:-}" decoded_size
+    [[ "$key" =~ ^[A-Za-z0-9_-]{43}$ ]] || return 1
+    command -v openssl >/dev/null 2>&1 || return 1
+    decoded_size=$(printf '%s=' "$key" \
+        | tr '_-' '/+' \
+        | openssl base64 -d -A 2>/dev/null \
+        | wc -c \
+        | tr -d '[:space:]')
+    [[ "$decoded_size" == "32" ]]
 }
 
 xray_extract_reality_key() {
@@ -9780,21 +10020,58 @@ xray_extract_reality_key() {
     return 1
 }
 
+xray_derive_reality_public_key() {
+    local private_key="$1" public_key
+    xray_reality_key_valid "$private_key" || return 1
+    command -v openssl >/dev/null 2>&1 || return 1
+
+    # RFC 8410 PKCS#8 wrapper lets OpenSSL derive the public X25519 key
+    # without exposing the stored private key in /proc/<pid>/cmdline.
+    public_key=$(
+        {
+            printf '%b' '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x6e\x04\x22\x04\x20'
+            printf '%s=' "$private_key" | tr '_-' '/+' | openssl base64 -d -A
+        } \
+            | openssl pkey -inform DER -pubout -outform DER 2>/dev/null \
+            | tail -c 32 \
+            | openssl base64 -A \
+            | tr '/+' '_-' \
+            | tr -d '='
+    ) || return 1
+    xray_reality_key_valid "$public_key" || return 1
+    printf '%s\n' "$public_key"
+}
+
 ensure_xray_reality_keys() {
     XRAY_REALITY_SHORT_ID="${XRAY_REALITY_SHORT_ID:-$(openssl rand -hex 8)}"
-    if ! xray_reality_key_valid "${XRAY_REALITY_PRIVATE_KEY:-}" || ! xray_reality_key_valid "${XRAY_REALITY_PUBLIC_KEY:-}"; then
+    local derived_public=""
+    if xray_reality_key_valid "${XRAY_REALITY_PRIVATE_KEY:-}"; then
+        derived_public=$(xray_derive_reality_public_key "$XRAY_REALITY_PRIVATE_KEY" 2>/dev/null || true)
+        if ! xray_reality_key_valid "$derived_public"; then
+            err "Не смог вычислить публичный REALITY ключ из сохранённого приватного ключа"
+            return 1
+        fi
+        if [[ "${XRAY_REALITY_PUBLIC_KEY:-}" != "$derived_public" ]]; then
+            warn "Публичный REALITY ключ не соответствовал приватному и был безопасно восстановлен"
+            XRAY_REALITY_PUBLIC_KEY="$derived_public"
+        fi
+    else
         local key_out
         key_out=$("$XRAY_BIN" x25519 2>&1 || true)
         XRAY_REALITY_PRIVATE_KEY=$(xray_extract_reality_key private "$key_out" 2>/dev/null || true)
         XRAY_REALITY_PUBLIC_KEY=$(xray_extract_reality_key public "$key_out" 2>/dev/null || true)
         if ! xray_reality_key_valid "${XRAY_REALITY_PRIVATE_KEY:-}" || ! xray_reality_key_valid "${XRAY_REALITY_PUBLIC_KEY:-}"; then
-            warn "xray x25519 вывел неожиданный формат:"
-            printf '%s\n' "$key_out" | sed -n '1,12p'
+            warn "xray x25519 вывел неожиданный формат; ключевой материал скрыт"
         fi
     fi
     if ! xray_reality_key_valid "${XRAY_REALITY_PRIVATE_KEY:-}" || ! xray_reality_key_valid "${XRAY_REALITY_PUBLIC_KEY:-}"; then
         err "Не смог сгенерировать REALITY ключи: xray x25519"
         warn "Проверь вручную: ${XRAY_BIN} x25519"
+        return 1
+    fi
+    derived_public=$(xray_derive_reality_public_key "$XRAY_REALITY_PRIVATE_KEY" 2>/dev/null || true)
+    if [[ -z "$derived_public" || "$XRAY_REALITY_PUBLIC_KEY" != "$derived_public" ]]; then
+        err "REALITY keypair не прошла проверку соответствия"
         return 1
     fi
 }
@@ -10008,6 +10285,13 @@ ensure_xray_zapret_assets() {
     return 1
 }
 
+xray_local_dns_ready() {
+    [[ "${UNBOUND_ENABLED:-0}" == "1" ]] || return 1
+    command -v systemctl >/dev/null 2>&1 || return 1
+    systemctl is-active --quiet unbound 2>/dev/null || return 1
+    local_tcp_endpoint_ready 53
+}
+
 write_xray_config() {
     load_config
     local seed_user="${1:-}"
@@ -10093,6 +10377,28 @@ write_xray_config() {
     "error": "/var/log/xray/error.log",
     "loglevel": "warning"
   },
+EOF
+
+    if xray_local_dns_ready; then
+        cat >> "$XRAY_CONFIG" <<'EOF'
+  "dns": {
+    "servers": [
+      {
+        "address": "127.0.0.1",
+        "port": 53,
+        "queryStrategy": "UseIPv4",
+        "skipFallback": true
+      }
+    ],
+    "queryStrategy": "UseIPv4",
+    "disableFallback": true
+  },
+EOF
+    elif [[ "${UNBOUND_ENABLED:-0}" == "1" ]]; then
+        warn "Unbound включён в конфиге, но 127.0.0.1:53 сейчас недоступен; Xray использует системный DNS"
+    fi
+
+    cat >> "$XRAY_CONFIG" <<EOF
   "policy": {
     "levels": {
       "0": {
@@ -10650,12 +10956,13 @@ subscription_active_locations_label() {
         text="$(printf '%s %s' "$host" "$location" | tr '[:upper:]' '[:lower:]')"
         case "$text" in
             *swe*|*stockholm*) location="🇸🇪 SWE" ;;
-            *n8n-cloud*|*finland\ 2*|*finland2*|*fi2*) location="🇫🇮 Finland 2" ;;
+            *estonia*|*tallinn*) location="🇪🇪 Estonia" ;;
+            *finland\ 2*|*finland2*|*fi2*) location="🇫🇮 Finland 2" ;;
             *poland*|*warsaw*|*polska*) location="🇵🇱 Poland" ;;
             *finland*|*helsinki*|*suomi*) location="🇫🇮 Finland" ;;
-            *plus-dns*|*germany*|*deutschland*|*frankfurt*) location="🇩🇪 Germany" ;;
+            *germany*|*deutschland*|*frankfurt*) location="🇩🇪 Germany" ;;
             *united-kingdom*|*united\ kingdom*|*great\ britain*|*london*) location="🇬🇧 United Kingdom" ;;
-            *net-it*|*netherlands*|*amsterdam*) location="🇳🇱 Netherlands" ;;
+            *netherlands*|*amsterdam*) location="🇳🇱 Netherlands" ;;
         esac
         printf '%s\n' "$location"
     done <<< "$links" | awk 'NF && !seen[$0]++ { out = out ? out " / " $0 : $0 } END { print out }'
@@ -11069,7 +11376,7 @@ suspend_subscription_page() {
     remove_web_token_dir "$SUBS_WEB_DIR" "$token" || return 1
     mkdir -p "$page_dir"
     chmod 755 "$SUBS_WEB_DIR" "$page_dir"
-    for file in links.txt hiddify.txt nekobox.txt v2rayng.txt karing.txt streisand.txt happ.txt mobile-test.txt pingtunnel.txt; do
+    for file in links.txt hiddify.txt nekobox.txt v2rayng.txt karing.txt streisand.txt happ.txt browser.txt mobile-test.txt pingtunnel.txt; do
         : > "$page_dir/$file"
         chmod 644 "$page_dir/$file"
     done
@@ -11309,9 +11616,15 @@ generate_subscription_page() {
         return 1
     fi
 
+    local subscription_domain
+    subscription_domain=$(subscription_public_domain) || {
+        err "Некорректный SUBSCRIPTION_DOMAIN: ${SUBSCRIPTION_DOMAIN:-}"
+        return 1
+    }
+
     ensure_web_privacy_files
 
-    local token token_file page_dir links_file hiddify_file streisand_file happ_file nekobox_file karing_file v2rayng_file pingtunnel_file naive_pass naive_uri hy2_uri expiry_label expiry_tag node_links node_app_links active_links app_links happ_links v2rayng_links
+    local token token_file page_dir links_file hiddify_file streisand_file happ_file browser_file nekobox_file karing_file v2rayng_file pingtunnel_file naive_pass naive_uri hy2_uri expiry_label expiry_tag node_links node_app_links relay_links active_links app_links happ_links browser_links v2rayng_links
     token_file="${SUBS_DIR}/${user}.token"
     token=$(get_or_create_token_file "$token_file")
     page_dir="${SUBS_WEB_DIR}/${token}"
@@ -11319,6 +11632,7 @@ generate_subscription_page() {
     hiddify_file="${page_dir}/hiddify.txt"
     streisand_file="${page_dir}/streisand.txt"
     happ_file="${page_dir}/happ.txt"
+    browser_file="${page_dir}/browser.txt"
     nekobox_file="${page_dir}/nekobox.txt"
     karing_file="${page_dir}/karing.txt"
     v2rayng_file="${page_dir}/v2rayng.txt"
@@ -11332,6 +11646,18 @@ generate_subscription_page() {
     naive_uri=""
     if [[ -n "$naive_pass" ]]; then
         naive_uri=$(uri_with_profile_name "naive+https://${user}:${naive_pass}@${DOMAIN}:443" "$(pretty_profile_name "$user" "HTTPS")")
+    fi
+
+    browser_links=""
+    if [[ -n "${BROWSER_SUBSCRIPTION_PROFILES:-}" ]]; then
+        if ! browser_links=$(browser_subscription_links_for_user "$user" "$naive_pass"); then
+            err "Некорректный BROWSER_SUBSCRIPTION_PROFILES"
+            return 1
+        fi
+        if [[ -n "$naive_pass" && -z "$browser_links" ]]; then
+            err "Browser subscription не содержит валидных профилей"
+            return 1
+        fi
     fi
 
     hy2_uri=""
@@ -11365,6 +11691,10 @@ generate_subscription_page() {
     } | awk 'NF')
     node_links=$(node_links_for_user "$user" "$naive_pass" "$expiry_tag" 2>/dev/null || true)
     node_app_links=$(node_app_links_for_user "$user" 2>/dev/null || true)
+    if ! relay_links=$(subscription_vless_relay_links_for_user "$user" "$node_app_links"); then
+        err "Некорректный VLESS_RELAY_PROFILES или недоступна исходная node"
+        return 1
+    fi
     local subscription_local_enabled subscription_local_position local_links local_app_links
     subscription_local_enabled="${SUBSCRIPTION_LOCAL_ENABLED:-1}"
     [[ "$subscription_local_enabled" == "0" ]] || subscription_local_enabled="1"
@@ -11386,16 +11716,22 @@ generate_subscription_page() {
         active_links=$({
             [[ -n "$node_links" ]] && printf '%s\n' "$node_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
-        app_links=$(printf '%s\n' "$node_app_links" | awk 'NF')
+        app_links=$({
+            [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
+        } | awk 'NF')
     elif [[ "$subscription_local_position" == "last" ]]; then
         active_links=$({
             [[ -n "$node_links" ]] && printf '%s\n' "$node_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
             [[ -n "$local_links" ]] && printf '%s\n' "$local_links"
         } | awk 'NF')
         app_links=$({
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
             [[ -n "$local_app_links" ]] && printf '%s\n' "$local_app_links"
         } | awk 'NF')
     else
@@ -11403,10 +11739,12 @@ generate_subscription_page() {
             [[ -n "$local_links" ]] && printf '%s\n' "$local_links"
             [[ -n "$node_links" ]] && printf '%s\n' "$node_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
         app_links=$({
             [[ -n "$local_app_links" ]] && printf '%s\n' "$local_app_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
     fi
     active_links=$(printf '%s\n' "$active_links" | subscription_filter_published_links)
@@ -11428,6 +11766,12 @@ generate_subscription_page() {
         printf '#subscription-auto-update-enable: 1\n'
         printf '%s\n' "$happ_links"
     } > "$happ_file"
+    if [[ -n "$browser_links" ]]; then
+        printf '%s\n' "$browser_links" > "$browser_file"
+        chmod 644 "$browser_file"
+    else
+        rm -f "$browser_file"
+    fi
     rm -f "${page_dir}/qr-happ.png" "${page_dir}/mobile-test.txt" "${page_dir}/qr-mobile-test.png" 2>/dev/null || true
     chmod 644 "$links_file" "$happ_file" "$nekobox_file" "$karing_file" "$v2rayng_file"
     if [[ -f "$PINGTUNNEL_ENV" && -x "$PINGTUNNEL_BIN" ]]; then
@@ -11436,16 +11780,12 @@ generate_subscription_page() {
         rm -f "$pingtunnel_file"
     fi
 
-    local subscription_domain sub_url links_url hiddify_url streisand_url nekobox_url v2rayng_url pingtunnel_url hiddify_open_url hiddify_expire_epoch hiddify_used_bytes hiddify_used_human hiddify_links streisand_links title display_profile_label active_locations safe_active_locations safe_user safe_domain safe_expiry_label safe_days_left safe_hiddify_used_human
+    local sub_url links_url hiddify_url streisand_url nekobox_url v2rayng_url pingtunnel_url hiddify_open_url hiddify_expire_epoch hiddify_used_bytes hiddify_used_human hiddify_links streisand_links title display_profile_label active_locations safe_active_locations safe_user safe_domain safe_expiry_label safe_days_left safe_hiddify_used_human
     local safe_android_url safe_windows_url safe_streisand_url safe_karing_url safe_telegram_url safe_donation_url safe_tg_bot_url safe_tg_id_bot_url
     local traffic_summary safe_traffic_summary profile_cards_html profile_count qr_cards_html recommendations_html recommendations_all_html
     local subscription_logo_source subscription_logo_name subscription_logo_html subscription_header_logo_html
     local project_help_qr_source project_help_qr_name project_help_qr_html
     local qr_links_png qr_hiddify_png qr_streisand_png qr_happ_png qr_nekobox_png qr_v2rayng_png
-    subscription_domain=$(subscription_public_domain) || {
-        err "Некорректный SUBSCRIPTION_DOMAIN: ${SUBSCRIPTION_DOMAIN:-}"
-        return 1
-    }
     sub_url="https://${subscription_domain}/s/${token}/"
     links_url="${sub_url}links.txt"
     hiddify_url="${sub_url}hiddify.txt"
@@ -12893,6 +13233,8 @@ cmd_xray_install() {
     set_user_expiry_months "$xuser" "$x_months" || true
 
     prompt_xray_reality_target || return 1
+    # write_xray_config reloads naive.conf, so persist the selected target first.
+    save_config
 
     install_xray_bin || return 1
     write_xray_config "$xuser" || return 1
@@ -14230,6 +14572,15 @@ rotate_user_credentials() {
     is_valid_proxy_user "$target" || return 1
     is_valid_proxy_pass "$new_pass" || return 1
     get_user_hash "$target" >/dev/null 2>&1 || { err "Пользователь $target не найден"; return 1; }
+    if [[ -n "${BROWSER_SUBSCRIPTION_PROFILES:-}" ]] \
+        && ! browser_subscription_links_for_user "$target" "$new_pass" >/dev/null; then
+        err "Ротация отменена: некорректный BROWSER_SUBSCRIPTION_PROFILES"
+        return 1
+    fi
+    if ! subscription_vless_relay_links_for_user "$target" "" >/dev/null; then
+        err "Ротация отменена: некорректный VLESS_RELAY_PROFILES"
+        return 1
+    fi
     backup_dir=$(mktemp -d /tmp/yurich-rotate-user.XXXXXX)
     chmod 700 "$backup_dir"
     credential_state_backup "$backup_dir/credential-state"
@@ -18648,7 +18999,7 @@ DNS_FILTER_CRON="/etc/cron.d/yurich-dns-filter"
 DNS_FILTER_MONITOR_CRON="/etc/cron.d/yurich-dns-monitor"
 DNS_FILTER_LOG="/var/log/yurich-dns-filter.log"
 DNS_FILTER_MONITOR_LOG="/var/log/yurich-dns-monitor.log"
-DNS_FILTER_URLS_DEFAULT="https://urlhaus.abuse.ch/downloads/hostfile/ https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.mini.txt"
+DNS_FILTER_URLS_DEFAULT="https://urlhaus.abuse.ch/downloads/hostfile/ https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
 DNS_FILTER_MAX_DOMAINS_DEFAULT="200000"
 DNS_LEGACY_OLD_DNS_CONF="/etc/unbound/unbound.conf.d/aurum-vpn.conf"
 DNS_LEGACY_CONF="/etc/unbound/unbound.conf.d/naiveproxy-dns.conf"
@@ -18757,7 +19108,7 @@ dns_config_backup() {
 
 get_unbound_vpn_bind_ips() {
     command -v ip >/dev/null 2>&1 || return 0
-    ip -o -4 addr show scope global up 2>/dev/null \
+    ip -o -4 addr show up 2>/dev/null \
         | awk '{split($4, a, "/"); if (a[1] != "" && a[1] !~ /^127\./ && a[1] !~ /^169\.254\./) print a[1]}' \
         | sort -u
 }
@@ -18943,13 +19294,13 @@ generate_dns_blocklist_conf() {
         idx=$((idx + 1))
         source_file="${workdir}/source-${idx}.txt"
         if ! curl -fsSL --connect-timeout 10 --max-time 45 --max-filesize "$max_source_bytes" -o "$source_file" -- "$url"; then
-            warn "DNS filter source недоступен: $url"
+            warn "DNS filter source недоступен: $url" >&2
             rm -f "$source_file"
             continue
         fi
         source_size=$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)
         if [[ ! "$source_size" =~ ^[0-9]+$ || "$source_size" -gt "$max_source_bytes" ]]; then
-            warn "DNS filter source превышает лимит 25 MiB: $url"
+            warn "DNS filter source превышает лимит 25 MiB: $url" >&2
             rm -f "$source_file"
         fi
     done
@@ -19186,7 +19537,7 @@ dns_monitor_block_ok() {
 
 cmd_dns_monitor() {
     load_config
-    local failed=0 status count updated_at message public_53 first_blocked gateway_ip gateway_re fail_details=""
+    local failed=0 status count updated_at message public_53 first_blocked gateway_ip fail_details=""
     local domain ms latency_warn=0 latency_warn_details="" dns_latency_warn_ms="${DNS_MONITOR_LATENCY_WARN_MS:-250}" dns_latency_fail_ms="${DNS_MONITOR_LATENCY_FAIL_MS:-1500}"
     is_canonical_uint_in_range "$dns_latency_warn_ms" 1 600000 || dns_latency_warn_ms=250
     is_canonical_uint_in_range "$dns_latency_fail_ms" 1 600000 || dns_latency_fail_ms=1500
@@ -19251,8 +19602,7 @@ cmd_dns_monitor() {
             failed=$((failed + 1))
             fail_details+=$'- VPN DNS is enabled but UNBOUND_GATEWAY_IP is empty\n'
         else
-            gateway_re=${gateway_ip//./\\.}
-            if ip -br addr 2>/dev/null | grep -Eq "(^|[[:space:]])${gateway_re}/"; then
+            if ip_is_on_server "$gateway_ip"; then
                 ok "VPN DNS gateway IP есть на интерфейсе: $gateway_ip"
             else
                 warn "VPN DNS gateway IP не найден на интерфейсах: $gateway_ip"

@@ -15,9 +15,17 @@ tmp_*
 *.pid
 *.swp
 *.swo
+*.pyc
 cache.db
 Happ
 project-help-qr.with-name.backup.jpg
+
+# Local fleet runbooks may contain production hosts or one-off state.
+# Public shell helpers must be explicitly allowlisted here.
+ops/*.sh
+!ops/security-hardening-rollout.sh
+!ops/test-*.sh
+ops/__pycache__/
 
 # Generated archives and downloaded packages
 *.tar

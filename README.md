@@ -6,7 +6,7 @@
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-[![Version](https://img.shields.io/badge/version-5.7.2-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.8.0-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -46,9 +46,9 @@ Yurich Panel — это единый установочный и админис�
 - Telegram Bot API;
 - optional: Xray-core, Hysteria 2, Cloudflare WARP proxy mode, unbound DNS.
 
-## Что нового в текущей ветке 5.7.x
+## Что нового в текущей ветке 5.8.x
 
-Релиз `5.7.2` дополняет защищённое хранение учёток исправлением TLS для Hysteria 2. Сервис больше не читает сертификат напрямую из `/root/.local/share/caddy`: проверенная копия хранится в `/etc/naiveproxy/hysteria-tls`, а root-only systemd timer синхронизирует её после продления Caddy. Старые установки транзакционно мигрируются при первом root-запуске новой версии, даже если self-update начался на `5.6.x`; ручной запуск доступен через `hysteria-repair`.
+Релиз `5.8.0` усиливает безопасную эксплуатацию без смены действующих UUID, паролей и URL подписок. Публичный REALITY-ключ теперь вычисляется через OpenSSL без передачи приватного ключа в аргументах процесса. Xray использует локальный Unbound только когда сервис и `127.0.0.1:53` действительно доступны, иначе сохраняет рабочий системный DNS. Browser/relay-профили проверяются до публикации файлов, а HAProxy не применяет отдельный browser SNI route без готового локального backend.
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -103,15 +103,22 @@ sudo bash yurich-panel.sh security-audit
 | WARP → Hysteria | Hysteria 2 получает `outbounds` с первым SOCKS5 outbound на WARP proxy |
 | WARP → Xray | Xray использует SOCKS outbound и явное routing-правило через `warp-proxy` |
 | SSH safety | Новая команда `warp-ssh-allow` для сохранения домашних/мобильных SSH CIDR |
-| Xray keys | Парсер REALITY ключей стал устойчивее к разным форматам `xray x25519` |
+| Xray keys | Публичный REALITY-ключ проверяется и восстанавливается через OpenSSL без приватного ключа в `argv` |
 | Fail2Ban | Отдельная настройка без смены SSH-порта: SSH + Caddy auth jail |
 | Caddy auth jail | Новый `yurich-caddy-auth` jail банит частые `401/407` в Caddy JSON-логах |
+| Browser proxy compatibility | Опциональный `BROWSER_PROXY_COMPAT=1` позволяет использовать существующий Caddy/Naive endpoint в Chrome/Edge без новых DNS-записей и портов |
+| Isolated browser SNI route | HAProxy применяет `BROWSER_PROXY_SNI_DOMAIN` только после проверки локального backend; PROXY v2 по умолчанию выключен |
+| Browser subscription profiles | `BROWSER_SUBSCRIPTION_PROFILES='host\|node;host2\|node2'` создаёт отдельный `browser.txt` для каждой активной подписки; пароли берутся из encrypted credential vault только во время генерации |
+| Xray DNS fallback | Локальный Unbound включается в Xray только когда resolver активен; при недоступности используется системный DNS |
+| Atomic subscription preflight | Ошибочные browser/relay-настройки отклоняются до перезаписи рабочих файлов подписки |
+| Release integrity | Отдельные тесты проверяют версию, совпадение обоих entrypoint, SHA-256 и отсутствие типовых секретов |
+| Hysteria rollout safety | Привилегированный rollout скачивает бинарник только в закрытый временный каталог и проверяет размер, SHA-256 и версию до атомарной замены |
 | UFW 80/tcp | ACME-порт теперь открывается через реальный `ufw limit`, а не обычный `allow` |
 | Health UFW | `health` проверяет SSH, 80/443, Hysteria, Xray и DNS-порты по включённым модулям |
 | SSH panel language | Новая команда `language` и пункт меню `28` для выбора Русский / English |
 | Config persistence | Выбранный язык сохраняется в `/etc/naiveproxy/naive.conf` |
 | Self-update | Проверка `yurich-panel.sh.sha256` перед установкой обновления; строгий режим через `NAIVEPROXY_REQUIRE_SHA=1` |
-| Pin versions | По умолчанию закреплены `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27`, `Hysteria app/v2.10.0`; можно переопределить через `NAIVEPROXY_*` |
+| Pin versions | По умолчанию закреплены `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27`, `Hysteria app/v2.12.1`; можно переопределить через `NAIVEPROXY_*` |
 | Health-check | Команда `health` проверяет Caddy, DNS, Telegram bot service, WARP, Xray и Hysteria одним отчётом |
 | Safe apply | Команда `safe-apply` валидирует включённые конфиги и откатывает Caddyfile при ошибке |
 | Backups | Команда `backup` создаёт encrypted archive `/etc/naiveproxy` и связанных конфигов через OpenSSL |
@@ -597,6 +604,36 @@ naive+https://USER:PASSWORD@<your-domain.example>:443
 }
 ```
 
+## Browser proxy и relay-профили
+
+Стандартный режим остаётся stealth-safe: при неверной proxy-аутентификации Caddy отвечает `404`. Для отдельной browser-ноды можно включить совместимый challenge:
+
+```bash
+BROWSER_PROXY_COMPAT=1
+BROWSER_SUBSCRIPTION_PROFILES='proxy.example.com|edge1;proxy2.example.com|edge2'
+```
+
+`browser.txt` создаётся только для пользователей с активной Naive-учёткой. Это приватный файл внутри токенизированной страницы подписки: его URL нельзя публиковать или отправлять посторонним.
+
+Изолированный SNI route через HAProxy является отдельной расширенной настройкой:
+
+```bash
+BROWSER_PROXY_SNI_DOMAIN=browser.example.com
+BROWSER_PROXY_BACKEND_PORT=7444
+BROWSER_PROXY_SEND_PROXY_V2=0
+```
+
+До запуска `haproxy-apply` на `127.0.0.1:7444` уже должен работать совместимый TLS proxy backend. Скрипт не создаёт его автоматически и отклонит настройку при конфликте SNI или закрытом порте. `BROWSER_PROXY_SEND_PROXY_V2=1` разрешается только если этот backend явно поддерживает PROXY protocol v2.
+
+VLESS relay-профили задаются отдельно и публикуются только выбранным пользователям:
+
+```bash
+VLESS_RELAY_PROFILES='edge1|relay.example.com|8443|reality,xhttp'
+VLESS_RELAY_USERS='test-user'
+```
+
+Формат: `source-node|relay-host|relay-port|transports`. Некорректный домен, порт, transport или отсутствующая node останавливают генерацию до перезаписи рабочих файлов подписки.
+
 ## Обновление
 
 Обновить Caddy:
@@ -680,6 +717,17 @@ sudo bash yurich-panel.sh ssh-rescue
 
 ## Changelog
 
+### v5.8.0
+
+- устранена передача сохранённого приватного REALITY-ключа через аргументы `xray`; публичный ключ выводится локально через OpenSSL и сверяется с сохранённым;
+- Xray больше не зависит безусловно от `127.0.0.1:53`: локальный Unbound используется только после health-check, иначе остаётся системный resolver;
+- отдельный browser SNI backend проходит проверку порта и конфликтов SNI до изменения HAProxy; PROXY protocol v2 выключен по умолчанию;
+- browser/relay-конфигурация валидируется до публикации файлов подписки, а Xray-only пользователи корректно получают подписку без `browser.txt`;
+- Hysteria получает `CAP_NET_BIND_SERVICE` только для привилегированного UDP-порта;
+- rollout Hysteria использует закрытый случайный временный каталог и проверяет размер, SHA-256 и версию бинарника до атомарной установки;
+- удалены привязки определения флагов к частным production-доменам;
+- основной и legacy entrypoint синхронизируются побайтно и защищены release-integrity тестом с проверкой SHA-256 и типовых секретов.
+
 ### v5.7.2
 
 - исправлен запуск Hysteria 2 при `ProtectHome=true`: runtime больше не зависит от сертификата внутри `/root`;
@@ -722,7 +770,7 @@ sudo bash yurich-panel.sh ssh-rescue
 - pre-import export стал обязательным для непустой установки;
 - self-update и обновление Caddy используют same-directory staging, атомарную замену и проверяемый rollback;
 - сборка Naive-compatible Caddy закреплена на `Caddy v2.11.4`, `xcaddy v0.4.6`, полном SHA `forwardproxy` и `Go 1.26.5`;
-- Hysteria 2 закреплена на `v2.10.0`, а Hysteria/Xray проверяют версию скачанного бинарника до атомарной установки;
+- Hysteria 2 закреплена на `v2.12.1`, а Hysteria/Xray проверяют версию скачанного бинарника до атомарной установки;
 - UUID Xray проверяется строгим каноническим шаблоном;
 - исправлен флаг польской локации и удалена неиспользуемая логика старого Mobile Test;
 - rollout hardening получил поэтапную проверку systemd-служб и восстановление бинарника/конфигов при ошибке;
@@ -763,7 +811,7 @@ sudo bash yurich-panel.sh ssh-rescue
 - XHTTP и временный Reality Mobile Alt по умолчанию отключены на обычных серверах;
 - Caddy backend в режиме HAProxy SNI mux привязывается к `127.0.0.1`;
 - добавлен поэтапный security rollout с backup и rollback;
-- Hysteria обновлена до `v2.10.0` с закреплённой SHA256-проверкой бинарного файла;
+- Hysteria обновлена до `v2.12.1` с закреплённой SHA256-проверкой бинарного файла;
 - добавлены auditd, безопасные sysctl и ограниченное systemd hardening для сетевых служб;
 - security-audit проверяет опасные порты только среди TCP LISTEN и отдельно контролирует публичный bind DNS/53;
 - основной и legacy-скрипт повторно синхронизированы и проверены через `bash -n`.

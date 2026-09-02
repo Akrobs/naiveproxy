@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.7.2-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.8.0-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![ShellCheck](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -99,9 +99,9 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ---
 
-## 🎉 What's new in the current 5.7.x branch
+## 🎉 What's new in the current 5.8.x branch
 
-> v5.7.2 keeps the protected credential store and fixes Hysteria TLS under `ProtectHome=true`. Hysteria now reads a validated private copy from `/etc/naiveproxy/hysteria-tls`; a root-only systemd timer synchronizes Caddy renewals, while first-start migration and `hysteria-repair` migrate legacy layouts with rollback even when the update starts on 5.6.x.
+> v5.8.0 keeps existing UUIDs, passwords and subscription URLs while tightening runtime safety. REALITY public keys are derived with OpenSSL without exposing the private key in process arguments. Xray uses local Unbound only when the service and `127.0.0.1:53` are healthy, browser/relay settings are validated before publication, and HAProxy refuses an isolated browser SNI route until its local backend is ready.
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -163,7 +163,12 @@ sudo bash yurich-panel.sh security-audit
 ✅ SSH panel language selector: Russian / English
 ✅ `language` CLI command and menu item 28
 ✅ Main SSH panel labels and statuses translated
-✅ Pinned defaults for `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27` and `Hysteria app/v2.10.0`
+✅ Pinned defaults for `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27` and `Hysteria app/v2.12.1`
+✅ REALITY public-key verification without placing the stored private key in process arguments
+✅ Automatic Xray fallback to the system resolver when local Unbound is unavailable
+✅ Browser SNI backend readiness and SNI-conflict checks before HAProxy configuration changes
+✅ Browser/relay subscription validation before working files are published
+✅ Privileged Hysteria rollout downloads into a private temporary directory and validates size, SHA256 and version before atomic replacement
 ✅ One-shot `health` report for Caddy, DNS (Unbound), Telegram bot, WARP, Xray and Hysteria
 ✅ `safe-apply` validates enabled configs and rolls Caddyfile back on failure
 ✅ Encrypted `/etc/naiveproxy` backup via OpenSSL
@@ -987,6 +992,36 @@ For servers
 
 > ⚠️ **v2rayNG does not support Yurich Proxy/native naive transport.** Use NekoBox or Hiddify.
 
+### Browser proxy and relay profiles
+
+The default remains stealth-safe: Caddy returns `404` after failed proxy authentication. A dedicated browser node can opt into the standards-compliant `407` challenge:
+
+```bash
+BROWSER_PROXY_COMPAT=1
+BROWSER_SUBSCRIPTION_PROFILES='proxy.example.com|edge1;proxy2.example.com|edge2'
+```
+
+`browser.txt` is generated only for users with an active Naive credential. It is a bearer secret inside the tokenized subscription directory and must never be published.
+
+An isolated browser SNI route through HAProxy is an advanced, separate option:
+
+```bash
+BROWSER_PROXY_SNI_DOMAIN=browser.example.com
+BROWSER_PROXY_BACKEND_PORT=7444
+BROWSER_PROXY_SEND_PROXY_V2=0
+```
+
+A compatible TLS proxy backend must already listen on `127.0.0.1:7444` before `haproxy-apply`. The manager does not provision that backend and rejects closed ports or SNI conflicts. Set `BROWSER_PROXY_SEND_PROXY_V2=1` only when the backend explicitly accepts PROXY protocol v2.
+
+Optional VLESS relay profiles use this format:
+
+```bash
+VLESS_RELAY_PROFILES='edge1|relay.example.com|8443|reality,xhttp'
+VLESS_RELAY_USERS='test-user'
+```
+
+The format is `source-node|relay-host|relay-port|transports`. Invalid domains, ports, transports, or missing source nodes stop generation before working subscription files are overwritten.
+
 ---
 
 ## 📁 File Structure
@@ -1443,7 +1478,22 @@ for donors
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.7.2</b> — Hysteria TLS sandbox repair ← CURRENT</summary>
+<summary><b>v5.8.0</b> — runtime and release safety ← CURRENT</summary>
+
+**Security and reliability:**
+- Derives and verifies the REALITY public key through OpenSSL without placing the stored private key in Xray command arguments
+- Uses local Unbound from Xray only after a service and endpoint health check, otherwise keeps the system resolver
+- Validates browser SNI conflicts and local backend readiness before changing HAProxy
+- Validates browser/relay settings before publishing subscription files; Xray-only users safely omit `browser.txt`
+- Grants Hysteria `CAP_NET_BIND_SERVICE` only when a privileged UDP port requires it
+- Downloads Hysteria into a private random temporary directory and validates size, SHA256 and version before atomic rollout
+- Removes production-domain heuristics from public location classification
+- Adds release-integrity checks for version, identical entrypoints, SHA256 sidecars and common secret patterns
+
+</details>
+
+<details>
+<summary><b>v5.7.2</b> — Hysteria TLS sandbox repair</summary>
 
 **Reliability and security:**
 - Stops referencing Caddy certificates directly from `/root` when `ProtectHome=true`
@@ -1557,7 +1607,7 @@ for donors
 - Disabled XHTTP and temporary Reality Mobile Alt by default on standard nodes
 - Bound the Caddy backend to `127.0.0.1` in HAProxy SNI mux mode
 - Added staged fleet hardening with verified backups and rollback
-- Updated Hysteria to checksum-pinned `v2.10.0`
+- Updated Hysteria to checksum-pinned `v2.12.1`
 - Added auditd, hardened network sysctl values and conservative systemd restrictions
 - Fixed security port checks and added public DNS/53 bind detection
 - Re-synchronized and syntax-checked both script entry points

@@ -24,6 +24,7 @@ Never attach or paste:
 - Cloudflare/WARP credentials
 - SSH private keys
 - real customer subscription URLs
+- one-off fleet deployment scripts containing production hosts or tokens
 
 ## If a Secret Leaks
 
@@ -43,6 +44,9 @@ Rotate the affected credential immediately:
 - Reversible client secrets are RSA-OAEP-SHA256 encrypted in `/etc/naiveproxy/credentials/users.secrets`. The RSA private key is `root:root` mode `600`.
 - The vault protects against accidental plaintext disclosure. It does not protect against a root compromise because the ciphertext and decryption key are on the same host.
 - Generated subscription documents contain working client credentials by design. Treat every subscription URL and generated profile as a bearer secret, keep `Cache-Control: no-store`, and rotate both the password and subscription token after a leak.
+- REALITY public-key verification derives the public key through OpenSSL and never passes the stored private key in process arguments. Do not replace it with `xray x25519 -i "$PRIVATE_KEY"`, because local processes may observe command lines through `/proc`.
+- `BROWSER_PROXY_COMPAT=1` deliberately replaces the stealth `404` for unauthorized CONNECT requests with a standards-compliant `407`. Enable it only for browser-extension nodes, keep Caddy auth rate limiting/Fail2Ban active, and never publish a `browser.txt` URL.
+- An isolated `BROWSER_PROXY_SNI_DOMAIN` requires an already-running loopback backend. Keep `BROWSER_PROXY_SEND_PROXY_V2=0` unless that backend explicitly accepts PROXY protocol v2.
 - State exports include the vault private key and must be stored like passwords. Prefer the encrypted `backup` command for off-host copies.
 
 Check and migrate an existing installation:
@@ -76,6 +80,8 @@ Production servers should use:
 - Build Caddy with the pinned release and full `forwardproxy` commit; verify `http.handlers.forward_proxy` before replacement.
 - Keep `/etc/naiveproxy/*.conf`, bot order files and PingTunnel environment files owned by `root` with mode `600`.
 - After an update or import, run `bash -n`, `safe-apply`, `health`, `protocol-validate` and a three-round `protocol-benchmark` before removing rollback files.
+- Download privileged update artifacts into a root-only random temporary directory; verify expected size, checksum and reported version before atomic replacement.
+- Before publishing a release, run `ops/test-release-integrity.ps1` and `ops/test-reality-key-safety.sh`; publish from a clean Git worktree, never from a production operations directory.
 - Use `ssh-rescue` only from a provider console. It requires a working systemd auto-disable timer and defaults to a 30-minute emergency window.
 
 ## Remaining Trust Boundaries

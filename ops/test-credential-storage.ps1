@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$ScriptPath = ""
+    [string]$ScriptPath = "",
+    [string]$ExpectedVersion = "5.8.0"
 )
 
 Set-StrictMode -Version Latest
@@ -27,7 +28,7 @@ function Assert-NotContains {
     }
 }
 
-Assert-Contains 'VERSION="5\.7\.2"' "Expected Yurich Panel v5.7.2"
+Assert-Contains ('VERSION="' + [regex]::Escape($ExpectedVersion) + '"') "Expected Yurich Panel v$ExpectedVersion"
 Assert-Contains 'credential_set_user\(\)' "Protected credential writer is missing"
 Assert-Contains 'hash_proxy_password' "bcrypt generation is missing"
 Assert-Contains 'rsa_padding_mode:oaep' "RSA-OAEP encryption is missing"
