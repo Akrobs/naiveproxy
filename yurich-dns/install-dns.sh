@@ -400,6 +400,10 @@ EOF
     do-udp: yes
     do-tcp: yes
 
+    # Private recursive resolver: keep DNSSEC validation and disable the ECS
+    # subnet cache, which does not interact with prefetch/serve-expired.
+    module-config: "validator iterator"
+
     access-control: 0.0.0.0/0 refuse
     access-control: 127.0.0.0/8 allow
 EOF
@@ -427,6 +431,10 @@ EOF
 
     prefetch: yes
     prefetch-key: yes
+    serve-expired: yes
+    serve-expired-ttl: 86400
+    serve-expired-reply-ttl: 30
+    serve-expired-client-timeout: 1800
     cache-min-ttl: 300
     cache-max-ttl: 86400
     rrset-cache-size: 128m

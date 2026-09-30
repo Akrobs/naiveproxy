@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ScriptPath = "",
-    [string]$ExpectedVersion = "5.8.0"
+    [string]$ExpectedVersion = "5.8.3"
 )
 
 Set-StrictMode -Version Latest

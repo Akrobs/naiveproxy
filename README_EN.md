@@ -20,14 +20,14 @@
 
 ### 🚀 Professional secure proxy server manager
 
-**One script. Bare VPS → secure proxy, private DNS and diagnostics in 10 minutes.**
+**One script for setup, user management, subscriptions, diagnostics and maintenance.**
 
 *Caddy 2 · Yurich Proxy · Telegram Bot · DNS (Unbound) · Diagnostics · SSH Hardening*
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.8.0-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
-[![ShellCheck](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Version](https://img.shields.io/badge/version-5.8.3-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Bash syntax](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -39,13 +39,7 @@
 
 ---
 
-### 💛 Support development
-
-[![Donate](https://img.shields.io/badge/💛_Support_project-Donation page-FF5E3A?style=for-the-badge)](https://example.com/donate)
-[![Telegram](https://img.shields.io/badge/📱_Telegram_channel-@your__channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/your_channel)
-[![Website](https://img.shields.io/badge/🌐_Website-example.com-D4A017?style=for-the-badge&logo=googlechrome&logoColor=white)](https://example.com)
-
-**🔔 Updates released once a month**
+**Project:** [Website](https://ivan-it.net/) · [Telegram](https://t.me/ivan_it_net) · [VK](https://vk.ru/ivan_yurievich_it) · [Dzen](https://dzen.ru/ivanyurievich)
 
 </div>
 
@@ -69,15 +63,15 @@
 
 ---
 
-## 🌟 Why this is the best choice?
+## 🌟 What it provides
 
 <table>
 <tr>
 <td align="center" width="33%">
 
 ### 🚀 Speed
-**10 minutes**
-from bare VPS to working proxy with auto TLS, bans and private DNS
+**Automated setup**
+from bare VPS to a managed proxy with TLS, firewall and optional private DNS
 
 </td>
 <td align="center" width="33%">
@@ -101,7 +95,7 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ## 🎉 What's new in the current 5.8.x branch
 
-> v5.8.0 keeps existing UUIDs, passwords and subscription URLs while tightening runtime safety. REALITY public keys are derived with OpenSSL without exposing the private key in process arguments. Xray uses local Unbound only when the service and `127.0.0.1:53` are healthy, browser/relay settings are validated before publication, and HAProxy refuses an isolated browser SNI route until its local backend is ready.
+> v5.8.3 speeds up fleet subscription rebuilds without changing existing UUIDs, passwords or subscription URLs. The master directly exports profiles from each updated node, pages are rendered by a bounded worker pool, and unchanged QR images are safely reused by SHA-256. Older nodes retain a compatible fallback, while every page is still validated and published atomically.
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -163,7 +157,7 @@ sudo bash yurich-panel.sh security-audit
 ✅ SSH panel language selector: Russian / English
 ✅ `language` CLI command and menu item 28
 ✅ Main SSH panel labels and statuses translated
-✅ Pinned defaults for `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27` and `Hysteria app/v2.12.1`
+✅ Pinned defaults for `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27` and `Hysteria app/v2.12.2`
 ✅ REALITY public-key verification without placing the stored private key in process arguments
 ✅ Automatic Xray fallback to the system resolver when local Unbound is unavailable
 ✅ Browser SNI backend readiness and SNI-conflict checks before HAProxy configuration changes
@@ -259,7 +253,7 @@ sudo bash yurich-panel.sh security-audit
 🛡️ **Fail2Ban** 3 levels (iptables-multiport)
 ♻️ **Auto-recovery** — `Restart=on-failure`
 🎨 **ASCII banner** + branding
-💛 **Donate** via Donation page
+📰 **Project updates** on Dzen
 🌐 **Private DNS** — no Google/Cloudflare upstream dependency
 📦 **Auto-install** dependencies
 
@@ -299,10 +293,13 @@ sudo bash yurich-panel.sh security-audit
 
 ## ⚡ Quick Start
 
-### 🎬 One command — all set:
+### Download, verify and run:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh)
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256
+sha256sum -c yurich-panel.sh.sha256
+sudo bash yurich-panel.sh
 ```
 
 ### 📊 Installation process:
@@ -535,6 +532,9 @@ sudo bash yurich-panel.sh warp-disable   # Disconnect WARP
 # === Diagnostics ===
 sudo bash yurich-panel.sh diagnose       # 7-block diagnostics
 sudo bash yurich-panel.sh diagnose --fix # Auto-fix common issues
+sudo bash yurich-panel.sh protocol-validate
+sudo bash yurich-panel.sh protocol-benchmark USER 3
+sudo bash yurich-panel.sh protocol-stability-report 24
 
 # === SSH ===
 sudo bash yurich-panel.sh ssh-hardening  # SSH Hardening
@@ -672,6 +672,8 @@ It is designed to be safe by default:
 - never binds to `0.0.0.0`
 - allows DNS only from localhost and configured VPN CIDRs
 - opens UFW port `53` only for those CIDRs
+- validates DNSSEC and can briefly serve a previously validated record during an authoritative DNS outage
+- disables the ECS subnet cache so client subnet data is not forwarded and cache prefetch remains effective
 - can create a local `10.0.0.1/32` gateway on `lo` when the IP does not exist yet
 - does not log every DNS request by default
 - does not use adblock blocklists in the main manager anymore
@@ -1400,85 +1402,72 @@ rm -rf /etc/caddy /etc/naiveproxy /etc/unbound
 <tr><td>Last domain protection</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Auto-restart on failure</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Correct Caddyfile</td><td align="center">✅</td><td align="center">—</td><td align="center">—</td></tr>
-<tr><td>ShellCheck passing</td><td align="center">✅</td><td align="center">—</td><td align="center">—</td></tr>
+<tr><td>Bash syntax test</td><td align="center">✅</td><td align="center">—</td><td align="center">—</td></tr>
 </table>
 
 ---
 
 ## 💛 Support the Project
 
-<div align="center">
+You can follow the project, share feedback and report reproducible bugs:
 
-### If this script helped you — support development! 🙏
+| Channel | Link |
+|---|---|
+| Website | [ivan-it.net](https://ivan-it.net/) |
+| Telegram | [ivan_it_net](https://t.me/ivan_it_net) |
+| VK | [ivan_yurievich_it](https://vk.ru/ivan_yurievich_it) |
+| Dzen | [ivanyurievich](https://dzen.ru/ivanyurievich) |
+| Bug reports | [GitHub Issues](https://github.com/ivan-yurich/naiveproxy/issues) |
 
-[![Donate](https://img.shields.io/badge/💛_Donation page-Any_amount-FF5E3A?style=for-the-badge&logoColor=white)](https://example.com/donate)
-
-**👉 https://example.com/donate**
-
-</div>
-
-### 🎯 What your donation will fund:
-
-<table>
-<tr>
-<td align="center" width="20%">
-
-🚀
-**More time**
-on development
-
-</td>
-<td align="center" width="20%">
-
-🐛
-**Quick fixes**
-for bugs
-
-</td>
-<td align="center" width="20%">
-
-✨
-**New features**
-every month
-
-</td>
-<td align="center" width="20%">
-
-📚
-**Documentation**
-and support
-
-</td>
-<td align="center" width="20%">
-
-🆕
-**Exclusive**
-for donors
-
-</td>
-</tr>
-</table>
-
-### 🤝 All ways to support:
-
-| Way | Link | What it gives |
-|-----|------|---------------|
-| 💛 **Donate** | [Donation page](https://example.com/donate) | Financial support |
-| ⭐ **GitHub Star** | [Give a star](https://github.com/ivan-yurich/naiveproxy) | Project visibility |
-| 📱 **Telegram channel** | [@your_channel](https://t.me/your_channel) | Subscribe for updates |
-| 🌐 **Website** | [example.com](https://example.com) | Visit |
-| 📢 **Share** | — | Tell your friends |
-| 🐛 **Report bug** | [Issues](https://github.com/ivan-yurich/naiveproxy/issues) | Help improve |
-| 💡 **Suggest idea** | [Telegram](https://t.me/your_channel) | Grow the project |
-
-**Thanks for your support! Every donation motivates me to make the project even better 💛**
+For security reports, follow [SECURITY.md](SECURITY.md). Never post tokens, private keys or client subscription URLs in public issues.
 
 ---
 
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.8.0</b> — runtime and release safety ← CURRENT</summary>
+<summary><b>v5.8.3</b> — faster subscription rebuilds ← CURRENT</summary>
+
+**Performance with the existing safety guarantees:**
+- Clamps calendar-month subscription expiry to the last valid day and preserves published pages when HTTPS or SSH node fetching fails
+- Restores case-insensitive SNI collision checks and validates subscription settings before rotating user credentials
+- Adds the internal `node-subscription-export` command so the master fetches current Hysteria2 and VLESS Reality URIs without rebuilding HTML pages on every edge node
+- Keeps an automatic compatibility fallback for nodes running an older script
+- Renders user pages with a bounded worker pool: automatic 1–4 workers or an explicit 1–8 through `SUBSCRIPTION_REBUILD_JOBS`
+- Reuses unchanged QR images only when their SHA-256 sidecar matches; plaintext subscription URLs are never stored in the cache metadata
+- Preserves `flock`, private staging, output validation, atomic publish and the previous live page on failure
+- Adds a dedicated sandbox test for direct node export, worker failure isolation and QR reuse
+
+</details>
+
+<details>
+<summary><b>v5.8.2</b> — stability pack</summary>
+
+**Reliability, observability and hardening:**
+- Uses `nodes.conf` as the source of truth for known nodes in every subscription format, including `browser.txt`
+- Locks fleet rebuilds, prefetches each enabled node once and reports individual users that could not be rebuilt
+- Builds subscriptions in a private staging directory, validates all outputs and atomically publishes them with rollback
+- Requires three matching benchmark, protocol or DNS failures before alerting and emits a separate recovery event
+- Adds `protocol-stability-report 24` with jitter, packet loss, p95, load and memory summaries
+- Enables Unbound `serve-expired` and verifies valid/bogus DNSSEC behavior in the DNS monitor
+- Extends the security audit for AppArmor, auditd, unattended upgrades, systemd hardening, recent encrypted backups and stale staging directories
+- Adds conservative Caddy systemd sandboxing without changing public ports, credentials or subscription URLs
+
+</details>
+
+<details>
+<summary><b>v5.8.1</b> — verified runtime refresh</summary>
+
+**Updates and release safety:**
+- Updates Hysteria 2 to checksum-pinned `v2.12.2` across install, rollout and rollback paths
+- Adds `users-list-machine` for a secret-free, read-only Yurich Control Center integration
+- Re-synchronizes both entrypoints byte-for-byte and refreshes their SHA256 sidecars
+- Updates release-integrity and credential-storage validation for the `5.8.1` branch
+
+</details>
+
+<details>
+<summary><b>v5.8.0</b> — runtime and release safety</summary>
 
 **Security and reliability:**
 - Derives and verifies the REALITY public key through OpenSSL without placing the stored private key in Xray command arguments
@@ -2190,19 +2179,18 @@ Full license text: [LICENSE](LICENSE)
 
 <div align="center">
 
-### 💛 Liked it? Support the project!
+### Follow the project
 
-[![Donate](https://img.shields.io/badge/💛_Support-Donation page-FF5E3A?style=for-the-badge)](https://example.com/donate)
 [![Star](https://img.shields.io/github/stars/ivan-yurich/naiveproxy?style=for-the-badge&color=D4A017)](https://github.com/ivan-yurich/naiveproxy/stargazers)
 [![Fork](https://img.shields.io/github/forks/ivan-yurich/naiveproxy?style=for-the-badge&color=58A6FF)](https://github.com/ivan-yurich/naiveproxy/network)
 
 ---
 
-📱 [**Telegram**](https://t.me/your_channel) · 🌐 [**Website**](https://example.com) · 💻 [**GitHub**](https://github.com/ivan-yurich/naiveproxy) · 💛 [**Donate**](https://example.com/donate)
+📱 [**Telegram**](https://t.me/ivan_it_net) · 🌐 [**Website**](https://ivan-it.net/) · [**VK**](https://vk.ru/ivan_yurievich_it) · [**Dzen**](https://dzen.ru/ivanyurievich) · 💻 [**GitHub**](https://github.com/ivan-yurich/naiveproxy)
 
 **Yurich Panel · by Yurich Panel contributors**
 
 *Professional secure proxy server manager*
-*Updates released once a month · Made with 💛 in Russia*
+*Documentation and updates are published in this repository.*
 
 </div>

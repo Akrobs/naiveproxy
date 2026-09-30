@@ -81,7 +81,13 @@ Production servers should use:
 - Keep `/etc/naiveproxy/*.conf`, bot order files and PingTunnel environment files owned by `root` with mode `600`.
 - After an update or import, run `bash -n`, `safe-apply`, `health`, `protocol-validate` and a three-round `protocol-benchmark` before removing rollback files.
 - Download privileged update artifacts into a root-only random temporary directory; verify expected size, checksum and reported version before atomic replacement.
-- Before publishing a release, run `ops/test-release-integrity.ps1` and `ops/test-reality-key-safety.sh`; publish from a clean Git worktree, never from a production operations directory.
+- Generate subscription pages in private staging directories and publish only after URI/file validation. A failed rebuild must preserve the last known-good page.
+- Treat `node-subscription-export` as a private machine interface: its output contains active client URIs and must not be written to public logs or support messages.
+- Treat `nodes.conf` as the source of truth for known fleet nodes. Disable a node there before rebuilding every subscription format.
+- Keep benchmark, protocol and DNS alert repetition at three or more in production to avoid alert storms from one transient probe failure.
+- Review `protocol-stability-report 24` before and after a fleet change; a single successful probe is not a stability test.
+- Keep Unbound DNSSEC validation enabled when using `serve-expired`; stale cache is continuity protection, not a reason to bypass bogus DNSSEC responses.
+- Before publishing a release, run `ops/test-release-integrity.ps1`, `ops/test-reality-key-safety.sh` and `ops/test-subscription-rebuild.sh`; publish from a clean Git worktree, never from a production operations directory.
 - Use `ssh-rescue` only from a provider console. It requires a working systemd auto-disable timer and defaults to a 30-minute emergency window.
 
 ## Remaining Trust Boundaries

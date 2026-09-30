@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = "",
-    [string]$ExpectedVersion = "5.8.0"
+    [string]$ExpectedVersion = "5.8.3"
 )
 
 Set-StrictMode -Version Latest
@@ -67,7 +67,15 @@ if ($source -notmatch 'local_tcp_endpoint_ready "\$browser_backend_port"') {
 if ($source -notmatch 'domain_in_space_list_ci "\$caddy_sni_domains" "\$browser_sni_domain"') {
     throw "Case-insensitive Browser SNI collision guard is missing"
 }
-if ($source -notmatch 'Ротация отменена: некорректный BROWSER_SUBSCRIPTION_PROFILES') {
+$rotationStart = $source.IndexOf('rotate_user_credentials()')
+if ($rotationStart -lt 0) {
+    throw "Credential rotation function is missing"
+}
+$rotationBackup = $source.IndexOf('backup_dir=$(mktemp -d /tmp/yurich-rotate-user.', $rotationStart)
+$browserPreflight = $source.IndexOf('browser_subscription_links_for_user "$target" "$new_pass"', $rotationStart)
+$relayPreflight = $source.IndexOf('subscription_vless_relay_links_for_user "$target" ""', $rotationStart)
+if ($rotationBackup -lt 0 -or $browserPreflight -lt 0 -or $relayPreflight -lt 0 -or
+    $browserPreflight -gt $rotationBackup -or $relayPreflight -gt $rotationBackup) {
     throw "Credential rotation subscription preflight is missing"
 }
 if ($source -match '(?i)(go-it\.tech|net-it\.pro|plus-dns\.tech|dns-ai\.online|n8n-cloud\.online)') {
@@ -103,13 +111,14 @@ $publicTextNames = [Collections.Generic.HashSet[string]]::new(
 )
 @(".gitattributes", ".gitignore") | ForEach-Object { [void]$publicTextNames.Add($_) }
 
+$repositoryPrefix = $RepositoryRoot.TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
 $publicTextFiles = @(
     Get-ChildItem -LiteralPath $RepositoryRoot -Recurse -File -Force |
         Where-Object {
             $_.FullName -notlike "*$([IO.Path]::DirectorySeparatorChar).git$([IO.Path]::DirectorySeparatorChar)*" -and
             ($publicTextExtensions.Contains($_.Extension) -or $publicTextNames.Contains($_.Name))
         } |
-        ForEach-Object { [IO.Path]::GetRelativePath($RepositoryRoot, $_.FullName) } |
+        ForEach-Object { $_.FullName.Substring($repositoryPrefix.Length) } |
         Sort-Object -Unique
 )
 if ($publicTextFiles.Count -eq 0) {

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.8.0
+#   Yurich Panel v5.8.3
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="5.8.0"
+VERSION="5.8.3"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -45,7 +45,7 @@ CADDY_VERSION_PIN="${NAIVEPROXY_CADDY_VERSION:-v2.11.4}"
 XCADDY_VERSION_PIN="${NAIVEPROXY_XCADDY_VERSION:-v0.4.6}"
 FORWARDPROXY_REF_PIN="${NAIVEPROXY_FORWARDPROXY_REF:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
 XRAY_VERSION_PIN="${NAIVEPROXY_XRAY_VERSION:-v26.3.27}"
-HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.12.1}"
+HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.12.3}"
 PINGTUNNEL_DEFAULT_VERSION="master-2c83808a81b56784d639c952b70baada6601e2d7"
 PINGTUNNEL_VERSION_PIN="${NAIVEPROXY_PINGTUNNEL_VERSION:-$PINGTUNNEL_DEFAULT_VERSION}"
 PINGTUNNEL_SHA256_AMD64="5d5847a17099b9359c55a959f85a1994232cf8a089642bd632bfa64e5bdfe8af"
@@ -1121,6 +1121,8 @@ save_config() {
         printf 'SUBSCRIPTION_XHTTP_NODE_NAMES=%q\n' "${SUBSCRIPTION_XHTTP_NODE_NAMES:-all}"
         printf '# 1 = nodes из SUBSCRIPTION_XHTTP_NODE_NAMES публикуют только XHTTP, без HTTPS/Turbo/Reality\n'
         printf 'SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE=%q\n' "${SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE:-0}"
+        printf '# Nodes, используемые только как backend для relay: синхронизируются, но прямые профили не публикуются\n'
+        printf 'SUBSCRIPTION_RELAY_ONLY_NODE_NAMES=%q\n' "${SUBSCRIPTION_RELAY_ONLY_NODE_NAMES:-}"
         printf '# 1 = публиковать XHTTP в основных клиентских подписках, 0 = держать XHTTP отдельно/для тестов\n'
         printf 'SUBSCRIPTION_XHTTP_MAIN_ENABLED=%q\n' "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}"
         printf '# Canary XHTTP: дополнительные nodes публикуются только указанным пользователям\n'
@@ -1140,6 +1142,17 @@ save_config() {
         printf 'BROWSER_PROXY_SEND_PROXY_V2=%q\n' "${BROWSER_PROXY_SEND_PROXY_V2:-0}"
         printf '# Browser subscriptions: host|node-name entries separated by semicolons; empty = disabled\n'
         printf 'BROWSER_SUBSCRIPTION_PROFILES=%q\n' "${BROWSER_SUBSCRIPTION_PROFILES:-}"
+        printf '# Extra Naive HTTPS profiles: host|node-name entries separated by semicolons; empty = disabled\n'
+        printf 'NAIVE_EXTRA_PROFILES=%q\n' "${NAIVE_EXTRA_PROFILES:-}"
+        printf '# Users allowed to receive extra Naive profiles: *, all or a space/comma-separated list\n'
+        printf 'NAIVE_EXTRA_USERS=%q\n' "${NAIVE_EXTRA_USERS:-}"
+        printf '# HTTPS node sources: node-name|domain|ipv4 entries separated by semicolons; empty = disabled\n'
+        printf 'SUBSCRIPTION_HTTP_NODE_SOURCES=%q\n' "${SUBSCRIPTION_HTTP_NODE_SOURCES:-}"
+        printf '# Subscription rebuild: prefetch remote node profiles once and publish each page atomically\n'
+        printf 'SUBSCRIPTION_NODE_PREFETCH_ENABLED=%q\n' "${SUBSCRIPTION_NODE_PREFETCH_ENABLED:-1}"
+        printf 'SUBSCRIPTION_ATOMIC_PUBLISH=%q\n' "${SUBSCRIPTION_ATOMIC_PUBLISH:-1}"
+        printf '# Subscription rebuild workers: 0 = auto (1-4), explicit safe range = 1-8\n'
+        printf 'SUBSCRIPTION_REBUILD_JOBS=%q\n' "${SUBSCRIPTION_REBUILD_JOBS:-0}"
         printf '# VLESS relay profiles: source-node|relay-host|relay-port|reality,xhttp entries separated by semicolons\n'
         printf 'VLESS_RELAY_PROFILES=%q\n' "${VLESS_RELAY_PROFILES:-}"
         printf '# Users allowed to receive relay profiles: *, all or a space/comma-separated list\n'
@@ -1152,11 +1165,13 @@ save_config() {
         printf 'PROTOCOL_BENCHMARK_MONITOR_MIN_ROUNDS=%q\n' "${PROTOCOL_BENCHMARK_MONITOR_MIN_ROUNDS:-3}"
         printf 'PROTOCOL_BENCHMARK_SLOW_MIN_HITS=%q\n' "${PROTOCOL_BENCHMARK_SLOW_MIN_HITS:-2}"
         printf 'PROTOCOL_BENCHMARK_WARN_MIN_OK_HITS=%q\n' "${PROTOCOL_BENCHMARK_WARN_MIN_OK_HITS:-2}"
-        printf 'PROTOCOL_BENCHMARK_ALERT_REPEAT=%q\n' "${PROTOCOL_BENCHMARK_ALERT_REPEAT:-2}"
+        printf 'PROTOCOL_BENCHMARK_ALERT_REPEAT=%q\n' "${PROTOCOL_BENCHMARK_ALERT_REPEAT:-3}"
+        printf 'PROTOCOL_BENCHMARK_HARD_ALERT_REPEAT=%q\n' "${PROTOCOL_BENCHMARK_HARD_ALERT_REPEAT:-3}"
         printf 'PROTOCOL_BENCHMARK_ALERT_COOLDOWN_MINUTES=%q\n' "${PROTOCOL_BENCHMARK_ALERT_COOLDOWN_MINUTES:-60}"
         printf 'PROTOCOL_BENCHMARK_ALERT_STATE=%q\n' "${PROTOCOL_BENCHMARK_ALERT_STATE:-$CONFIG_DIR/protocol-benchmark-alert.state}"
         printf 'PROTOCOL_BENCHMARK_RECOVERY_ALERT=%q\n' "${PROTOCOL_BENCHMARK_RECOVERY_ALERT:-1}"
         printf 'PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES=%q\n' "${PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:-60}"
+        printf 'PROTOCOL_MONITOR_ALERT_REPEAT=%q\n' "${PROTOCOL_MONITOR_ALERT_REPEAT:-3}"
         printf 'PROTOCOL_MONITOR_ALERT_STATE=%q\n' "${PROTOCOL_MONITOR_ALERT_STATE:-$CONFIG_DIR/protocol-health-alert.state}"
         printf 'PROTOCOL_MONITOR_RECOVERY_ALERT=%q\n' "${PROTOCOL_MONITOR_RECOVERY_ALERT:-1}"
         printf 'TG_TOKEN=%q\n' "${TG_TOKEN:-}"
@@ -1198,6 +1213,10 @@ save_config() {
         printf 'UNBOUND_FILTER_ENABLED=%q\n' "${UNBOUND_FILTER_ENABLED:-1}"
         printf 'UNBOUND_FILTER_URLS=%q\n' "${UNBOUND_FILTER_URLS:-$DNS_FILTER_URLS_DEFAULT}"
         printf 'UNBOUND_FILTER_MAX_DOMAINS=%q\n' "${UNBOUND_FILTER_MAX_DOMAINS:-$DNS_FILTER_MAX_DOMAINS_DEFAULT}"
+        printf 'DNS_MONITOR_ALERT_REPEAT=%q\n' "${DNS_MONITOR_ALERT_REPEAT:-3}"
+        printf 'DNS_MONITOR_ALERT_COOLDOWN_MINUTES=%q\n' "${DNS_MONITOR_ALERT_COOLDOWN_MINUTES:-180}"
+        printf 'DNS_MONITOR_ALERT_STATE=%q\n' "${DNS_MONITOR_ALERT_STATE:-$CONFIG_DIR/dns-monitor-alert.state}"
+        printf 'DNS_MONITOR_RECOVERY_ALERT=%q\n' "${DNS_MONITOR_RECOVERY_ALERT:-1}"
         printf 'WARP_PROXY_PORT=%q\n' "${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
         printf 'WARP_PROXY_ENABLED=%q\n' "${WARP_PROXY_ENABLED:-0}"
         printf 'WARP_MODE=%q\n' "${WARP_MODE:-off}"
@@ -1247,7 +1266,7 @@ save_config() {
         printf 'XCADDY_VERSION_PIN=%q\n' "${XCADDY_VERSION_PIN:-v0.4.6}"
         printf 'FORWARDPROXY_REF_PIN=%q\n' "${FORWARDPROXY_REF_PIN:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
         printf 'XRAY_VERSION_PIN=%q\n' "${XRAY_VERSION_PIN:-v26.3.27}"
-        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.12.1}"
+        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.12.3}"
         printf 'BRIDGE_ENABLED=%q\n' "${BRIDGE_ENABLED:-0}"
         printf 'BRIDGE_NAME=%q\n' "${BRIDGE_NAME:-}"
         printf 'BRIDGE_ENTRY_PROTOCOL=%q\n' "${BRIDGE_ENTRY_PROTOCOL:-naive}"
@@ -1784,8 +1803,22 @@ user_meta_file() {
     printf '%s/%s.env\n' "$USER_META_DIR" "$user"
 }
 
+add_calendar_months_utc() {
+    local base="$1" months="$2" target_month last_day day
+    is_valid_user_months "$months" || return 1
+    [[ "$base" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || return 1
+    [[ "$(date -u -d "$base" '+%Y-%m-%d' 2>/dev/null)" == "$base" ]] || return 1
+    target_month=$(date -u -d "${base:0:7}-01 +${months} months" '+%Y-%m') || return 1
+    last_day=$(date -u -d "${target_month}-01 +1 month -1 day" '+%d') || return 1
+    day=$((10#${base:8:2}))
+    if (( day > 10#$last_day )); then
+        day=$((10#$last_day))
+    fi
+    printf '%s-%02d\n' "$target_month" "$day"
+}
+
 set_user_expiry_months() {
-    local user="$1" months="$2" expires_at created_at meta_file
+    local user="$1" months="$2" expires_at created_at meta_file today
     if ! is_valid_proxy_user "$user"; then
         err "Некорректный пользователь для срока: $user"
         return 1
@@ -1797,7 +1830,8 @@ set_user_expiry_months() {
     mkdir -p "$USER_META_DIR"
     chmod 700 "$USER_META_DIR"
     created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-    expires_at=$(date -u -d "+${months} months" '+%Y-%m-%d' 2>/dev/null || true)
+    today=$(date -u '+%Y-%m-%d')
+    expires_at=$(add_calendar_months_utc "$today" "$months" 2>/dev/null || true)
     if [[ ! "$expires_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
         err "Не удалось рассчитать срок пользователя"
         return 1
@@ -1829,7 +1863,7 @@ set_user_expiry_extend_months() {
     else
         base="$today"
     fi
-    expires_at=$(date -u -d "${base} +${months} months" '+%Y-%m-%d' 2>/dev/null || true)
+    expires_at=$(add_calendar_months_utc "$base" "$months" 2>/dev/null || true)
     if [[ ! "$expires_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
         err "Не удалось рассчитать срок продления"
         return 1
@@ -1860,19 +1894,22 @@ set_user_expiry_extend_term() {
     case "$term" in
         1d)
             expires_at=$(date -u -d "${base} +1 day" '+%Y-%m-%d' 2>/dev/null || true)
-            user_meta_set "$user" TERM_DAYS "1" >/dev/null
-            user_meta_set "$user" TERM_MONTHS "" >/dev/null
             ;;
         *m)
             months="${term%m}"
-            expires_at=$(date -u -d "${base} +${months} months" '+%Y-%m-%d' 2>/dev/null || true)
-            user_meta_set "$user" TERM_MONTHS "$months" >/dev/null
-            user_meta_set "$user" TERM_DAYS "" >/dev/null
+            expires_at=$(add_calendar_months_utc "$base" "$months" 2>/dev/null || true)
             ;;
     esac
     if [[ ! "$expires_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
         err "Не удалось рассчитать срок продления"
         return 1
+    fi
+    if [[ "$term" == "1d" ]]; then
+        user_meta_set "$user" TERM_DAYS "1" >/dev/null
+        user_meta_set "$user" TERM_MONTHS "" >/dev/null
+    else
+        user_meta_set "$user" TERM_MONTHS "$months" >/dev/null
+        user_meta_set "$user" TERM_DAYS "" >/dev/null
     fi
     user_meta_set "$user" TERM "$term" >/dev/null
     user_meta_set "$user" EXPIRES_AT "$expires_at" >/dev/null
@@ -3548,7 +3585,16 @@ LimitNOFILE=1048576
 LimitNPROC=512
 PrivateTmp=true
 ProtectSystem=full
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
 
 # Авто-перезапуск при сбое
 Restart=on-failure
@@ -5150,7 +5196,7 @@ cmd_haproxy_menu() {
 
 cmd_security_audit() {
     load_config 2>/dev/null || true
-    local failed=0 warn_count=0 value owner perms tcp_ports udp_service_ports
+    local failed=0 warn_count=0 value owner perms tcp_ports udp_service_ports service service_hardening_failed
     hr
     echo -e "${BOLD}  Security audit${RESET}"
     hr
@@ -5192,6 +5238,29 @@ cmd_security_audit() {
         warn "CrowdSec не active"
         warn_count=$((warn_count + 1))
     fi
+    for service in auditd apparmor unattended-upgrades; do
+        if systemctl is-active --quiet "$service" 2>/dev/null; then
+            ok "${service}: active"
+        else
+            warn "${service}: не active"
+            warn_count=$((warn_count + 1))
+        fi
+    done
+
+    for service in caddy xray hysteria haproxy unbound; do
+        [[ "$(systemctl show -p LoadState --value "${service}.service" 2>/dev/null || true)" == "loaded" ]] || continue
+        service_hardening_failed=0
+        [[ "$(systemctl show -p NoNewPrivileges --value "${service}.service" 2>/dev/null || true)" == "yes" ]] || service_hardening_failed=1
+        [[ "$(systemctl show -p PrivateTmp --value "${service}.service" 2>/dev/null || true)" == "yes" ]] || service_hardening_failed=1
+        value=$(systemctl show -p ProtectSystem --value "${service}.service" 2>/dev/null || true)
+        [[ "$value" == "full" || "$value" == "strict" ]] || service_hardening_failed=1
+        if [[ "$service_hardening_failed" -eq 0 ]]; then
+            ok "${service}: systemd hardening enabled"
+        else
+            warn "${service}: systemd hardening incomplete"
+            warn_count=$((warn_count + 1))
+        fi
+    done
 
     if [[ -f "$CONFIG_FILE" ]]; then
         owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || echo unknown)
@@ -5296,6 +5365,18 @@ cmd_security_audit() {
     fi
 
     [[ -d "$BACKUP_DIR" ]] && ok "Backup dir exists: $BACKUP_DIR" || { warn "Backup dir отсутствует: $BACKUP_DIR"; warn_count=$((warn_count + 1)); }
+    if find "$BACKUP_DIR" -maxdepth 1 -type f -name 'naiveproxy-full-*.tar.gz.enc' -mtime -7 -print -quit 2>/dev/null | grep -q .; then
+        ok "Recent encrypted backup: найден"
+    else
+        warn "Recent encrypted backup младше 7 дней не найден"
+        warn_count=$((warn_count + 1))
+    fi
+    if find "$SUBS_WEB_DIR" -maxdepth 1 -type d -name '.*.build.*' -mmin +60 -print -quit 2>/dev/null | grep -q .; then
+        warn "Найдены старые staging-каталоги подписок"
+        warn_count=$((warn_count + 1))
+    else
+        ok "Subscription staging: старых каталогов нет"
+    fi
     [[ -f "$PROTOCOL_BENCHMARK_CRON" ]] && ok "Protocol benchmark cron installed" || warn "Protocol benchmark cron не установлен"
     [[ -f "$EXPIRY_NOTIFY_CRON" ]] && ok "Expiry notify cron installed" || warn "Expiry notify cron не установлен"
 
@@ -5525,8 +5606,9 @@ sanitize_imported_shell_data_file() {
         if [[ "$mode" == "naive" ]]; then
             for bool_key in \
                 SUBSCRIPTION_LOCAL_ENABLED SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE SUBSCRIPTION_XHTTP_MAIN_ENABLED \
+                SUBSCRIPTION_NODE_PREFETCH_ENABLED SUBSCRIPTION_ATOMIC_PUBLISH \
                 BROWSER_PROXY_COMPAT BROWSER_PROXY_SEND_PROXY_V2 \
-                PROTOCOL_BENCHMARK_RECOVERY_ALERT PROTOCOL_MONITOR_RECOVERY_ALERT HYSTERIA_ENABLED \
+                PROTOCOL_BENCHMARK_RECOVERY_ALERT PROTOCOL_MONITOR_RECOVERY_ALERT DNS_MONITOR_RECOVERY_ALERT HYSTERIA_ENABLED \
                 HYSTERIA_WARP_ENABLED HYSTERIA_PORT_HOP_ENABLED UNBOUND_ENABLED UNBOUND_ADBLOCK \
                 UNBOUND_MANAGED_GATEWAY UNBOUND_VPN_ENABLED UNBOUND_FILTER_ENABLED WARP_PROXY_ENABLED \
                 XRAY_WARP_ENABLED DEVICE_LIMIT_ENABLED XRAY_ENABLED XRAY_FALLBACK_ENABLED \
@@ -5549,7 +5631,9 @@ sanitize_imported_shell_data_file() {
                 PROTOCOL_BENCHMARK_ROUNDS:1:20 PROTOCOL_BENCHMARK_MAX_AVG_MS:100:600000 \
                 PROTOCOL_BENCHMARK_MONITOR_MIN_ROUNDS:1:20 PROTOCOL_BENCHMARK_SLOW_MIN_HITS:1:20 \
                 PROTOCOL_BENCHMARK_WARN_MIN_OK_HITS:1:20 PROTOCOL_BENCHMARK_ALERT_REPEAT:1:100 \
-                PROTOCOL_BENCHMARK_ALERT_COOLDOWN_MINUTES:1:10080 PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:1:10080 \
+                PROTOCOL_BENCHMARK_HARD_ALERT_REPEAT:1:100 PROTOCOL_BENCHMARK_ALERT_COOLDOWN_MINUTES:1:10080 \
+                PROTOCOL_MONITOR_ALERT_REPEAT:1:100 PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:1:10080 \
+                DNS_MONITOR_ALERT_REPEAT:1:100 DNS_MONITOR_ALERT_COOLDOWN_MINUTES:1:10080 \
                 SALES_BOT_CAPTCHA_TTL_SECONDS:300:2592000 SALES_BOT_ORDER_MIN_INTERVAL_SECONDS:10:3600 \
                 SALES_BOT_MAX_PENDING_PER_CHAT:1:10 SALES_BOT_MAX_ORDER_FILES:100:50000 \
                 UNBOUND_FILTER_MAX_DOMAINS:1000:500000 DEVICE_LIMIT:1:50 DEVICE_WINDOW_HOURS:1:168 \
@@ -5618,6 +5702,10 @@ sanitize_imported_shell_data_file() {
                     is_canonical_uint_in_range "${cidr_item#*/}" 8 32 || { err "Import: WARP SSH CIDR шире /8 запрещён"; exit 1; }
                 done
             fi
+            if [[ -n "${seen_keys[SUBSCRIPTION_HTTP_NODE_SOURCES]+x}" ]]; then
+                subscription_http_node_sources_is_valid "${SUBSCRIPTION_HTTP_NODE_SOURCES}" \
+                    || { err "Import: некорректный SUBSCRIPTION_HTTP_NODE_SOURCES"; exit 1; }
+            fi
             if [[ -n "${DOMAIN:-}" ]] && ! is_valid_domain "$DOMAIN"; then err "Import: некорректный DOMAIN"; exit 1; fi
             if [[ -n "${SUBSCRIPTION_DOMAIN:-}" ]] && ! is_valid_domain "$SUBSCRIPTION_DOMAIN"; then err "Import: некорректный SUBSCRIPTION_DOMAIN"; exit 1; fi
             if [[ -n "${BROWSER_PROXY_SNI_DOMAIN:-}" ]] && ! is_valid_domain "$BROWSER_PROXY_SNI_DOMAIN"; then err "Import: некорректный BROWSER_PROXY_SNI_DOMAIN"; exit 1; fi
@@ -5638,6 +5726,7 @@ sanitize_imported_shell_data_file() {
             [[ -z "${XRAY_VERSION_PIN:-}" || "$XRAY_VERSION_PIN" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { err "Import: некорректный XRAY_VERSION_PIN"; exit 1; }
             [[ -z "${HYSTERIA_VERSION_PIN:-}" || "$HYSTERIA_VERSION_PIN" =~ ^app/v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { err "Import: некорректный HYSTERIA_VERSION_PIN"; exit 1; }
             [[ -z "${PROTOCOL_BENCHMARK_LOG:-}" || "$PROTOCOL_BENCHMARK_LOG" == "$PROTOCOL_BENCHMARK_LOG_DEFAULT" ]] || { err "Import: PROTOCOL_BENCHMARK_LOG должен использовать управляемый путь"; exit 1; }
+            [[ -z "${SUBSCRIPTION_REBUILD_JOBS:-}" ]] || is_canonical_uint_in_range "$SUBSCRIPTION_REBUILD_JOBS" 0 8 || { err "Import: SUBSCRIPTION_REBUILD_JOBS должен быть от 0 до 8"; exit 1; }
             [[ -z "${PROTOCOL_BENCHMARK_ALERT_STATE:-}" || "$PROTOCOL_BENCHMARK_ALERT_STATE" == "$CONFIG_DIR/protocol-benchmark-alert.state" ]] || { err "Import: некорректный PROTOCOL_BENCHMARK_ALERT_STATE"; exit 1; }
             [[ -z "${PROTOCOL_MONITOR_ALERT_STATE:-}" || "$PROTOCOL_MONITOR_ALERT_STATE" == "$CONFIG_DIR/protocol-health-alert.state" ]] || { err "Import: некорректный PROTOCOL_MONITOR_ALERT_STATE"; exit 1; }
             import_path_is_within "${SALES_BOT_PAYMENT_QR_PATH:-$SALES_BOT_PAYMENT_QR_PATH_DEFAULT}" "$SALES_BOT_DIR" || { err "Import: QR оплаты должен находиться в $SALES_BOT_DIR"; exit 1; }
@@ -6214,7 +6303,7 @@ nodes_get_line() {
     local lookup="${1:-}"
     local line
     is_valid_node_name "$lookup" || return 1
-    line=$(nodes_list_lines | awk -F'|' -v name="$lookup" '$1 == name {print; exit}')
+    line=$(nodes_list_lines | awk -F'|' -v name="$lookup" '$1 == name && !found {print; found=1}')
     [[ -n "$line" ]] || return 1
     nodes_validate_line "$line" || return 1
     printf '%s\n' "$line"
@@ -6481,10 +6570,40 @@ cmd_nodes_add() {
 }
 
 cmd_nodes_remove() {
-    local name
+    load_config
+    local name node_line node_domain configured entry host label new_profiles="" browser_changed=0
+    local -a browser_entries=()
     name=$(nodes_prompt_name "${1:-}") || { err "Node не выбрана"; return 1; }
-    nodes_remove_line "$name"
+    node_line=$(nodes_get_line "$name") || { err "Node не найдена: $name"; return 1; }
+    IFS='|' read -r _ _ _ _ node_domain _ _ _ <<< "$node_line"
+    configured="${BROWSER_SUBSCRIPTION_PROFILES:-}"
+    if [[ -n "$configured" ]]; then
+        IFS=';' read -r -a browser_entries <<< "$configured"
+        for entry in "${browser_entries[@]}"; do
+            [[ "$entry" == *"|"* ]] || continue
+            host="${entry%%|*}"
+            label="${entry#*|}"
+            host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+            label=$(printf '%s' "$label" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+            if [[ "$label" == "$name" || ( "$node_domain" != "-" && "$host" == "${node_domain,,}" ) ]]; then
+                browser_changed=1
+                continue
+            fi
+            new_profiles+="${new_profiles:+;}${entry}"
+        done
+    fi
+    nodes_remove_line "$name" || return 1
+    if [[ "$browser_changed" -eq 1 ]]; then
+        BROWSER_SUBSCRIPTION_PROFILES="$new_profiles"
+        if ! save_config; then
+            nodes_upsert_line "$node_line" >/dev/null 2>&1 || true
+            err "Не удалось обновить browser-профили; запись node восстановлена"
+            return 1
+        fi
+        ok "Browser-профили node удалены из конфигурации"
+    fi
     ok "Node удалена из реестра: $name"
+    warn "Запусти nodes-subscriptions, чтобы убрать node из опубликованных страниц"
 }
 
 cmd_nodes_test() {
@@ -6590,7 +6709,7 @@ cmd_nodes_sync_users() {
             failed=1
             continue
         fi
-        if nodes_ssh "$line" "trap 'rm -f ${remote_tmp}' EXIT; ${sudo_cmd}chmod 600 ${remote_tmp} || exit 16; ${sudo_cmd}mkdir -p ${CONFIG_DIR} ${BACKUP_DIR} ${USER_META_DIR} ${SUBS_DIR} || exit 17; ${sudo_cmd}tar -tzf ${remote_tmp} >/dev/null || exit 18; ${sudo_cmd}tar -C ${CONFIG_DIR} -czf ${BACKUP_DIR}/node-sync-before-\$(date +%Y%m%d_%H%M%S).tar.gz users.conf credentials users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled 2>/dev/null || true; ${sudo_cmd}find ${BACKUP_DIR} -maxdepth 1 -type f -name 'node-sync-before-*.tar.gz' -exec chmod 600 {} +; ${sudo_cmd}tar -C ${CONFIG_DIR} -xzf ${remote_tmp} || exit 19; ${sudo_cmd}chmod 700 ${CONFIG_DIR} ${CREDENTIALS_DIR} ${USER_META_DIR} ${SUBS_DIR} 2>/dev/null || true; ${sudo_cmd}chmod 600 ${USERS_FILE} ${DISABLED_USERS_FILE} ${CREDENTIALS_PRIVATE_KEY} ${USERS_SECRETS_FILE} ${ACTIVE_USERS_HASH_FILE} ${CREDENTIALS_LOCK_FILE} ${XRAY_USERS_FILE} ${XRAY_COMPAT_USERS_FILE} ${XRAY_DISABLED_USERS_FILE} ${SUBS_ALIASES_FILE} ${USER_META_DIR}/*.env ${SUBS_DIR}/*.token 2>/dev/null || true; ${sudo_cmd}chmod 644 ${CREDENTIALS_PUBLIC_KEY} 2>/dev/null || true; sync_status=0; if [ -x ${SCRIPT_PATH} ]; then if [ -x ${CADDY_BIN} ] && [ -f ${CADDYFILE} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} safe-apply || sync_status=20; fi; if [ -x ${HYSTERIA_BIN} ] || [ -f ${HYSTERIA_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} hysteria-sync >/dev/null 2>&1 || sync_status=21; fi; if [ -x ${XRAY_BIN} ] || [ -f ${XRAY_CONFIG} ]; then ${sudo_cmd}bash ${SCRIPT_PATH} xray-rebuild >/dev/null 2>&1 || sync_status=22; fi; ${sudo_cmd}bash ${SCRIPT_PATH} nodes-subscriptions >/dev/null 2>&1 || sync_status=23; else sync_status=24; fi; exit \$sync_status"; then
+        if nodes_ssh "$line" "trap 'rm -f ${remote_tmp}' EXIT; ${sudo_cmd}chmod 600 ${remote_tmp} || exit 16; ${sudo_cmd}mkdir -p ${CONFIG_DIR} ${BACKUP_DIR} ${USER_META_DIR} ${SUBS_DIR} || exit 17; ${sudo_cmd}tar -tzf ${remote_tmp} >/dev/null || exit 18; ${sudo_cmd}tar -C ${CONFIG_DIR} -czf ${BACKUP_DIR}/node-sync-before-\$(date +%Y%m%d_%H%M%S).tar.gz users.conf credentials users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled 2>/dev/null || true; ${sudo_cmd}find ${BACKUP_DIR} -maxdepth 1 -type f -name 'node-sync-before-*.tar.gz' -exec chmod 600 {} +; ${sudo_cmd}tar -C ${CONFIG_DIR} -xzf ${remote_tmp} || exit 19; ${sudo_cmd}chmod 700 ${CONFIG_DIR} ${CREDENTIALS_DIR} ${USER_META_DIR} ${SUBS_DIR} 2>/dev/null || true; ${sudo_cmd}chmod 600 ${USERS_FILE} ${DISABLED_USERS_FILE} ${CREDENTIALS_PRIVATE_KEY} ${USERS_SECRETS_FILE} ${ACTIVE_USERS_HASH_FILE} ${CREDENTIALS_LOCK_FILE} ${XRAY_USERS_FILE} ${XRAY_COMPAT_USERS_FILE} ${XRAY_DISABLED_USERS_FILE} ${SUBS_ALIASES_FILE} ${USER_META_DIR}/*.env ${SUBS_DIR}/*.token 2>/dev/null || true; ${sudo_cmd}chmod 644 ${CREDENTIALS_PUBLIC_KEY} 2>/dev/null || true; sync_status=0; if ${sudo_cmd}test -x ${SCRIPT_PATH}; then if ${sudo_cmd}test -x ${CADDY_BIN} && ${sudo_cmd}test -f ${CADDYFILE}; then ${sudo_cmd}bash ${SCRIPT_PATH} safe-apply || sync_status=20; fi; if ${sudo_cmd}test -x ${HYSTERIA_BIN} || ${sudo_cmd}test -f ${HYSTERIA_CONFIG}; then ${sudo_cmd}bash ${SCRIPT_PATH} hysteria-sync >/dev/null 2>&1 || sync_status=21; fi; if ${sudo_cmd}test -x ${XRAY_BIN} || ${sudo_cmd}test -f ${XRAY_CONFIG}; then ${sudo_cmd}bash ${SCRIPT_PATH} xray-rebuild >/dev/null 2>&1 || sync_status=22; fi; ${sudo_cmd}bash ${SCRIPT_PATH} nodes-subscriptions >/dev/null 2>&1 || sync_status=23; else sync_status=24; fi; exit \$sync_status"; then
             ok "Users synced: ${node_name}"
         else
             err "Sync failed: ${node_name}"
@@ -6622,6 +6741,125 @@ node_links_for_user() {
     done
 }
 
+naive_extra_links_for_user() {
+    local user="$1" pass="$2" expiry_tag="${3:-active}" configured entry host node
+    local -a entries=()
+    local -A seen_hosts=()
+
+    is_valid_proxy_user "$user" || return 1
+    subscription_name_in_list "$user" "${NAIVE_EXTRA_USERS:-}" || return 0
+    configured="${NAIVE_EXTRA_PROFILES:-}"
+    [[ -n "$configured" && -n "$pass" ]] || return 0
+    is_valid_proxy_pass "$pass" || return 1
+
+    IFS=';' read -r -a entries <<< "$configured"
+    for entry in "${entries[@]}"; do
+        entry=$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        [[ -n "$entry" ]] || continue
+        [[ "$entry" == *"|"* ]] || return 1
+        host="${entry%%|*}"
+        node="${entry#*|}"
+        host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        node=$(printf '%s' "$node" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        is_valid_domain "$host" || return 1
+        [[ "$node" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || return 1
+        [[ -z "${seen_hosts[$host]+x}" ]] || continue
+        seen_hosts["$host"]=1
+        printf 'naive+https://%s:%s@%s:443#%s\n' "$user" "$pass" "$host" \
+            "$(uri_fragment_encode "$(pretty_profile_name "$user" "HTTPS" "$node")")"
+    done
+}
+
+subscription_http_node_sources_is_valid() {
+    local configured="${1:-}" entry node domain ip extra count=0
+    local -a entries=()
+    [[ -z "$configured" ]] && return 0
+    IFS=';' read -r -a entries <<< "$configured"
+    for entry in "${entries[@]}"; do
+        entry=$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        [[ -n "$entry" ]] || continue
+        count=$((count + 1))
+        (( count <= 16 )) || return 1
+        IFS='|' read -r node domain ip extra <<< "$entry"
+        [[ -z "$extra" ]] || return 1
+        is_valid_node_name "$node" || return 1
+        is_valid_domain "$domain" || return 1
+        is_valid_ipv4 "$ip" || return 1
+    done
+    (( count > 0 ))
+}
+
+subscription_http_node_links_for_user() {
+    local user="$1" configured entry node domain ip extra token token_file tmp candidate authority endpoint host protocol accepted
+    local -a entries=()
+    is_valid_proxy_user "$user" || return 1
+    configured="${SUBSCRIPTION_HTTP_NODE_SOURCES:-}"
+    [[ -n "$configured" ]] || return 0
+    subscription_http_node_sources_is_valid "$configured" || return 1
+    token_file="${SUBS_DIR}/${user}.token"
+    token=$(cat "$token_file" 2>/dev/null || true)
+    [[ "$token" =~ ^[a-fA-F0-9]{32,64}$ ]] || return 1
+
+    IFS=';' read -r -a entries <<< "$configured"
+    for entry in "${entries[@]}"; do
+        entry=$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        [[ -n "$entry" ]] || continue
+        IFS='|' read -r node domain ip extra <<< "$entry"
+        tmp=$(mktemp /tmp/yurich-http-node-links-XXXXXX) || return 1
+        chmod 600 "$tmp"
+        if ! curl --proto '=https' --tlsv1.2 -fsS \
+            --connect-timeout 5 --max-time 15 --max-filesize 1048576 \
+            --resolve "${domain}:443:${ip}" \
+            "https://${domain}/s/${token}/links.txt" -o "$tmp" 2>/dev/null; then
+            rm -f "$tmp"
+            return 1
+        fi
+        accepted=0
+        while IFS= read -r candidate || [[ -n "$candidate" ]]; do
+            [[ -n "$candidate" && "$candidate" != \#* ]] || continue
+            protocol_line_allowed "$candidate" || continue
+            authority="${candidate#*://}"
+            authority="${authority%%[/?#]*}"
+            endpoint="${authority##*@}"
+            host="${endpoint%:*}"
+            [[ "${host,,}" == "${domain,,}" ]] || continue
+            case "$candidate" in
+                naive+https://*) protocol="HTTPS" ;;
+                hy2://*|hysteria2://*) protocol="Turbo" ;;
+                vless://*type=xhttp*) protocol="XHTTP" ;;
+                vless://*security=reality*) protocol="Reality" ;;
+                *) continue ;;
+            esac
+            uri_with_profile_name "$candidate" "$(pretty_profile_name "$user" "$protocol" "$node")"
+            accepted=$((accepted + 1))
+        done < "$tmp"
+        rm -f "$tmp"
+        (( accepted > 0 )) || return 1
+    done
+}
+
+browser_subscription_node_is_enabled() {
+    local node_name="$1" browser_host="${2:-}" line _name _host _port _user _domain _role _weight enabled
+    [[ -n "$node_name" ]] || return 1
+    subscription_node_relay_only "$node_name" && return 1
+
+    # Backward compatibility: custom browser labels that are not registered nodes
+    # remain valid. Registered nodes always obey their enabled flag.
+    if ! line=$(nodes_get_line "$node_name" 2>/dev/null); then
+        if is_valid_domain "$browser_host"; then
+            while IFS='|' read -r _name _host _port _user _domain _role _weight enabled; do
+                if [[ "${_domain,,}" == "${browser_host,,}" ]]; then
+                    [[ "$enabled" == "1" ]]
+                    return
+                fi
+            done < <(nodes_list_lines)
+        fi
+        return 0
+    fi
+    IFS='|' read -r _name _host _port _user _domain _role _weight enabled <<< "$line"
+    [[ "$enabled" == "1" ]]
+}
+
 browser_subscription_links_for_user() {
     local user="$1" pass="$2" configured entry host node emit_profiles=1
     local -a entries=()
@@ -6647,6 +6885,7 @@ browser_subscription_links_for_user() {
         node=$(printf '%s' "$node" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
         is_valid_domain "$host" || return 1
         [[ "$node" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || return 1
+        browser_subscription_node_is_enabled "$node" "$host" || continue
         [[ -z "${seen_hosts[$host]+x}" ]] || continue
         seen_hosts["$host"]=1
         if [[ "$emit_profiles" == "1" ]]; then
@@ -6694,10 +6933,132 @@ subscription_user_xhttp_enabled() {
 
 subscription_node_core_enabled() {
     local node_name="$1"
+    subscription_node_relay_only "$node_name" && return 1
     if [[ "${SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE:-0}" == "1" ]] && subscription_node_xhttp_enabled "$node_name"; then
         return 1
     fi
     return 0
+}
+
+subscription_node_relay_only() {
+    local node_name="$1"
+    subscription_name_in_list "$node_name" "${SUBSCRIPTION_RELAY_ONLY_NODE_NAMES:-}"
+}
+
+cmd_node_subscription_export() {
+    load_config
+    load_users
+
+    local selected_user="${1:-}" user hy2_uri uuid reality_link reality_public_port
+    local hysteria_active=0 xray_active=0
+    if [[ -n "$selected_user" ]]; then
+        is_valid_proxy_user "$selected_user" || return 1
+        subscription_user_exists "$selected_user" || return 1
+    fi
+
+    systemctl is-active --quiet hysteria 2>/dev/null && hysteria_active=1
+    systemctl is-active --quiet xray 2>/dev/null && xray_active=1
+    reality_public_port=$(xray_reality_public_port)
+
+    while IFS= read -r user; do
+        [[ -n "$user" ]] || continue
+        [[ -z "$selected_user" || "$user" == "$selected_user" ]] || continue
+        user_is_expired "$user" && continue
+
+        if [[ "$hysteria_active" -eq 1 && -n "${HYSTERIA_OBFS_PASSWORD:-}" ]]; then
+            hy2_uri=$(hysteria_uri_for_user "$user" 2>/dev/null || true)
+            if [[ -n "$hy2_uri" ]]; then
+                hy2_uri=$(uri_with_profile_name "$hy2_uri" "$(pretty_profile_name "$user" "Turbo")")
+                printf '%s\t%s\n' "$user" "$hy2_uri"
+            fi
+        fi
+
+        if [[ "$xray_active" -eq 1 && -n "${XRAY_REALITY_PUBLIC_KEY:-}" && -n "${XRAY_REALITY_SHORT_ID:-}" ]]; then
+            uuid=$(get_xray_user_uuid "$user" 2>/dev/null || true)
+            if [[ -n "$uuid" ]]; then
+                reality_link=$(uri_with_profile_name \
+                    "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID}&spx=%2F" \
+                    "$(pretty_profile_name "$user" "Reality")")
+                printf '%s\t%s\n' "$user" "$reality_link"
+            fi
+        fi
+    done < <(list_subscription_users)
+}
+
+subscription_node_cache_ready() {
+    local node_name="$1" cache_dir="${SUBSCRIPTION_NODE_LINK_CACHE_DIR:-}"
+    [[ -n "$cache_dir" && -d "$cache_dir" && -f "$cache_dir/.ready.${node_name}" ]]
+}
+
+subscription_node_cached_links_for_user() {
+    local user="$1" node_name="$2" cache_dir="${SUBSCRIPTION_NODE_LINK_CACHE_DIR:-}" cache_file
+    is_valid_proxy_user "$user" || return 1
+    is_valid_node_name "$node_name" || return 1
+    cache_file="${cache_dir}/${user}.links"
+    [[ -f "$cache_file" ]] || return 0
+    awk -F '\t' -v node="$node_name" '$1 == node {print substr($0, index($0, "\t") + 1)}' "$cache_file"
+}
+
+subscription_prepare_node_link_cache() {
+    local cache_dir="$1" line name host port ssh_user node_domain role weight enabled
+    local sudo_cmd remote_script remote_b64 remote_cmd output cache_user candidate ready=0
+    [[ -d "$cache_dir" ]] || return 1
+
+    while IFS='|' read -r name host port ssh_user node_domain role weight enabled; do
+        [[ "$enabled" == "1" ]] || continue
+        [[ -n "$node_domain" && "$node_domain" != "-" ]] || continue
+        is_valid_domain "$node_domain" || continue
+        subscription_node_core_enabled "$name" || continue
+
+        line="${name}|${host}|${port}|${ssh_user}|${node_domain}|${role}|${weight}|${enabled}"
+        sudo_cmd=$(nodes_remote_sudo_prefix "$ssh_user")
+        remote_script=$(cat <<'EOS'
+set -euo pipefail
+if [[ -x /usr/local/bin/yurich-panel.sh ]]; then
+    if grep -q 'node-subscription-export)' /usr/local/bin/yurich-panel.sh 2>/dev/null; then
+        /usr/local/bin/yurich-panel.sh node-subscription-export
+        exit 0
+    fi
+    /usr/local/bin/yurich-panel.sh nodes-subscriptions >/dev/null 2>&1
+fi
+shopt -s nullglob
+for token_file in /etc/naiveproxy/subscriptions/*.token; do
+    user=${token_file##*/}
+    user=${user%.token}
+    [[ "$user" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$ ]] || continue
+    token=$(tr -dc 'a-fA-F0-9' < "$token_file" | head -c 64)
+    [[ "$token" =~ ^[a-fA-F0-9]{32,64}$ ]] || continue
+    links="/var/www/html/s/${token}/links.txt"
+    [[ -s "$links" ]] || continue
+    if systemctl is-active --quiet hysteria 2>/dev/null; then
+        awk -v user="$user" '/^(hy2:\/\/|hysteria2:\/\/)/ && $0 !~ /[Hh]op/ {printf "%s\t%s\n", user, $0}' "$links"
+    fi
+    if systemctl is-active --quiet xray 2>/dev/null; then
+        awk -v user="$user" '/^vless:\/\// && /security=reality/ && /type=tcp/ {printf "%s\t%s\n", user, $0}' "$links"
+    fi
+done
+EOS
+)
+        remote_b64=$(printf '%s' "$remote_script" | base64 -w0)
+        remote_cmd="${sudo_cmd}bash -c 'printf %s ${remote_b64} | base64 -d | bash'"
+        if ! output=$(nodes_ssh "$line" "$remote_cmd" 2>/dev/null); then
+            warn "Node cache недоступен: ${name}; будет использован точечный SSH fallback"
+            continue
+        fi
+
+        while IFS=$'\t' read -r cache_user candidate; do
+            is_valid_proxy_user "$cache_user" || continue
+            [[ "$candidate" == *"@${node_domain}:"* ]] || continue
+            protocol_line_allowed "$candidate" || continue
+            printf '%s\t%s\n' "$name" "$candidate" >> "${cache_dir}/${cache_user}.links"
+            chmod 600 "${cache_dir}/${cache_user}.links"
+        done <<< "$output"
+        : > "$cache_dir/.ready.${name}"
+        chmod 600 "$cache_dir/.ready.${name}"
+        ready=$((ready + 1))
+    done < <(nodes_list_lines)
+
+    [[ "$ready" -gt 0 ]]
 }
 
 node_app_links_for_user() {
@@ -6712,7 +7073,19 @@ node_app_links_for_user() {
         local line sudo_cmd remote_cmd
         line="${name}|${host}|${port}|${ssh_user}|${node_domain}|${role}|${weight}|${enabled}"
 
+        if subscription_node_relay_only "$name"; then
+            continue
+        fi
+
         if ! subscription_node_core_enabled "$name"; then
+            if [[ "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}" == "1" ]]; then
+                subscription_user_xhttp_enabled "$user" "$name" && node_xhttp_link_for_user "$user" "$name" "$node_domain"
+            fi
+            continue
+        fi
+
+        if subscription_node_cache_ready "$name"; then
+            subscription_node_cached_links_for_user "$user" "$name"
             if [[ "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}" == "1" ]]; then
                 subscription_user_xhttp_enabled "$user" "$name" && node_xhttp_link_for_user "$user" "$name" "$node_domain"
             fi
@@ -6721,10 +7094,11 @@ node_app_links_for_user() {
 
         sudo_cmd=$(nodes_remote_sudo_prefix "$ssh_user")
         remote_cmd="${sudo_cmd}bash -lc 'u=\"${user}\"; token_file=\"/etc/naiveproxy/subscriptions/\${u}.token\"; token=\$(cat \"\$token_file\" 2>/dev/null || true); links=\"/var/www/html/s/\${token}/links.txt\"; if { [ -z \"\$token\" ] || [ ! -s \"\$links\" ]; } && [ -x /usr/local/bin/yurich-panel.sh ]; then bash /usr/local/bin/yurich-panel.sh nodes-subscriptions >/dev/null 2>&1 || true; token=\$(cat \"\$token_file\" 2>/dev/null || true); links=\"/var/www/html/s/\${token}/links.txt\"; fi; if [ -s \"\$links\" ]; then if systemctl is-active --quiet hysteria 2>/dev/null; then awk '\''/^(hy2:\\/\\/|hysteria2:\\/\\/)/ && \$0 !~ /[Hh]op/ {print}'\'' \"\$links\" || true; fi; if systemctl is-active --quiet xray 2>/dev/null; then awk '\''/^vless:\\/\\// && \$0 ~ /security=reality/ && \$0 ~ /type=tcp/ && \$0 ~ /^vless:\\/\\/[^@]+@[^/?#]+:[0-9]+\\?/ {print}'\'' \"\$links\" || true; fi; fi'"
-        local output attempt
+        local output attempt fetched=0
         for ((attempt = 1; attempt <= 3; attempt++)); do
             if output=$(nodes_ssh "$line" "$remote_cmd" 2>/dev/null); then
-                [[ -n "$output" ]] && printf '%s\n' "$output"
+                fetched=1
+                [[ -n "$output" ]] && printf '%s\n' "$output" | awk -v domain="$node_domain" 'index($0, "@" domain ":")'
                 if [[ "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}" == "1" ]]; then
                     subscription_user_xhttp_enabled "$user" "$name" && node_xhttp_link_for_user "$user" "$name" "$node_domain"
                 fi
@@ -6732,7 +7106,37 @@ node_app_links_for_user() {
             fi
             sleep 2
         done
+        if (( fetched == 0 )); then
+            err "SSH node ${name} недоступен при сборке подписки ${user}"
+            return 1
+        fi
     done
+}
+
+node_relay_source_link_for_user() {
+    local user="$1" line="$2" node_domain="$3" transport="$4"
+    local node_name node_host node_port node_user node_role node_weight node_enabled
+    local sudo_cmd remote_cmd output quoted_user awk_filter
+
+    is_valid_proxy_user "$user" || return 1
+    nodes_validate_line "$line" || return 1
+    is_valid_domain "$node_domain" || return 1
+    case "$transport" in
+        reality)
+            awk_filter='/^vless:\/\// && /security=reality/ && /type=tcp/ {print; exit}'
+            ;;
+        xhttp)
+            awk_filter='/^vless:\/\// && /security=tls/ && /type=xhttp/ {print; exit}'
+            ;;
+        *) return 1 ;;
+    esac
+
+    IFS='|' read -r node_name node_host node_port node_user _ node_role node_weight node_enabled <<< "$line"
+    sudo_cmd=$(nodes_remote_sudo_prefix "$node_user")
+    printf -v quoted_user '%q' "$user"
+    remote_cmd="${sudo_cmd}bash -lc 'u=${quoted_user}; token_file=\"/etc/naiveproxy/subscriptions/\${u}.token\"; token=\$(tr -dc \"a-fA-F0-9\" < \"\$token_file\" 2>/dev/null | head -c 64); links=\"/var/www/html/s/\${token}/links.txt\"; [ -s \"\$links\" ] || exit 3; awk '\''${awk_filter}'\'' \"\$links\"'"
+    output=$(nodes_ssh "$line" "$remote_cmd") || return 1
+    printf '%s\n' "$output" | awk -v authority="@${node_domain}:443?" 'index($0, authority) {print; exit}'
 }
 
 subscription_vless_relay_links_for_user() {
@@ -6755,9 +7159,13 @@ subscription_vless_relay_links_for_user() {
         [[ "$source_node" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || return 1
         is_valid_domain "$relay_host" || return 1
         [[ "$relay_port" =~ ^[0-9]{2,5}$ ]] && ((relay_port >= 1024 && relay_port <= 65535)) || return 1
-        node_line=$(nodes_get_line "$source_node" 2>/dev/null) || return 1
-        IFS='|' read -r _ node_host node_port node_user source_domain node_role node_weight node_enabled <<< "$node_line"
-        [[ "$node_enabled" == "1" ]] || continue
+        if [[ "$source_node" == "local" ]]; then
+            node_line=""
+            source_domain="$DOMAIN"
+        else
+            node_line=$(nodes_get_line "$source_node" 2>/dev/null) || return 1
+            IFS='|' read -r _ node_host node_port node_user source_domain node_role node_weight node_enabled <<< "$node_line"
+        fi
         is_valid_domain "$source_domain" || return 1
 
         transports="${transports//,/ }"
@@ -6767,20 +7175,27 @@ subscription_vless_relay_links_for_user() {
                     source_link=$(printf '%s\n' "$source_links" | awk -v authority="@${source_domain}:443?" '
                         /^vless:\/\// && index($0, authority) && /security=reality/ && /type=tcp/ {print; exit}
                     ')
-                    protocol_label="Reality Relay TEST"
+                    protocol_label="Reality Relay"
                     ;;
                 xhttp)
                     source_link=$(printf '%s\n' "$source_links" | awk -v authority="@${source_domain}:443?" '
                         /^vless:\/\// && index($0, authority) && /security=tls/ && /type=xhttp/ {print; exit}
                     ')
-                    protocol_label="XHTTP Relay TEST"
+                    protocol_label="XHTTP Relay"
                     ;;
                 *) return 1 ;;
             esac
-            [[ -n "$source_link" ]] || continue
+            if [[ -z "$source_link" && "$source_node" != "local" ]]; then
+                source_link=$(node_relay_source_link_for_user "$user" "$node_line" "$source_domain" "$transport") || return 1
+            fi
+            [[ -n "$source_link" ]] || return 1
             relay_link="${source_link%%#*}"
             relay_link="${relay_link/@${source_domain}:443/@${relay_host}:${relay_port}}"
-            relay_link=$(uri_with_profile_name "$relay_link" "$(pretty_profile_name "$user" "$protocol_label" "$source_node")")
+            if [[ "$source_node" == "local" ]]; then
+                relay_link=$(uri_with_profile_name "$relay_link" "$(pretty_profile_name "$user" "$protocol_label")")
+            else
+                relay_link=$(uri_with_profile_name "$relay_link" "$(pretty_profile_name "$user" "$protocol_label" "$source_node")")
+            fi
             [[ -z "${seen[$relay_link]+x}" ]] || continue
             seen["$relay_link"]=1
             printf '%s\n' "$relay_link"
@@ -6796,22 +7211,149 @@ subscription_filter_published_links() {
     '
 }
 
+subscription_rebuild_worker_count() {
+    local requested="${SUBSCRIPTION_REBUILD_JOBS:-0}" cpu_count
+    if is_canonical_uint_in_range "$requested" 1 8; then
+        printf '%s\n' "$requested"
+        return 0
+    fi
+
+    cpu_count=$(nproc 2>/dev/null || echo 1)
+    [[ "$cpu_count" =~ ^[0-9]+$ && "$cpu_count" -gt 0 ]] || cpu_count=1
+    (( cpu_count > 4 )) && cpu_count=4
+    printf '%s\n' "$cpu_count"
+}
+
+subscription_generate_pages_parallel() {
+    local jobs="$1" log_dir="$2" users_file="$3"
+    local user log_file pid failed=0 seq=0
+    local -a worker_pids=() worker_users=() worker_logs=()
+
+    is_canonical_uint_in_range "$jobs" 1 8 || return 1
+    [[ -d "$log_dir" && -f "$users_file" ]] || return 1
+
+    while IFS= read -r user; do
+        [[ -n "$user" ]] || continue
+        seq=$((seq + 1))
+        if ! is_valid_proxy_user "$user"; then
+            printf 'FAIL\tinvalid-entry-%s\n' "$seq"
+            failed=1
+            continue
+        fi
+        log_file="${log_dir}/${seq}-${user}.log"
+        (
+            SUBSCRIPTION_REBUILD_WORKER=1
+            generate_subscription_page "$user"
+        ) >"$log_file" 2>&1 &
+        pid=$!
+        worker_pids+=("$pid")
+        worker_users+=("$user")
+        worker_logs+=("$log_file")
+
+        if (( ${#worker_pids[@]} >= jobs )); then
+            if wait "${worker_pids[0]}"; then
+                printf 'OK\t%s\n' "${worker_users[0]}"
+                rm -f -- "${worker_logs[0]}"
+            else
+                printf 'FAIL\t%s\n' "${worker_users[0]}"
+                failed=1
+            fi
+            worker_pids=("${worker_pids[@]:1}")
+            worker_users=("${worker_users[@]:1}")
+            worker_logs=("${worker_logs[@]:1}")
+        fi
+    done < "$users_file"
+
+    while (( ${#worker_pids[@]} > 0 )); do
+        if wait "${worker_pids[0]}"; then
+            printf 'OK\t%s\n' "${worker_users[0]}"
+            rm -f -- "${worker_logs[0]}"
+        else
+            printf 'FAIL\t%s\n' "${worker_users[0]}"
+            failed=1
+        fi
+        worker_pids=("${worker_pids[@]:1}")
+        worker_users=("${worker_users[@]:1}")
+        worker_logs=("${worker_logs[@]:1}")
+    done
+    return "$failed"
+}
+
 cmd_nodes_rebuild_subscriptions() {
     load_config
     load_users
+    local lock_fd cache_dir="" build_log_dir="" active_users_file="" results_file=""
+    local failed=0 failed_users="" jobs status user expected=0 result_count=0
+    install -d -m 755 /run/lock
+    exec {lock_fd}>/run/lock/yurich-subscription-rebuild.lock
+    if ! flock -n "$lock_fd"; then
+        err "Другая пересборка подписок уже выполняется"
+        return 75
+    fi
+
     cleanup_orphan_subscription_pages
-    local count=0 user
+    ensure_web_privacy_files
+    subscription_build_traffic_cache >/dev/null 2>&1 || true
+    ensure_qrencode_for_subscriptions >/dev/null 2>&1 || warn "qrencode недоступен; QR-коды будут пропущены"
+
+    local count=0
+    if [[ "${SUBSCRIPTION_NODE_PREFETCH_ENABLED:-1}" == "1" && "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]]; then
+        cache_dir=$(mktemp -d /run/yurich-subscription-cache.XXXXXX)
+        chmod 700 "$cache_dir"
+        if subscription_prepare_node_link_cache "$cache_dir"; then
+            SUBSCRIPTION_NODE_LINK_CACHE_DIR="$cache_dir"
+        else
+            warn "Пакетный cache нод не собран полностью; включён совместимый SSH fallback"
+        fi
+    fi
+
+    active_users_file=$(mktemp /tmp/yurich-subscription-users.XXXXXX) || return 1
+    results_file=$(mktemp /tmp/yurich-subscription-results.XXXXXX) || { rm -f -- "$active_users_file"; return 1; }
+    build_log_dir=$(mktemp -d /tmp/yurich-subscription-logs.XXXXXX) || { rm -f -- "$active_users_file" "$results_file"; return 1; }
+    chmod 600 "$active_users_file" "$results_file"
+    chmod 700 "$build_log_dir"
     while IFS= read -r user; do
         [[ -z "$user" ]] && continue
         if user_is_expired "$user"; then
             cleanup_subscription_page "$user"
             continue
         fi
-        if generate_subscription_page "$user" >/dev/null 2>&1; then
-            count=$((count + 1))
-        fi
+        printf '%s\n' "$user" >> "$active_users_file"
     done < <(list_subscription_users)
-    apply_subscription_aliases >/dev/null 2>&1 || true
+
+    jobs=$(subscription_rebuild_worker_count)
+    info "Пересборка подписок: workers=${jobs}"
+    subscription_generate_pages_parallel "$jobs" "$build_log_dir" "$active_users_file" > "$results_file" || true
+    while IFS=$'\t' read -r status user; do
+        [[ -n "$user" ]] || continue
+        result_count=$((result_count + 1))
+        if [[ "$status" == "OK" ]]; then
+            count=$((count + 1))
+        else
+            failed=$((failed + 1))
+            failed_users+=" ${user}"
+        fi
+    done < "$results_file"
+    expected=$(awk 'NF{c++} END{print c+0}' "$active_users_file")
+    if [[ "$result_count" -ne "$expected" ]]; then
+        failed=$((failed + 1))
+        failed_users+=" internal-worker-result"
+    fi
+
+    find "$build_log_dir" -xdev -mindepth 1 -type f -delete 2>/dev/null || true
+    rmdir "$build_log_dir" 2>/dev/null || true
+    rm -f -- "$active_users_file" "$results_file"
+    unset SUBSCRIPTION_NODE_LINK_CACHE_DIR
+    if [[ -n "$cache_dir" && -d "$cache_dir" ]]; then
+        find "$cache_dir" -mindepth 1 -maxdepth 1 -type f -delete
+        rmdir "$cache_dir" 2>/dev/null || true
+    fi
+    if [[ "$failed" -gt 0 ]]; then
+        err "Не пересобраны подписки:${failed_users}"
+        err "Успешно: ${count}, ошибок: ${failed}; прежние страницы сохранены"
+        return 1
+    fi
+    apply_subscription_aliases >/dev/null 2>&1 || { err "Не удалось обновить alias URL"; return 1; }
     ok "Пересобраны страницы подписки: ${count}"
 }
 
@@ -7244,6 +7786,20 @@ print("-" * 128)
 failed = 0
 csv_rows = []
 now_iso = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat()
+try:
+    load1 = round(os.getloadavg()[0], 2)
+except (AttributeError, OSError):
+    load1 = ""
+try:
+    meminfo = {}
+    for item in Path('/proc/meminfo').read_text().splitlines():
+        key, value = item.split(':', 1)
+        meminfo[key] = int(value.strip().split()[0])
+    mem_total = meminfo.get('MemTotal', 0)
+    mem_available = meminfo.get('MemAvailable', 0)
+    mem_used_pct = round((mem_total - mem_available) * 100 / mem_total, 1) if mem_total else ""
+except (OSError, ValueError):
+    mem_used_pct = ""
 for index, profile in enumerate(profiles):
     values, errors = bench_profile(index, profile)
     ok_count = len(values)
@@ -7255,6 +7811,8 @@ for index, profile in enumerate(profiles):
     median_value = percentile(values, 0.50) if values else None
     p95_value = percentile(values, 0.95) if values else None
     worst_value = max(values) if values else None
+    jitter_value = (sum(abs(values[i] - values[i - 1]) for i in range(1, len(values))) / (len(values) - 1)) if len(values) > 1 else 0 if values else None
+    loss_pct = round((rounds - ok_count) * 100 / rounds, 1)
     slow_count = sum(1 for value in values if int(value * 1000) > slow_threshold_ms)
     slow_label = f"slow={slow_count}/{ok_count}" if values else f"slow=0/{rounds}"
     best = fmt_seconds(best_value)
@@ -7277,6 +7835,10 @@ for index, profile in enumerate(profiles):
         "median_ms": int(median_value * 1000) if median_value is not None else "",
         "p95_ms": int(p95_value * 1000) if p95_value is not None else "",
         "worst_ms": int(worst_value * 1000) if worst_value is not None else "",
+        "jitter_ms": int(jitter_value * 1000) if jitter_value is not None else "",
+        "loss_pct": loss_pct,
+        "load1": load1,
+        "mem_used_pct": mem_used_pct,
         "slow_threshold_ms": slow_threshold_ms,
         "slow_count": slow_count if values else "",
         "slow_total": ok_count if values else "",
@@ -7327,6 +7889,19 @@ protocol_benchmark_default_user() {
     printf '%s\n' "$first_user"
 }
 
+monitor_issue_fingerprint() {
+    sed -E \
+        -e $'s/\033\\[[0-9;]*[[:alpha:]]//g' \
+        -e 's/(avg=)[0-9]+ms/\1<latency>/g' \
+        -e 's/[0-9]+([.][0-9]+)?ms/<latency>/g' \
+        -e 's/[0-9]+([.][0-9]+)?s/<duration>/g' \
+        -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+([+-][0-9:]+|Z)?/<timestamp>/g' \
+        -e '/^[[:space:]]*$/d' \
+        | LC_ALL=C sort \
+        | sha256sum \
+        | awk '{print $1}'
+}
+
 cmd_protocol_benchmark_monitor() {
     load_config
     load_users
@@ -7337,7 +7912,8 @@ cmd_protocol_benchmark_monitor() {
     local user="${1:-}" rounds="${2:-${PROTOCOL_BENCHMARK_ROUNDS:-3}}" max_ms="${PROTOCOL_BENCHMARK_MAX_AVG_MS:-2500}"
     local min_rounds="${PROTOCOL_BENCHMARK_MONITOR_MIN_ROUNDS:-3}" slow_min_hits="${PROTOCOL_BENCHMARK_SLOW_MIN_HITS:-2}"
     local warn_min_ok="${PROTOCOL_BENCHMARK_WARN_MIN_OK_HITS:-2}"
-    local alert_repeat="${PROTOCOL_BENCHMARK_ALERT_REPEAT:-2}"
+    local alert_repeat="${PROTOCOL_BENCHMARK_ALERT_REPEAT:-3}"
+    local hard_alert_repeat="${PROTOCOL_BENCHMARK_HARD_ALERT_REPEAT:-3}"
     local alert_cooldown_minutes="${PROTOCOL_BENCHMARK_ALERT_COOLDOWN_MINUTES:-60}"
     local alert_state="${PROTOCOL_BENCHMARK_ALERT_STATE:-$CONFIG_DIR/protocol-benchmark-alert.state}"
     local recovery_alert="${PROTOCOL_BENCHMARK_RECOVERY_ALERT:-1}"
@@ -7355,7 +7931,8 @@ cmd_protocol_benchmark_monitor() {
     (( slow_min_hits > rounds )) && slow_min_hits="$rounds"
     is_canonical_uint_in_range "$warn_min_ok" 1 5 || warn_min_ok=2
     (( warn_min_ok > rounds )) && warn_min_ok="$rounds"
-    is_canonical_uint_in_range "$alert_repeat" 1 10 || alert_repeat=2
+    is_canonical_uint_in_range "$alert_repeat" 1 10 || alert_repeat=3
+    is_canonical_uint_in_range "$hard_alert_repeat" 1 10 || hard_alert_repeat=3
     is_canonical_uint_in_range "$alert_cooldown_minutes" 5 1440 || alert_cooldown_minutes=60
 
     tmp=$(mktemp /tmp/yurich-protocol-benchmark-monitor-XXXXXX.out)
@@ -7400,7 +7977,7 @@ cmd_protocol_benchmark_monitor() {
         fi
         alert_class="SOFT"
         [[ "$hard_alert" -eq 1 ]] && alert_class="HARD"
-        fingerprint=$(printf 'rc=%s\n%s\n' "$rc" "${issues:-benchmark failed}" | sed '/^[[:space:]]*$/d' | LC_ALL=C sort | sha256sum | awk '{print $1}')
+        fingerprint=$(printf 'rc=%s\n%s\n' "$rc" "${issues:-benchmark failed}" | monitor_issue_fingerprint)
         if [[ -s "$alert_state" ]]; then
             state_line=$(head -n1 "$alert_state" 2>/dev/null || true)
             IFS='|' read -r state_a state_b state_c state_d state_e state_f <<< "$state_line" || true
@@ -7432,10 +8009,10 @@ cmd_protocol_benchmark_monitor() {
         now_ts=$(date +%s)
         cooldown_sec=$((alert_cooldown_minutes * 60))
         if [[ "$hard_alert" -eq 1 ]]; then
-            if (( issue_changed == 1 || issue_count == 1 || now_ts - prev_sent >= cooldown_sec )); then
+            if (( issue_count >= hard_alert_repeat && (prev_sent == 0 || now_ts - prev_sent >= cooldown_sec) )); then
                 should_alert=1
             fi
-        elif (( issue_count >= alert_repeat && (issue_changed == 1 || now_ts - prev_sent >= cooldown_sec) )); then
+        elif (( issue_count >= alert_repeat && (prev_sent == 0 || now_ts - prev_sent >= cooldown_sec) )); then
             should_alert=1
         fi
         last_sent="$prev_sent"
@@ -7447,7 +8024,7 @@ cmd_protocol_benchmark_monitor() {
 
         if [[ "$should_alert" -ne 1 ]]; then
             if [[ "$hard_alert" -eq 1 ]]; then
-                info "Benchmark alert suppressed: hard repeat=${issue_count}, same_issue=$((1 - issue_changed)), cooldown=${alert_cooldown_minutes}m"
+                info "Benchmark alert suppressed: hard repeat=${issue_count}/${hard_alert_repeat}, same_issue=$((1 - issue_changed)), cooldown=${alert_cooldown_minutes}m"
             else
                 info "Benchmark alert suppressed: soft repeat=${issue_count}/${alert_repeat}, same_issue=$((1 - issue_changed)), cooldown=${alert_cooldown_minutes}m"
             fi
@@ -7511,22 +8088,24 @@ path, limit = sys.argv[1], int(sys.argv[2])
 with open(path, "r", encoding="utf-8", errors="replace") as f:
     rows = list(csv.DictReader(f))
 rows = rows[-limit:]
-print(f"{'TIME':<20} {'STATUS':<6} {'PROTO':<12} {'HOST':<22} {'AVG':>7} {'MEDIAN':>7} {'P95':>7} {'SLOW':>9}  NAME")
-print("-" * 120)
+print(f"{'TIME':<20} {'STATUS':<6} {'PROTO':<12} {'HOST':<22} {'AVG':>7} {'JITTER':>8} {'LOSS':>7} {'P95':>7} {'SLOW':>9}  NAME")
+print("-" * 132)
 for r in rows:
     ts = (r.get("ts") or "")[:19].replace("T", " ")
     avg = (r.get("avg_ms") or "-")
     avg = f"{avg}ms" if avg != "-" else "-"
-    median = (r.get("median_ms") or "-")
-    median = f"{median}ms" if median != "-" else "-"
+    jitter = (r.get("jitter_ms") or "-")
+    jitter = f"{jitter}ms" if jitter != "-" else "-"
+    loss = (r.get("loss_pct") or "-")
+    loss = f"{loss}%" if loss != "-" else "-"
     p95 = (r.get("p95_ms") or "-")
     p95 = f"{p95}ms" if p95 != "-" else "-"
     slow_count = r.get("slow_count") or ""
     slow_total = r.get("slow_total") or r.get("ok") or r.get("rounds") or ""
     slow = f"{slow_count}/{slow_total}" if slow_count and slow_total else "-"
-    print(f"{ts:<20} {r.get('status',''):<6} {r.get('scheme',''):<12} {r.get('host',''):<22} {avg:>7} {median:>7} {p95:>7} {slow:>9}  {(r.get('name') or '')[:38]}")
+    print(f"{ts:<20} {r.get('status',''):<6} {r.get('scheme',''):<12} {r.get('host',''):<22} {avg:>7} {jitter:>8} {loss:>7} {p95:>7} {slow:>9}  {(r.get('name') or '')[:38]}")
 
-stats = defaultdict(lambda: {"total": 0, "fail": 0, "avg_sum": 0, "avg_count": 0})
+stats = defaultdict(lambda: {"total": 0, "fail": 0, "avg_sum": 0, "avg_count": 0, "jitter_sum": 0, "jitter_count": 0, "loss_sum": 0})
 for r in rows:
     key = (r.get("scheme", ""), r.get("host", ""))
     item = stats[key]
@@ -7538,18 +8117,116 @@ for r in rows:
         item["avg_count"] += 1
     except Exception:
         pass
+    try:
+        item["jitter_sum"] += int(r.get("jitter_ms") or 0)
+        item["jitter_count"] += 1
+    except Exception:
+        pass
+    try:
+        item["loss_sum"] += float(r.get("loss_pct") or 0)
+    except Exception:
+        pass
 if stats:
-    print("-" * 120)
+    print("-" * 132)
     print("Summary:")
     for (scheme, host), item in sorted(stats.items(), key=lambda x: (x[1]["fail"], (x[1]["avg_sum"] / max(x[1]["avg_count"], 1)))):
         avg = int(item["avg_sum"] / max(item["avg_count"], 1)) if item["avg_count"] else 0
-        print(f"{scheme:<12} {host:<22} fail={item['fail']}/{item['total']} avg={avg}ms")
+        jitter = int(item["jitter_sum"] / max(item["jitter_count"], 1)) if item["jitter_count"] else 0
+        loss = round(item["loss_sum"] / max(item["total"], 1), 1)
+        print(f"{scheme:<12} {host:<22} fail={item['fail']}/{item['total']} avg={avg}ms jitter={jitter}ms loss={loss}%")
 PY
+}
+
+cmd_protocol_stability_report() {
+    load_config 2>/dev/null || true
+    local log_file="${PROTOCOL_BENCHMARK_LOG:-$PROTOCOL_BENCHMARK_LOG_DEFAULT}" hours="${1:-24}"
+    is_canonical_uint_in_range "$hours" 1 168 || hours=24
+    if [[ ! -s "$log_file" ]]; then
+        warn "История benchmark пока пуста: $log_file"
+        return 0
+    fi
+    python3 - "$log_file" "$hours" <<'PY'
+import csv
+import datetime as dt
+import statistics
+import sys
+from collections import defaultdict
+
+path, hours = sys.argv[1], int(sys.argv[2])
+cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+groups = defaultdict(list)
+load_values = []
+mem_values = []
+with open(path, "r", encoding="utf-8", errors="replace") as f:
+    for row in csv.DictReader(f):
+        try:
+            stamp = dt.datetime.fromisoformat((row.get("ts") or "").replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            continue
+        if stamp < cutoff:
+            continue
+        groups[(row.get("scheme", ""), row.get("host", ""))].append(row)
+        try:
+            load_values.append(float(row.get("load1") or ""))
+        except ValueError:
+            pass
+        try:
+            mem_values.append(float(row.get("mem_used_pct") or ""))
+        except ValueError:
+            pass
+
+def nums(rows, key):
+    result = []
+    for row in rows:
+        try:
+            result.append(float(row.get(key) or ""))
+        except ValueError:
+            pass
+    return result
+
+print(f"Yurich stability report: last {hours}h")
+print(f"{'PROTO':<12} {'HOST':<24} {'RUNS':>5} {'FAIL':>6} {'WARN':>6} {'AVG':>8} {'JITTER':>9} {'LOSS':>8} {'P95 MAX':>9}")
+print("-" * 100)
+for (scheme, host), rows in sorted(groups.items()):
+    avg = nums(rows, "avg_ms")
+    jitter = nums(rows, "jitter_ms")
+    loss = nums(rows, "loss_pct")
+    p95 = nums(rows, "p95_ms")
+    fails = sum(1 for row in rows if row.get("status") == "FAIL")
+    warns = sum(1 for row in rows if row.get("status") == "WARN")
+    fmt = lambda values, suffix: f"{statistics.fmean(values):.0f}{suffix}" if values else "-"
+    p95_max = f"{max(p95):.0f}ms" if p95 else "-"
+    print(f"{scheme:<12} {host:<24} {len(rows):>5} {fails:>6} {warns:>6} {fmt(avg, 'ms'):>8} {fmt(jitter, 'ms'):>9} {fmt(loss, '%'):>8} {p95_max:>9}")
+print("-" * 100)
+print(f"rows={sum(map(len, groups.values()))} max_load1={max(load_values) if load_values else '-'} max_mem={str(max(mem_values)) + '%' if mem_values else '-'}")
+PY
+}
+
+normalize_monitor_noise_settings() {
+    local spec key minimum current
+    for spec in \
+        PROTOCOL_BENCHMARK_ALERT_REPEAT:3 \
+        PROTOCOL_BENCHMARK_HARD_ALERT_REPEAT:3 \
+        PROTOCOL_BENCHMARK_ALERT_COOLDOWN_MINUTES:60 \
+        PROTOCOL_MONITOR_ALERT_REPEAT:3 \
+        PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:60 \
+        DNS_MONITOR_ALERT_REPEAT:3 \
+        DNS_MONITOR_ALERT_COOLDOWN_MINUTES:180; do
+        key="${spec%%:*}"
+        minimum="${spec##*:}"
+        current="${!key:-}"
+        if ! [[ "$current" =~ ^[0-9]+$ ]] || (( 10#$current < minimum )); then
+            printf -v "$key" '%s' "$minimum"
+        fi
+    done
 }
 
 cmd_protocol_benchmark_install() {
     load_config
     load_users
+    normalize_monitor_noise_settings
     local user="${1:-${PROTOCOL_BENCHMARK_USER:-}}" rounds="${2:-${PROTOCOL_BENCHMARK_ROUNDS:-3}}" script_path="${SCRIPT_PATH:-/usr/local/bin/yurich-panel.sh}"
     if [[ -z "$user" ]]; then
         user=$(protocol_benchmark_default_user) || { err "Нет пользователя для benchmark monitor"; return 1; }
@@ -7663,9 +8340,11 @@ cmd_protocol_monitor() {
     fi
     local tmp rc alert_state="${PROTOCOL_MONITOR_ALERT_STATE:-$CONFIG_DIR/protocol-health-alert.state}"
     local alert_cooldown_minutes="${PROTOCOL_MONITOR_ALERT_COOLDOWN_MINUTES:-60}" recovery_alert="${PROTOCOL_MONITOR_RECOVERY_ALERT:-1}"
+    local alert_repeat="${PROTOCOL_MONITOR_ALERT_REPEAT:-3}"
     local cooldown_sec now_ts fingerprint state_line state_a state_b state_c state_d state_e
     local prev_count=0 prev_sent=0 prev_fingerprint="" issue_count=1 issue_changed=0 should_alert=0 last_sent=0
     is_canonical_uint_in_range "$alert_cooldown_minutes" 5 1440 || alert_cooldown_minutes=60
+    is_canonical_uint_in_range "$alert_repeat" 1 10 || alert_repeat=3
     tmp=$(mktemp)
     if cmd_protocol_health > "$tmp" 2>&1; then
         rc=0
@@ -7673,7 +8352,7 @@ cmd_protocol_monitor() {
         rc=$?
     fi
     if [[ "$rc" -ne 0 ]]; then
-        fingerprint=$(sed '/^[[:space:]]*$/d' "$tmp" | LC_ALL=C sort | sha256sum | awk '{print $1}')
+        fingerprint=$(monitor_issue_fingerprint < "$tmp")
         if [[ -s "$alert_state" ]]; then
             state_line=$(head -n1 "$alert_state" 2>/dev/null || true)
             IFS='|' read -r state_a state_b state_c state_d state_e <<< "$state_line" || true
@@ -7699,7 +8378,7 @@ cmd_protocol_monitor() {
         fi
         now_ts=$(date +%s)
         cooldown_sec=$((alert_cooldown_minutes * 60))
-        if (( issue_changed == 1 || issue_count == 1 || now_ts - prev_sent >= cooldown_sec )); then
+        if (( issue_count >= alert_repeat && (prev_sent == 0 || now_ts - prev_sent >= cooldown_sec) )); then
             should_alert=1
         fi
         last_sent="$prev_sent"
@@ -7715,7 +8394,7 @@ cmd_protocol_monitor() {
 
 <pre>$(tail -n 30 "$tmp" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</pre>"
         else
-            info "Protocol health alert suppressed: repeat=${issue_count}, same_issue=$((1 - issue_changed)), cooldown=${alert_cooldown_minutes}m"
+            info "Protocol health alert suppressed: repeat=${issue_count}/${alert_repeat}, same_issue=$((1 - issue_changed)), cooldown=${alert_cooldown_minutes}m"
         fi
     else
         if [[ -s "$alert_state" && "$recovery_alert" == "1" ]]; then
@@ -7744,6 +8423,9 @@ cmd_protocol_monitor() {
 }
 
 cmd_protocol_monitor_install() {
+    load_config
+    normalize_monitor_noise_settings
+    save_config
     local script_path="${SCRIPT_PATH:-/usr/local/bin/yurich-panel.sh}" cron_file="/etc/cron.d/yurich-protocol-monitor" log_file="/var/log/yurich-protocol-monitor.log"
     cat > "$cron_file" <<EOF
 SHELL=/bin/bash
@@ -7801,6 +8483,7 @@ cmd_production_tools_menu() {
         echo -e "  ${BOLD}5)${RESET} Import users + subscriptions"
         echo -e "  ${BOLD}6)${RESET} Bridge builder"
         echo -e "  ${BOLD}7)${RESET} Setup / refresh Fail2Ban"
+        echo -e "  ${BOLD}8)${RESET} Отчёт стабильности за 24 часа"
         echo -e "  ${BOLD}0)${RESET} Назад"
         hr
         echo -ne "${CYAN}Выбор: ${RESET}"
@@ -7813,6 +8496,7 @@ cmd_production_tools_menu() {
             5) cmd_import_state ;;
             6) cmd_bridge_menu ;;
             7) setup_fail2ban "$(current_ssh_port)" ;;
+            8) cmd_protocol_stability_report 24 ;;
             0) break ;;
             *) warn "Неверный выбор" ;;
         esac
@@ -7900,6 +8584,7 @@ node_location_label() {
         poland2|pl2|usa2|test) printf 'Poland 2' ;;
         france|fr|paris) printf 'France' ;;
         uk|gb|united-kingdom|united_kingdom|great-britain|britain|london) printf 'United Kingdom' ;;
+        uk2|gb2|united-kingdom2|united_kingdom2) printf 'United Kingdom 2' ;;
         *) printf '%s' "$node" ;;
     esac
 }
@@ -11247,11 +11932,44 @@ ensure_qrencode_for_subscriptions() {
 }
 
 write_subscription_qr() {
-    local value="${1:-}" output="${2:-}"
+    local value="${1:-}" output="${2:-}" previous_output="${3:-}"
+    local value_hash="" previous_hash="" output_meta tmp_qr tmp_meta
     [[ -n "$value" && -n "$output" ]] || return 1
+
+    output_meta="${output}.sha256"
+    if command -v sha256sum >/dev/null 2>&1; then
+        value_hash=$(printf '%s' "$value" | sha256sum | awk '{print $1}')
+    fi
+    if [[ -n "$value_hash" && -n "$previous_output" && -f "$previous_output" && ! -L "$previous_output" \
+        && -f "${previous_output}.sha256" && ! -L "${previous_output}.sha256" ]]; then
+        previous_hash=$(tr -dc 'a-fA-F0-9' < "${previous_output}.sha256" | head -c 64)
+        if [[ "${previous_hash,,}" == "${value_hash,,}" ]]; then
+            if [[ "$(readlink -m -- "$previous_output")" != "$(readlink -m -- "$output")" ]]; then
+                install -m 644 -- "$previous_output" "$output" || return 1
+            fi
+            printf '%s\n' "$value_hash" > "$output_meta"
+            chmod 600 "$output_meta" 2>/dev/null || true
+            chmod 644 "$output" 2>/dev/null || true
+            return 0
+        fi
+    fi
+
     ensure_qrencode_for_subscriptions || return 1
-    qrencode -o "$output" -s 8 -m 2 -- "$value" 2>/dev/null || return 1
+    tmp_qr=$(mktemp "${output}.tmp.XXXXXX") || return 1
+    if ! qrencode -o "$tmp_qr" -s 8 -m 2 -- "$value" 2>/dev/null; then
+        rm -f -- "$tmp_qr"
+        return 1
+    fi
+    mv -f -- "$tmp_qr" "$output"
     chmod 644 "$output" 2>/dev/null || true
+    if [[ -n "$value_hash" ]]; then
+        tmp_meta=$(mktemp "${output_meta}.tmp.XXXXXX") || return 1
+        printf '%s\n' "$value_hash" > "$tmp_meta"
+        chmod 600 "$tmp_meta" 2>/dev/null || true
+        mv -f -- "$tmp_meta" "$output_meta"
+    else
+        rm -f -- "$output_meta"
+    fi
 }
 
 subscription_qr_cards_html() {
@@ -11435,6 +12153,16 @@ cleanup_orphan_subscription_pages() {
     load_users
     mkdir -p "$SUBS_DIR" "$SUBS_WEB_DIR"
 
+    local build_dir build_name
+    for build_dir in "$SUBS_WEB_DIR"/.*.build.*; do
+        [[ -d "$build_dir" && ! -L "$build_dir" ]] || continue
+        build_name=$(basename "$build_dir")
+        [[ "$build_name" =~ ^\.[a-fA-F0-9]{32,64}\.build\.[A-Za-z0-9._-]+$ ]] || continue
+        if [[ -n "$(find "$build_dir" -maxdepth 0 -mmin +60 -print -quit 2>/dev/null)" ]]; then
+            subscription_discard_build_dir "$build_dir"
+        fi
+    done
+
     local token_file user token
     shopt -s nullglob
     for token_file in "$SUBS_DIR"/*.token; do
@@ -11594,9 +12322,135 @@ delete_subscription_user_everywhere() {
     fi
 }
 
+subscription_discard_build_dir() {
+    local build_dir="$1"
+    python3 - "$SUBS_WEB_DIR" "$build_dir" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+target = Path(sys.argv[2])
+if target.parent.resolve() != root or not target.name.startswith('.') or '.build.' not in target.name:
+    raise SystemExit('unsafe subscription build path')
+if target.is_symlink() or (target.exists() and not target.is_dir()):
+    target.unlink(missing_ok=True)
+elif target.is_dir():
+    shutil.rmtree(target)
+PY
+}
+
+subscription_validate_build_dir() {
+    local build_dir="$1" file line
+    local required_files="index.html links.txt hiddify.txt streisand.txt happ.txt nekobox.txt karing.txt v2rayng.txt"
+    [[ -d "$build_dir" && ! -L "$build_dir" ]] || return 1
+    for file in $required_files; do
+        [[ -f "$build_dir/$file" && ! -L "$build_dir/$file" ]] || return 1
+    done
+    for file in index.html links.txt karing.txt; do
+        [[ -s "$build_dir/$file" ]] || return 1
+    done
+    for file in links.txt hiddify.txt streisand.txt happ.txt nekobox.txt karing.txt v2rayng.txt; do
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            protocol_line_forbidden "$line" && return 1
+            protocol_line_allowed "$line" || return 1
+        done < "$build_dir/$file"
+    done
+    if [[ -e "$build_dir/browser.txt" ]]; then
+        [[ -s "$build_dir/browser.txt" && ! -L "$build_dir/browser.txt" ]] || return 1
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ "$line" =~ ^https://[^/@:]+:[^/@]+@[^/:?#]+:443(/.*)?(#.*)?$ ]] || return 1
+        done < "$build_dir/browser.txt"
+    fi
+}
+
+subscription_publish_page_dir() {
+    local build_dir="$1" final_dir="$2"
+    python3 - "$SUBS_WEB_DIR" "$build_dir" "$final_dir" <<'PY'
+import ctypes
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+build = Path(sys.argv[2])
+final = Path(sys.argv[3])
+token_re = re.compile(r'^[a-fA-F0-9]{32,64}$')
+
+if build.parent.resolve() != root or final.parent.resolve() != root:
+    raise SystemExit('subscription publish path escaped web root')
+if not token_re.fullmatch(final.name):
+    raise SystemExit('invalid subscription token directory')
+if not build.name.startswith(f'.{final.name}.build.') or not build.is_dir() or build.is_symlink():
+    raise SystemExit('invalid subscription staging directory')
+
+def remove_path(path: Path) -> None:
+    if path.parent.resolve() != root or not path.name.startswith('.'):
+        raise RuntimeError('refusing unsafe cleanup path')
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        path.unlink(missing_ok=True)
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+if final.exists() or final.is_symlink():
+    exchanged = False
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+        renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        renameat2.restype = ctypes.c_int
+        if renameat2(-100, os.fsencode(build), -100, os.fsencode(final), 2) != 0:
+            errno_value = ctypes.get_errno()
+            raise OSError(errno_value, os.strerror(errno_value))
+        exchanged = True
+    except (AttributeError, OSError, TypeError):
+        rollback = root / f'.{final.name}.rollback.{os.getpid()}'
+        remove_path(rollback)
+        os.rename(final, rollback)
+        try:
+            os.rename(build, final)
+        except Exception:
+            os.rename(rollback, final)
+            raise
+        remove_path(rollback)
+    if exchanged:
+        remove_path(build)
+else:
+    os.rename(build, final)
+os.chmod(final, 0o755)
+PY
+}
+
+subscription_finalize_generated_page() {
+    local build_dir="$1" final_dir="$2" user="$3"
+    [[ -n "$build_dir" ]] || return 0
+
+    if ! subscription_validate_build_dir "$build_dir"; then
+        subscription_discard_build_dir "$build_dir"
+        err "Subscription staging validation failed: $user"
+        return 1
+    fi
+    if ! subscription_publish_page_dir "$build_dir" "$final_dir"; then
+        subscription_discard_build_dir "$build_dir" 2>/dev/null || true
+        err "Atomic subscription publish failed: $user"
+        return 1
+    fi
+    if [[ -e "$build_dir" || -L "$build_dir" ]]; then
+        if ! subscription_discard_build_dir "$build_dir"; then
+            err "Atomic subscription cleanup failed: $user"
+            return 1
+        fi
+    fi
+}
+
 generate_subscription_page() {
-    load_config
-    load_users
+    if [[ "${SUBSCRIPTION_REBUILD_WORKER:-0}" != "1" ]]; then
+        load_config
+        load_users
+    fi
 
     local user="$1"
     if ! is_valid_proxy_user "$user"; then
@@ -11622,12 +12476,21 @@ generate_subscription_page() {
         return 1
     }
 
-    ensure_web_privacy_files
+    if [[ "${SUBSCRIPTION_REBUILD_WORKER:-0}" != "1" ]]; then
+        ensure_web_privacy_files
+    fi
 
-    local token token_file page_dir links_file hiddify_file streisand_file happ_file browser_file nekobox_file karing_file v2rayng_file pingtunnel_file naive_pass naive_uri hy2_uri expiry_label expiry_tag node_links node_app_links relay_links active_links app_links happ_links browser_links v2rayng_links
+    local token token_file page_dir final_page_dir build_page_dir="" links_file hiddify_file streisand_file happ_file browser_file nekobox_file karing_file v2rayng_file pingtunnel_file naive_pass naive_uri hy2_uri expiry_label expiry_tag node_links naive_extra_links node_app_links remote_http_links remote_http_app_links relay_source_links relay_links active_links app_links happ_links browser_links v2rayng_links
     token_file="${SUBS_DIR}/${user}.token"
     token=$(get_or_create_token_file "$token_file")
-    page_dir="${SUBS_WEB_DIR}/${token}"
+    final_page_dir="${SUBS_WEB_DIR}/${token}"
+    if [[ "${SUBSCRIPTION_ATOMIC_PUBLISH:-1}" == "1" ]]; then
+        build_page_dir=$(mktemp -d "${SUBS_WEB_DIR}/.${token}.build.XXXXXX") || return 1
+        chmod 700 "$build_page_dir"
+        page_dir="$build_page_dir"
+    else
+        page_dir="$final_page_dir"
+    fi
     links_file="${page_dir}/links.txt"
     hiddify_file="${page_dir}/hiddify.txt"
     streisand_file="${page_dir}/streisand.txt"
@@ -11638,7 +12501,7 @@ generate_subscription_page() {
     v2rayng_file="${page_dir}/v2rayng.txt"
     pingtunnel_file="${page_dir}/pingtunnel.txt"
     mkdir -p "$page_dir"
-    chmod 755 "$page_dir"
+    [[ -n "$build_page_dir" ]] || chmod 755 "$page_dir"
     expiry_label=$(user_expiry_label "$user")
     expiry_tag=$(user_expiry_tag "$user")
 
@@ -11652,10 +12515,7 @@ generate_subscription_page() {
     if [[ -n "${BROWSER_SUBSCRIPTION_PROFILES:-}" ]]; then
         if ! browser_links=$(browser_subscription_links_for_user "$user" "$naive_pass"); then
             err "Некорректный BROWSER_SUBSCRIPTION_PROFILES"
-            return 1
-        fi
-        if [[ -n "$naive_pass" && -z "$browser_links" ]]; then
-            err "Browser subscription не содержит валидных профилей"
+            [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
             return 1
         fi
     fi
@@ -11668,7 +12528,7 @@ generate_subscription_page() {
         fi
     fi
 
-    local uuid reality_link github_test_link reality_links reality_public_port reality_public_label github_test_users_norm github_test_sni
+    local uuid reality_link github_test_link reality_links reality_public_port reality_public_label github_test_users_norm github_test_sni local_xhttp_link
     reality_public_port=$(xray_reality_public_port)
     uuid=$(get_xray_user_uuid "$user" 2>/dev/null || true)
     reality_link=""
@@ -11690,10 +12550,34 @@ generate_subscription_page() {
         [[ -n "$github_test_link" ]] && printf '%s\n' "$github_test_link"
     } | awk 'NF')
     node_links=$(node_links_for_user "$user" "$naive_pass" "$expiry_tag" 2>/dev/null || true)
-    node_app_links=$(node_app_links_for_user "$user" 2>/dev/null || true)
-    if ! relay_links=$(subscription_vless_relay_links_for_user "$user" "$node_app_links"); then
-        err "Некорректный VLESS_RELAY_PROFILES или недоступна исходная node"
+    if ! naive_extra_links=$(naive_extra_links_for_user "$user" "$naive_pass" "$expiry_tag"); then
+        err "Некорректный NAIVE_EXTRA_PROFILES"
+        [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
         return 1
+    fi
+    if ! node_app_links=$(node_app_links_for_user "$user"); then
+        err "Не удалось получить профили node для подписки $user"
+        [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
+        return 1
+    fi
+    if ! remote_http_links=$(subscription_http_node_links_for_user "$user" 2>/dev/null); then
+        err "Недоступен или пустой HTTPS-источник node для подписки $user"
+        [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
+        return 1
+    fi
+    remote_http_app_links=$(printf '%s\n' "$remote_http_links" | awk 'NF && /^(hy2:\/\/|hysteria2:\/\/|vless:\/\/)/')
+    relay_source_links=$({
+        [[ -n "$reality_links" ]] && printf '%s\n' "$reality_links"
+        [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+    } | awk 'NF')
+    if ! relay_links=$(subscription_vless_relay_links_for_user "$user" "$relay_source_links"); then
+        err "Некорректный VLESS_RELAY_PROFILES или недоступна исходная node"
+        [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
+        return 1
+    fi
+    local_xhttp_link=""
+    if [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" && -n "$uuid" ]]; then
+        local_xhttp_link=$(node_xhttp_link_for_user "$user" "" "$DOMAIN") || return 1
     fi
     local subscription_local_enabled subscription_local_position local_links local_app_links
     subscription_local_enabled="${SUBSCRIPTION_LOCAL_ENABLED:-1}"
@@ -11707,30 +12591,38 @@ generate_subscription_page() {
         [[ -n "$naive_uri" ]] && printf '%s\n' "$naive_uri"
         [[ -n "$hy2_uri" ]] && printf '%s\n' "$hy2_uri"
         [[ -n "$reality_links" ]] && printf '%s\n' "$reality_links"
+        if [[ -n "$local_xhttp_link" ]]; then printf '%s\n' "$local_xhttp_link"; fi
     } | awk 'NF')
     local_app_links=$({
         [[ -n "$hy2_uri" ]] && printf '%s\n' "$hy2_uri"
         [[ -n "$reality_links" ]] && printf '%s\n' "$reality_links"
+        if [[ -n "$local_xhttp_link" ]]; then printf '%s\n' "$local_xhttp_link"; fi
     } | awk 'NF')
     if [[ "$subscription_local_enabled" == "0" ]]; then
         active_links=$({
             [[ -n "$node_links" ]] && printf '%s\n' "$node_links"
+            [[ -n "$naive_extra_links" ]] && printf '%s\n' "$naive_extra_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$remote_http_links" ]] && printf '%s\n' "$remote_http_links"
             [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
         app_links=$({
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$remote_http_app_links" ]] && printf '%s\n' "$remote_http_app_links"
             [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
     elif [[ "$subscription_local_position" == "last" ]]; then
         active_links=$({
             [[ -n "$node_links" ]] && printf '%s\n' "$node_links"
+            [[ -n "$naive_extra_links" ]] && printf '%s\n' "$naive_extra_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$remote_http_links" ]] && printf '%s\n' "$remote_http_links"
             [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
             [[ -n "$local_links" ]] && printf '%s\n' "$local_links"
         } | awk 'NF')
         app_links=$({
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$remote_http_app_links" ]] && printf '%s\n' "$remote_http_app_links"
             [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
             [[ -n "$local_app_links" ]] && printf '%s\n' "$local_app_links"
         } | awk 'NF')
@@ -11738,12 +12630,15 @@ generate_subscription_page() {
         active_links=$({
             [[ -n "$local_links" ]] && printf '%s\n' "$local_links"
             [[ -n "$node_links" ]] && printf '%s\n' "$node_links"
+            [[ -n "$naive_extra_links" ]] && printf '%s\n' "$naive_extra_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$remote_http_links" ]] && printf '%s\n' "$remote_http_links"
             [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
         app_links=$({
             [[ -n "$local_app_links" ]] && printf '%s\n' "$local_app_links"
             [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+            [[ -n "$remote_http_app_links" ]] && printf '%s\n' "$remote_http_app_links"
             [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
     fi
@@ -11828,12 +12723,12 @@ generate_subscription_page() {
     qr_happ_png="${page_dir}/qr-happ.png"
     qr_nekobox_png="${page_dir}/qr-nekobox.png"
     qr_v2rayng_png="${page_dir}/qr-v2rayng.png"
-    write_subscription_qr "$links_url" "$qr_links_png" || rm -f "$qr_links_png"
-    write_subscription_qr "$hiddify_url" "$qr_hiddify_png" || rm -f "$qr_hiddify_png"
-    write_subscription_qr "$streisand_url" "$qr_streisand_png" || rm -f "$qr_streisand_png"
+    write_subscription_qr "$links_url" "$qr_links_png" "${final_page_dir}/qr-links.png" || rm -f "$qr_links_png"
+    write_subscription_qr "$hiddify_url" "$qr_hiddify_png" "${final_page_dir}/qr-hiddify.png" || rm -f "$qr_hiddify_png"
+    write_subscription_qr "$streisand_url" "$qr_streisand_png" "${final_page_dir}/qr-streisand.png" || rm -f "$qr_streisand_png"
     rm -f "$qr_happ_png"
-    write_subscription_qr "$nekobox_url" "$qr_nekobox_png" || rm -f "$qr_nekobox_png"
-    write_subscription_qr "$v2rayng_url" "$qr_v2rayng_png" || rm -f "$qr_v2rayng_png"
+    write_subscription_qr "$nekobox_url" "$qr_nekobox_png" "${final_page_dir}/qr-nekobox.png" || rm -f "$qr_nekobox_png"
+    write_subscription_qr "$v2rayng_url" "$qr_v2rayng_png" "${final_page_dir}/qr-v2rayng.png" || rm -f "$qr_v2rayng_png"
     subscription_logo_source="${SUBSCRIPTION_LOGO_PATH:-$SUBSCRIPTION_LOGO_PATH_DEFAULT}"
     subscription_logo_name="yurich-connect-logo.png"
     if [[ -s "$subscription_logo_source" ]]; then
@@ -11860,7 +12755,7 @@ generate_subscription_page() {
     fi
     title="Yurich Connect: подписка ${user}"
     safe_user=$(html_escape_text "$user")
-    safe_domain=$(html_escape_text "$DOMAIN")
+    safe_domain=$(html_escape_text "$subscription_domain")
     safe_expiry_label=$(html_escape_text "$expiry_label")
     if [[ -n "$(get_user_expiry "$user" 2>/dev/null || true)" ]]; then
         safe_days_left=$(html_escape_text "$(days_until_expiry "$(get_user_expiry "$user")" 2>/dev/null || printf '0')")
@@ -11936,7 +12831,7 @@ EOF
                 cp -f "${wg_conf%.conf}.png" "$wg_page_qr" 2>/dev/null || true
                 chmod 644 "$wg_page_qr" 2>/dev/null || true
             else
-                write_subscription_qr "${sub_url}${wg_base}" "$wg_page_qr" || rm -f "$wg_page_qr"
+                write_subscription_qr "${sub_url}${wg_base}" "$wg_page_qr" "${final_page_dir}/qr-${wg_base%.conf}.png" || rm -f "$wg_page_qr"
             fi
             safe_wg_label=$(html_escape_text "$wg_label")
             safe_wg_conf_url=$(html_escape_text "${sub_url}${wg_base}")
@@ -12191,6 +13086,8 @@ document.querySelectorAll('.copy').forEach(function(btn){
 </html>
 EOF
         chmod 644 "${page_dir}/index.html"
+        subscription_finalize_generated_page "$build_page_dir" "$final_page_dir" "$user" || return 1
+        build_page_dir=""
         printf '%s\n' "$sub_url"
         return 0
     fi
@@ -12453,6 +13350,8 @@ document.querySelectorAll('.copy').forEach(function(btn){
 </html>
 EOF
         chmod 644 "${page_dir}/index.html"
+        subscription_finalize_generated_page "$build_page_dir" "$final_page_dir" "$user" || return 1
+        build_page_dir=""
         printf '%s\n' "$sub_url"
         return 0
     fi
@@ -12707,6 +13606,8 @@ document.querySelectorAll('.copy').forEach(function(btn){
 </html>
 EOF
         chmod 644 "${page_dir}/index.html"
+        subscription_finalize_generated_page "$build_page_dir" "$final_page_dir" "$user" || return 1
+        build_page_dir=""
         printf '%s\n' "$sub_url"
         return 0
     fi
@@ -13076,6 +13977,8 @@ document.querySelectorAll('.copy').forEach(function(btn){
 </html>
 EOF
     chmod 644 "${page_dir}/index.html"
+    subscription_finalize_generated_page "$build_page_dir" "$final_page_dir" "$user" || return 1
+    build_page_dir=""
     printf '%s\n' "$sub_url"
 }
 
@@ -14640,6 +15543,67 @@ rotate_user_credentials() {
         ok "Naive/Hysteria password обновлён"
     fi
     warn "На устройствах нужно обновить подписку, старые профили больше не действуют"
+}
+
+cmd_users_list_machine() {
+    local user state expires days chat_id credential_state subscription_state
+    local stored_hash encrypted_secret token token_file page_dir
+
+    while IFS= read -r user; do
+        is_valid_proxy_user "$user" || continue
+
+        state="lifetime"
+        expires=$(get_user_expiry "$user" 2>/dev/null || true)
+        days=""
+        if user_is_blocked "$user"; then
+            state="blocked"
+        elif [[ -n "$expires" ]]; then
+            days=$(days_until_expiry "$expires" 2>/dev/null || true)
+            if [[ "$days" =~ ^-?[0-9]+$ ]]; then
+                if (( days < 0 )); then
+                    state="expired"
+                elif (( days <= 5 )); then
+                    state="expiring"
+                else
+                    state="active"
+                fi
+            else
+                expires=""
+                days=""
+            fi
+        fi
+
+        chat_id=$(user_meta_get "$user" TELEGRAM_CHAT_ID 2>/dev/null || true)
+        if is_valid_tg_chat_id "$chat_id"; then
+            chat_id="yes"
+        else
+            chat_id="no"
+        fi
+
+        credential_state="xray-only"
+        if get_user_hash "$user" >/dev/null 2>&1; then
+            stored_hash=$(credential_file_value "$USERS_FILE" "$user" 2>/dev/null || true)
+            encrypted_secret=$(credential_file_value "$USERS_SECRETS_FILE" "$user" 2>/dev/null || true)
+            if is_valid_proxy_hash "$stored_hash" && is_valid_encrypted_proxy_secret "$encrypted_secret"; then
+                credential_state="protected"
+            else
+                credential_state="legacy"
+            fi
+        fi
+
+        subscription_state="no"
+        token_file="${SUBS_DIR}/${user}.token"
+        token=$(tr -d '\r\n' < "$token_file" 2>/dev/null || true)
+        if [[ "$token" =~ ^[A-Fa-f0-9]{48}$ ]]; then
+            page_dir="${SUBS_WEB_DIR}/${token}"
+            if [[ -s "$page_dir/index.html" ]]; then
+                subscription_state="yes"
+            fi
+        fi
+
+        printf 'USER|%s|%s|%s|%s|%s|%s|%s\n' \
+            "$user" "$state" "$expires" "$days" "$chat_id" "$credential_state" "$subscription_state"
+    done < <(list_subscription_users)
 }
 
 cmd_users() {
@@ -19538,9 +20502,15 @@ dns_monitor_block_ok() {
 cmd_dns_monitor() {
     load_config
     local failed=0 status count updated_at message public_53 first_blocked gateway_ip fail_details=""
-    local domain ms latency_warn=0 latency_warn_details="" dns_latency_warn_ms="${DNS_MONITOR_LATENCY_WARN_MS:-250}" dns_latency_fail_ms="${DNS_MONITOR_LATENCY_FAIL_MS:-1500}"
+    local domain ms valid_status invalid_status latency_warn=0 latency_warn_details="" dns_latency_warn_ms="${DNS_MONITOR_LATENCY_WARN_MS:-250}" dns_latency_fail_ms="${DNS_MONITOR_LATENCY_FAIL_MS:-1500}"
+    local alert_repeat="${DNS_MONITOR_ALERT_REPEAT:-3}" alert_cooldown_minutes="${DNS_MONITOR_ALERT_COOLDOWN_MINUTES:-180}"
+    local alert_state="${DNS_MONITOR_ALERT_STATE:-$CONFIG_DIR/dns-monitor-alert.state}" recovery_alert="${DNS_MONITOR_RECOVERY_ALERT:-1}"
+    local fingerprint state_line state_a state_b state_c state_d prev_count=0 prev_sent=0 prev_fingerprint=""
+    local issue_count=1 now_ts cooldown_sec should_alert=0 last_sent=0 safe_fail_details
     is_canonical_uint_in_range "$dns_latency_warn_ms" 1 600000 || dns_latency_warn_ms=250
     is_canonical_uint_in_range "$dns_latency_fail_ms" 1 600000 || dns_latency_fail_ms=1500
+    is_canonical_uint_in_range "$alert_repeat" 1 10 || alert_repeat=3
+    is_canonical_uint_in_range "$alert_cooldown_minutes" 5 10080 || alert_cooldown_minutes=180
     if systemctl is-active --quiet unbound 2>/dev/null; then
         ok "Unbound active"
     else
@@ -19554,6 +20524,22 @@ cmd_dns_monitor() {
         err "DNS resolve failed"
         failed=$((failed + 1))
         fail_details+=$'- Local DNS resolve failed on 127.0.0.1\n'
+    fi
+    valid_status=$(dig @127.0.0.1 sigok.verteiltesysteme.net A +time=4 +tries=1 2>/dev/null | awk -F'status: ' '/status:/ {split($2,a,","); print a[1]; exit}' || true)
+    invalid_status=$(dig @127.0.0.1 dnssec-failed.org A +time=4 +tries=1 2>/dev/null | awk -F'status: ' '/status:/ {split($2,a,","); print a[1]; exit}' || true)
+    if [[ "$valid_status" == "NOERROR" && "$invalid_status" == "SERVFAIL" ]]; then
+        ok "DNSSEC validation OK"
+    else
+        err "DNSSEC validation failed: valid=${valid_status:-none}, invalid=${invalid_status:-none}"
+        failed=$((failed + 1))
+        fail_details+="- DNSSEC validation failed: valid=${valid_status:-none}, invalid=${invalid_status:-none}"$'\n'
+    fi
+    if unbound-checkconf -o serve-expired "$DNS_CONF" 2>/dev/null | grep -qi '^yes$'; then
+        ok "DNS stale-cache resilience enabled"
+    else
+        err "Unbound serve-expired is disabled"
+        failed=$((failed + 1))
+        fail_details+=$'- Unbound serve-expired is disabled\n'
     fi
     for domain in cloudflare.com google.com telegram.org github.com; do
         if ms=$(dns_monitor_query_time_ms "$domain"); then
@@ -19649,20 +20635,67 @@ cmd_dns_monitor() {
         printf '%s' "$latency_warn_details"
     fi
     if [[ "$failed" -ne 0 ]]; then
-        tg_send "⚠️ <b>Yurich DNS monitor</b>
+        fingerprint=$(printf '%s\n' "$fail_details" | monitor_issue_fingerprint)
+        if [[ -s "$alert_state" ]]; then
+            state_line=$(head -n1 "$alert_state" 2>/dev/null || true)
+            IFS='|' read -r state_a state_b state_c state_d <<< "$state_line" || true
+            if [[ "$state_a" == "DNSMON1" ]]; then
+                prev_count="$state_b"; prev_sent="$state_c"; prev_fingerprint="$state_d"
+            fi
+        fi
+        is_canonical_uint_in_range "$prev_count" 0 1000000000 || prev_count=0
+        is_canonical_uint_in_range "$prev_sent" 0 9999999999 || prev_sent=0
+        if [[ "$prev_fingerprint" == "$fingerprint" ]]; then
+            issue_count=$((prev_count + 1))
+        fi
+        now_ts=$(date +%s)
+        cooldown_sec=$((alert_cooldown_minutes * 60))
+        if (( issue_count >= alert_repeat && (prev_sent == 0 || now_ts - prev_sent >= cooldown_sec) )); then
+            should_alert=1
+            last_sent="$now_ts"
+        else
+            last_sent="$prev_sent"
+        fi
+        { printf 'DNSMON1|%s|%s|%s\n' "$issue_count" "$last_sent" "$fingerprint" > "$alert_state" && chmod 600 "$alert_state"; } 2>/dev/null || true
+        if [[ "$should_alert" -eq 1 ]]; then
+            safe_fail_details=$(html_escape_text "${fail_details:-details unavailable}")
+            tg_send "⚠️ <b>Yurich DNS monitor</b>
+📡 Сервер: <code>$(hostname)</code>
+🌐 Домен: <code>${DOMAIN:-unknown}</code>
+🔕 <code>Антиспам: повтор ${issue_count}, cooldown ${alert_cooldown_minutes} мин.</code>
+🕐 $(date '+%Y-%m-%d %H:%M:%S')
+
+<pre>DNS monitor failed=${failed}
+${safe_fail_details}
+filter=${status:-unknown} count=${count:-0} updated=${updated_at:-unknown}
+${message:-}</pre>"
+        else
+            info "DNS alert suppressed: repeat=${issue_count}/${alert_repeat}, cooldown=${alert_cooldown_minutes}m"
+        fi
+        return 1
+    fi
+    if [[ -s "$alert_state" && "$recovery_alert" == "1" ]]; then
+        state_line=$(head -n1 "$alert_state" 2>/dev/null || true)
+        IFS='|' read -r state_a state_b state_c state_d <<< "$state_line" || true
+        prev_sent=0
+        [[ "$state_a" == "DNSMON1" ]] && prev_sent="$state_c"
+        is_canonical_uint_in_range "$prev_sent" 0 9999999999 || prev_sent=0
+        if (( prev_sent > 0 )); then
+            tg_send "✅ <b>Yurich DNS monitor восстановлен</b>
 📡 Сервер: <code>$(hostname)</code>
 🌐 Домен: <code>${DOMAIN:-unknown}</code>
 🕐 $(date '+%Y-%m-%d %H:%M:%S')
 
-<pre>DNS monitor failed=${failed}
-${fail_details:-details unavailable}
-filter=${status:-unknown} count=${count:-0} updated=${updated_at:-unknown}
-${message:-}</pre>"
-        return 1
+<pre>DNS, DNSSEC и security filter снова проходят проверку.</pre>"
+        fi
     fi
+    rm -f "$alert_state" 2>/dev/null || true
 }
 
 cmd_dns_monitor_install() {
+    load_config
+    normalize_monitor_noise_settings
+    save_config
     cat > "$DNS_FILTER_MONITOR_CRON" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
@@ -19870,6 +20903,10 @@ EOF
     do-udp: yes
     do-tcp: yes
 
+    # Private recursive resolver: keep DNSSEC validation and disable the ECS
+    # subnet cache, which does not interact with prefetch/serve-expired.
+    module-config: "validator iterator"
+
     # Never become an open resolver.
     access-control: 0.0.0.0/0 refuse
     access-control: 127.0.0.0/8 allow
@@ -19903,6 +20940,12 @@ EOF
     # Cache and speed.
     prefetch: yes
     prefetch-key: yes
+    # RFC 8767 style resilience: answer from validated stale cache while
+    # authoritative servers are temporarily unreachable, then refresh it.
+    serve-expired: yes
+    serve-expired-ttl: 86400
+    serve-expired-reply-ttl: 30
+    serve-expired-client-timeout: 1800
     num-threads: 2
     so-rcvbuf: 256k
     ip-ratelimit: 200
@@ -20134,6 +21177,11 @@ cmd_dns_status() {
         echo -e "  Security filter: ${YELLOW}выключен${RESET}"
     fi
     [[ -f "$DNS_CONF" ]] && unbound-checkconf "$DNS_CONF" >/dev/null 2>&1 && ok "Конфиг Unbound валиден" || warn "Конфиг Unbound не прошёл проверку"
+    if unbound-checkconf -o serve-expired "$DNS_CONF" 2>/dev/null | grep -qi '^yes$'; then
+        ok "Serve-expired включён для устойчивости DNS"
+    else
+        warn "Serve-expired не включён"
+    fi
 
     echo
     info "Порт 53:"
@@ -20763,7 +21811,7 @@ main() {
             help|--help|-h)
                 echo "Yurich Panel v${VERSION}"
                 echo "Usage: sudo bash yurich-panel.sh [command]"
-                echo "Commands: install status config [user] reload restart update remove logs monitor credentials-status credentials-migrate routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users hysteria hy2 hysteria-sync hysteria-repair hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
+                echo "Commands: install status config [user] reload restart update remove logs monitor credentials-status credentials-migrate routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users users-list-machine hysteria hy2 hysteria-sync hysteria-repair hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-stability-report protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes node-subscription-export fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
                 return 0
                 ;;
         esac
@@ -20791,6 +21839,7 @@ main() {
             haproxy-logs|sni-logs) cmd_haproxy_logs ;;
             haproxy-tg|haproxy-telegram) cmd_haproxy_tg ;;
             users)     cmd_users ;;
+            users-list-machine) cmd_users_list_machine ;;
             credentials-status|credential-status) cmd_credentials_status ;;
             credentials-migrate|credential-migrate) cmd_credentials_migrate ;;
             hysteria|hy2) cmd_hysteria_menu ;;
@@ -20853,6 +21902,7 @@ main() {
             protocol-benchmark-monitor|protocols-benchmark-monitor|benchmark-monitor) cmd_protocol_benchmark_monitor "${2:-}" "${3:-}" ;;
             protocol-benchmark-install|protocols-benchmark-install|benchmark-install) cmd_protocol_benchmark_install "${2:-}" "${3:-}" ;;
             protocol-benchmark-history|protocols-benchmark-history|benchmark-history) cmd_protocol_benchmark_history "${2:-30}" ;;
+            protocol-stability-report|stability-report) cmd_protocol_stability_report "${2:-24}" ;;
             protocol-health|protocols-health) cmd_protocol_health ;;
             protocol-monitor|protocols-monitor) cmd_protocol_monitor ;;
             protocol-monitor-install|protocols-monitor-install) cmd_protocol_monitor_install ;;
@@ -20914,6 +21964,7 @@ main() {
             nodes-deploy|node-deploy) cmd_nodes_deploy_script "${2:-}" ;;
             nodes-sync|node-sync) cmd_nodes_sync_users "${2:-all}" ;;
             nodes-subscriptions|nodes-rebuild-subscriptions) cmd_nodes_rebuild_subscriptions ;;
+            node-subscription-export) cmd_node_subscription_export "${2:-}" ;;
             nodes-remove|node-remove) cmd_nodes_remove "${2:-}" ;;
             fail2ban|f2b|security) setup_fail2ban "$(current_ssh_port)" ;;
             language|lang) cmd_language ;;
@@ -20927,7 +21978,7 @@ main() {
                 echo "GitHub:   ${PROJECT_GITHUB_SHORT}"
                 ;;
             *) err "Неизвестная команда: $1"
-               echo "Доступные: install status config [user] reload restart update remove logs monitor credentials-status credentials-migrate routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users hysteria hy2 hysteria-sync hysteria-repair hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-compat-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
+               echo "Доступные: install status config [user] reload restart update remove logs monitor credentials-status credentials-migrate routing-mode haproxy-status haproxy-apply haproxy-logs haproxy-tg users users-list-machine hysteria hy2 hysteria-sync hysteria-repair hysteria-port hysteria-warp-enable hysteria-warp-disable hysteria-hop-enable hysteria-hop-disable warp warp-proxy warp-full warp-health warp-protocol warp-ssh-allow xray xray-target xray-add-user [user] xray-compat-user [user] xray-rebuild vless-tune egress-ipv4 egress-dualstack pingtunnel-install pingtunnel-status pingtunnel-config pingtunnel-rotate pingtunnel-remove xray-zapret devices subscription subscription-clean private-page protocol-health protocol-validate protocol-benchmark protocol-benchmark-monitor protocol-benchmark-install protocol-benchmark-history protocol-stability-report protocol-monitor protocol-monitor-install security-audit notify-expiry-list notify-bind-tg notify-expiry-run notify-news notify-news-test expiry-enforce notify-expiry-install tg-stats bot-menu health safe-apply backup export import bridge nodes node-subscription-export fail2ban language ssh-hardening ssh-rescue sysupdate cert domains dns unbound yurich-dns yurich-dns-status yurich-dns-restart dns-open-check dns-latency-report self-update version camouflage"
                exit 1 ;;
         esac
         exit 0

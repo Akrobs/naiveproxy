@@ -1,12 +1,14 @@
 <p align="center">
-  <a href="README.md">Русский</a> · <a href="README_EN.md">English</a> · <a href="ARTICLE_RU.md">Большая статья</a> · <a href="MULTISERVER_GUIDE_RU.md">Мультисервер</a> · <a href="CREDENTIALS_MIGRATION_RU.md">Миграция credentials</a> · <a href="HAPROXY_GUIDE_RU.md">HAProxy</a>
+  <a href="README.md">Русский</a> · <a href="README_EN.md">English</a>
 </p>
 
 # Yurich Panel
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-[![Version](https://img.shields.io/badge/version-5.8.0-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+**Проект:** [Сайт](https://ivan-it.net/) · [Telegram](https://t.me/ivan_it_net) · [ВКонтакте](https://vk.ru/ivan_yurievich_it) · [Дзен](https://dzen.ru/ivanyurievich)
+
+[![Version](https://img.shields.io/badge/version-5.8.3-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -24,6 +26,7 @@
 [Подписки](#страницы-подписки) ·
 [Безопасность](#безопасность) ·
 [Диагностика](#диагностика) ·
+[Контакты](#поддержка-проекта) ·
 [Статья](ARTICLE_RU.md) ·
 [Мультисервер](MULTISERVER_GUIDE_RU.md) ·
 [HAProxy](HAPROXY_GUIDE_RU.md) ·
@@ -48,7 +51,7 @@ Yurich Panel — это единый установочный и админис�
 
 ## Что нового в текущей ветке 5.8.x
 
-Релиз `5.8.0` усиливает безопасную эксплуатацию без смены действующих UUID, паролей и URL подписок. Публичный REALITY-ключ теперь вычисляется через OpenSSL без передачи приватного ключа в аргументах процесса. Xray использует локальный Unbound только когда сервис и `127.0.0.1:53` действительно доступны, иначе сохраняет рабочий системный DNS. Browser/relay-профили проверяются до публикации файлов, а HAProxy не применяет отдельный browser SNI route без готового локального backend.
+Релиз `5.8.3` ускоряет массовую пересборку подписок без смены действующих UUID, паролей и URL. Master получает профили с каждой современной node напрямую, страницы строятся ограниченным пулом workers, а неизменившиеся QR-коды безопасно переиспользуются по SHA-256. Старые node сохраняют совместимый fallback, каждая страница по-прежнему проверяется и публикуется атомарно.
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -66,8 +69,16 @@ sudo bash yurich-panel.sh security-audit
 | GitHub-ready release | Подготовлена публичная версия без личных доменов, IP, токенов, Telegram ID и локальных путей |
 | Security policy | Добавлены `SECURITY.md`, `.gitignore`, `.gitattributes` и правила безопасной публикации |
 | Protocol benchmark | Улучшена логика `protocol-benchmark`: median/p95/slow_count и защита от ложного SLOW по одному замеру |
+| Stability report | `protocol-stability-report 24` агрегирует успехи, обрывы, jitter, потери, p95, CPU load и RAM за сутки |
+| Smart alerts | Benchmark, protocol и DNS monitor уведомляют только после трёх одинаковых сбоев, учитывают cooldown и восстановление |
 | Protocol validation | Уточнена проверка `links.txt`, `hiddify.txt`, `nekobox.txt`, `v2rayng.txt` и реальных клиентских URI |
-| Public placeholders | Контакты, donate, сайт, канал и поддержка заменены на демонстрационные значения |
+| Atomic subscriptions | Страница строится в закрытом staging-каталоге, валидируется и только потом атомарно заменяет рабочую версию |
+| Node source of truth | `enabled=0` в `nodes.conf` исключает известную node также из `browser.txt`; custom browser endpoints остаются совместимыми |
+| HTTPS node source | `SUBSCRIPTION_HTTP_NODE_SOURCES` атомарно добавляет проверенные профили node, когда SSH-management временно недоступен |
+| Faster rebuild | Профили каждой node экспортируются один раз без удалённой пересборки HTML, страницы создаются пулом из 1–4 workers, а неизменившиеся QR переиспользуются |
+| Resilient DNS | Unbound отдаёт краткоживущий проверенный stale-cache при временной недоступности авторитетных DNS |
+| Service hardening | Усилены systemd-ограничения Caddy и аудит AppArmor, auditd, автообновлений, backup и staging-каталогов |
+| Публичные контакты | README содержит официальные ссылки проекта; секреты и настройки конкретного сервера не публикуются |
 | HAProxy guide | Добавлена расширенная статья [HAPROXY_GUIDE_RU.md](HAPROXY_GUIDE_RU.md) по TCP/SNI routing на `443/tcp` |
 | Multi-server nodes | Новый пункт меню `29) [NODES] Multi-server management` |
 | Node registry | Root-only реестр `/etc/naiveproxy/nodes.conf` с `name/host/ssh/domain/role/weight/enabled` |
@@ -111,19 +122,20 @@ sudo bash yurich-panel.sh security-audit
 | Browser subscription profiles | `BROWSER_SUBSCRIPTION_PROFILES='host\|node;host2\|node2'` создаёт отдельный `browser.txt` для каждой активной подписки; пароли берутся из encrypted credential vault только во время генерации |
 | Xray DNS fallback | Локальный Unbound включается в Xray только когда resolver активен; при недоступности используется системный DNS |
 | Atomic subscription preflight | Ошибочные browser/relay-настройки отклоняются до перезаписи рабочих файлов подписки |
+| Node fetch failure | Если HTTPS-источник недоступен или три SSH-попытки к edge-узлу не удались, пересборка сообщает об ошибке; при штатной атомарной публикации прежняя страница подписки сохраняется |
 | Release integrity | Отдельные тесты проверяют версию, совпадение обоих entrypoint, SHA-256 и отсутствие типовых секретов |
-| Hysteria rollout safety | Привилегированный rollout скачивает бинарник только в закрытый временный каталог и проверяет размер, SHA-256 и версию до атомарной замены |
+| Hysteria rollout safety | Привилегированный rollout скачивает бинарник в закрытый случайный временный каталог и проверяет размер, SHA-256 и версию до атомарной замены |
 | UFW 80/tcp | ACME-порт теперь открывается через реальный `ufw limit`, а не обычный `allow` |
 | Health UFW | `health` проверяет SSH, 80/443, Hysteria, Xray и DNS-порты по включённым модулям |
 | SSH panel language | Новая команда `language` и пункт меню `28` для выбора Русский / English |
 | Config persistence | Выбранный язык сохраняется в `/etc/naiveproxy/naive.conf` |
 | Self-update | Проверка `yurich-panel.sh.sha256` перед установкой обновления; строгий режим через `NAIVEPROXY_REQUIRE_SHA=1` |
-| Pin versions | По умолчанию закреплены `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27`, `Hysteria app/v2.12.1`; можно переопределить через `NAIVEPROXY_*` |
+| Pin versions | По умолчанию закреплены `Caddy v2.11.4`, `xcaddy v0.4.6`, `forwardproxy d62c80d`, `Xray v26.3.27`, `Hysteria app/v2.12.2`; можно переопределить через `NAIVEPROXY_*` |
 | Health-check | Команда `health` проверяет Caddy, DNS, Telegram bot service, WARP, Xray и Hysteria одним отчётом |
 | Safe apply | Команда `safe-apply` валидирует включённые конфиги и откатывает Caddyfile при ошибке |
 | Backups | Команда `backup` создаёт encrypted archive `/etc/naiveproxy` и связанных конфигов через OpenSSL |
 | Export/import | Команды `export` и `import` переносят пользователей, токены подписок и метаданные сроков |
-| Срок пользователя | При создании пользователя можно выбрать 1-12 месяцев; срок отображается в конфиге и на странице подписки |
+| Срок пользователя | При создании пользователя можно выбрать 1-12 месяцев; срок отображается в конфиге и на странице подписки. Если нужного числа в целевом месяце нет, используется последний день месяца |
 | Android subscriptions | Имена URI в подписке получают метку срока, чтобы профиль проще отличался в клиентах |
 | Bridge builder | Меню 27 сохраняет bridge-профиль “мобилка → первый VPS → второй VPS” и готовит основу для Xray/sing-box chaining |
 | Production menu | Новое меню 27: health-check, safe apply, encrypted backup, export/import и bridge builder |
@@ -242,8 +254,13 @@ sudo bash yurich-panel.sh security-audit
 
 ## Быстрый старт
 
+Скачайте скрипт и контрольную сумму, проверьте файл перед запуском:
+
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh)
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256
+sha256sum -c yurich-panel.sh.sha256
+sudo bash yurich-panel.sh
 ```
 
 Во время установки скрипт спросит:
@@ -395,6 +412,8 @@ DNS (Unbound) поднимает собственный recursive Unbound resolv
 - без `0.0.0.0` bind;
 - без open resolver;
 - с UFW allowlist только для VPN CIDR;
+- с DNSSEC и `serve-expired`: при кратком сбое авторитетного DNS используется ранее проверенная запись;
+- без ECS/subnetcache, чтобы не раскрывать клиентскую подсеть и не мешать `prefetch`;
 - с отдельным standalone-проектом `yurich-dns/`.
 
 Команда `dns-open-check` проверяет текущий сервер снаружи через включённые node-серверы из `/etc/naiveproxy/nodes.conf`. Если node-серверов нет, скрипт делает только локальный self-probe и предупреждает, что полноценная внешняя проверка невозможна.
@@ -408,6 +427,9 @@ DNS (Unbound) поднимает собственный recursive Unbound resolv
 ```bash
 sudo bash yurich-panel.sh diagnose
 sudo bash yurich-panel.sh diagnose --fix
+sudo bash yurich-panel.sh protocol-validate
+sudo bash yurich-panel.sh protocol-benchmark USER 3
+sudo bash yurich-panel.sh protocol-stability-report 24
 sudo bash yurich-panel.sh ssh-hardening
 sudo bash yurich-panel.sh ssh-rescue
 sudo bash yurich-panel.sh ssh-key
@@ -634,6 +656,14 @@ VLESS_RELAY_USERS='test-user'
 
 Формат: `source-node|relay-host|relay-port|transports`. Некорректный домен, порт, transport или отсутствующая node останавливают генерацию до перезаписи рабочих файлов подписки.
 
+Если исходная node должна продолжать получать пользователей, но её прямые профили публиковать нельзя, включите relay-only режим:
+
+```bash
+SUBSCRIPTION_RELAY_ONLY_NODE_NAMES='edge1'
+```
+
+Такая node остаётся активной для `nodes-sync` и получения исходных Reality/XHTTP-параметров. Прямые HTTPS, Turbo, Reality, XHTTP и Browser-профили этой node в подписки не попадают.
+
 ## Обновление
 
 Обновить Caddy:
@@ -716,6 +746,35 @@ sudo bash yurich-panel.sh ssh-rescue
 ```
 
 ## Changelog
+
+### v5.8.3
+
+- исправлены расчёт срока подписки на границе месяца и защита пересборки от временно недоступных HTTPS/SSH-источников профилей;
+- восстановлены проверки SNI без учёта регистра и предварительная проверка подписки перед ротацией credentials;
+- добавлена внутренняя команда `node-subscription-export`, которая отдаёт master только актуальные Hysteria2 и VLESS Reality URI без пересборки страниц на edge-node;
+- сохранён автоматический fallback для node со старой версией скрипта;
+- массовая пересборка использует ограниченный пул workers: автоматически 1–4 или явно 1–8 через `SUBSCRIPTION_REBUILD_JOBS`;
+- неизменившиеся QR-коды переиспользуются только при совпадении SHA-256; URL подписки в cache-файле не хранится;
+- блокировка `flock`, закрытый staging, проверка файлов, атомарная публикация и сохранение прежней страницы при ошибке не изменены;
+- добавлен отдельный sandbox-тест очереди workers, direct export и QR-cache.
+
+### v5.8.2
+
+- все форматы подписок используют состояние node из `nodes.conf`; отключённая известная node больше не остаётся в `browser.txt`;
+- массовая пересборка защищена `flock`, забирает данные каждой node один раз и сообщает список пользователей с ошибками;
+- новые страницы собираются в закрытом staging-каталоге, проходят проверку URI/файлов и публикуются атомарно с rollback;
+- benchmark, protocol monitor и DNS monitor требуют три повторения одинаковой проблемы и отправляют отдельное уведомление о восстановлении;
+- добавлен 24-часовой `protocol-stability-report` с jitter, packet loss, p95, load и использованием RAM;
+- Unbound получил `serve-expired`, а DNS monitor проверяет DNSSEC valid/bogus и состояние stale-cache;
+- расширен `security-audit`: AppArmor, auditd, unattended-upgrades, systemd hardening, свежий encrypted backup и забытые staging-каталоги;
+- Caddy service получил дополнительные systemd sandbox-ограничения без смены пользователя и портов.
+
+### v5.8.1
+
+- Hysteria 2 обновлена до checksum-pinned `v2.12.2`, rollout и rollback используют тот же проверенный бинарник;
+- добавлена команда `users-list-machine` для безопасного read-only обмена с Yurich Control Center без вывода паролей, UUID и Telegram ID;
+- основной и legacy entrypoint снова синхронизированы побайтно, SHA-256 sidecar пересобраны;
+- release-integrity и credential-storage тесты обновлены для ветки `5.8.1`.
 
 ### v5.8.0
 
@@ -1117,7 +1176,8 @@ sudo bash yurich-panel.sh ssh-rescue
 
 ## Поддержка проекта
 
-- Telegram: [@your_channel](https://t.me/your_channel)
-- Website: [example.com](https://example.com)
-- GitHub: [ivan-yurich/naiveproxy](https://github.com/ivan-yurich/naiveproxy)
-- Донат: [Donation page](https://example.com/donate)
+- Сайт: [ivan-it.net](https://ivan-it.net/)
+- Новости и связь: [Telegram](https://t.me/ivan_it_net), [ВКонтакте](https://vk.ru/ivan_yurievich_it), [Дзен](https://dzen.ru/ivanyurievich)
+- Код и сообщения об ошибках: [GitHub](https://github.com/ivan-yurich/naiveproxy/issues)
+
+По вопросам безопасности следуйте [SECURITY.md](SECURITY.md): не публикуйте токены, ключи и клиентские ссылки в открытых issues.
