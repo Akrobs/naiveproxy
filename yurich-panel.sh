@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-#   Yurich Panel v5.8.3
+#   Yurich Panel v5.8.12
 #   Стек: Caddy 2 + klzgrad/forwardproxy@naive + Hysteria 2 + WARP + Xray Modern
 #   ОС: Ubuntu 20.04 / 22.04 / 24.04
 #
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-VERSION="5.8.3"
+VERSION="5.8.12"
 LANG_UI="${NAIVEPROXY_LANG:-ru}"  # ru или en — export NAIVEPROXY_LANG=en
 GITHUB_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh"
 GITHUB_SHA256_RAW="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256"
@@ -21,7 +21,7 @@ GITHUB_API="https://api.github.com/repos/ivan-yurich/naiveproxy/releases/latest"
 PROJECT_GITHUB_URL="https://github.com/ivan-yurich/naiveproxy"
 PROJECT_GITHUB_SHORT="github.com/ivan-yurich/naiveproxy"
 PROJECT_WEBSITE_URL="${YURICH_PROJECT_WEBSITE_URL:-$PROJECT_GITHUB_URL}"
-PROJECT_DONATION_URL="${YURICH_DONATION_URL:-https://dzen.ru/ivanyurievich?donate=true}"
+PROJECT_DONATION_URL="${YURICH_DONATION_URL:-}"
 ANDROID_APP_RELEASES_URL="https://github.com/ivan-yurich/Yurich-Connect-Android/releases"
 WINDOWS_APP_RELEASES_URL="https://github.com/ivan-yurich/yurich-connect-windows/releases"
 STREISAND_APP_URL="https://apps.apple.com/us/app/streisand/id6450534064"
@@ -31,9 +31,9 @@ TELEGRAM_BOT_URL="${YURICH_TELEGRAM_BOT_URL:-https://t.me/your_notification_bot}
 TELEGRAM_ID_BOT_URL="${YURICH_TELEGRAM_ID_BOT_URL:-https://t.me/getmyid_bot}"
 SUPPORT_EMAIL="${YURICH_SUPPORT_EMAIL:-support@example.com}"
 SALES_BOT_CHANNEL_URL_DEFAULT="${YURICH_SALES_BOT_CHANNEL_URL:-https://t.me/your_channel}"
-SALES_BOT_PLANS_DEFAULT="1d:50,1m:250,3m:700,6m:1300,12m:2400"
+SALES_BOT_PLANS_DEFAULT="1d:50,1m:350,3m:980,6m:1820,12m:3360"
 SALES_BOT_CURRENCY_DEFAULT="RUB"
-SALES_BOT_PAYMENT_TEXT_DEFAULT="Тарифы Yurich Connect: 1 день - 50 руб, 1 месяц - 250 руб, 3 месяца - 700 руб, 6 месяцев - 1300 руб, 12 месяцев - 2400 руб. После оплаты отправь скрин платежа сюда в бот. Администратор проверит оплату и включит подписку."
+SALES_BOT_PAYMENT_TEXT_DEFAULT="Переведи точную сумму из текущей заявки по QR-коду и отправь скрин платежа сюда в бот. Администратор проверит поступление денег и подтвердит доступ вручную. Скрин сам по себе не активирует подписку."
 SALES_BOT_PAYMENT_QR_PATH_DEFAULT="/etc/naiveproxy/sales-bot/payment-qr.jpg"
 SALES_BOT_WELCOME_ANIMATION_PATH_DEFAULT="/etc/naiveproxy/sales-bot/welcome.gif"
 SALES_BOT_WELCOME_IMAGE_PATH_DEFAULT="/etc/naiveproxy/sales-bot/welcome.jpg"
@@ -41,11 +41,11 @@ SALES_BOT_CAPTCHA_TTL_SECONDS_DEFAULT="86400"
 EXPIRED_DELETE_GRACE_DAYS_DEFAULT="5"
 SCRIPT_PATH="/usr/local/bin/yurich-panel.sh"
 LEGACY_SCRIPT_PATH="/usr/local/bin/naiveproxy.sh"
-CADDY_VERSION_PIN="${NAIVEPROXY_CADDY_VERSION:-v2.11.4}"
+CADDY_VERSION_PIN="${NAIVEPROXY_CADDY_VERSION:-v2.11.7}"
 XCADDY_VERSION_PIN="${NAIVEPROXY_XCADDY_VERSION:-v0.4.6}"
 FORWARDPROXY_REF_PIN="${NAIVEPROXY_FORWARDPROXY_REF:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
 XRAY_VERSION_PIN="${NAIVEPROXY_XRAY_VERSION:-v26.3.27}"
-HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.12.3}"
+HYSTERIA_VERSION_PIN="${NAIVEPROXY_HYSTERIA_VERSION:-app/v2.13.0}"
 PINGTUNNEL_DEFAULT_VERSION="master-2c83808a81b56784d639c952b70baada6601e2d7"
 PINGTUNNEL_VERSION_PIN="${NAIVEPROXY_PINGTUNNEL_VERSION:-$PINGTUNNEL_DEFAULT_VERSION}"
 PINGTUNNEL_SHA256_AMD64="5d5847a17099b9359c55a959f85a1994232cf8a089642bd632bfa64e5bdfe8af"
@@ -293,6 +293,15 @@ EOF
 #   БЛОК 2: SSH HARDENING
 # ══════════════════════════════════════════════════════════════
 
+ssh_user_has_admin_access() {
+    local user="$1" privileges
+    [[ "$user" == root ]] && return 0
+    command -v sudo >/dev/null 2>&1 || return 1
+    privileges=$(LC_ALL=C sudo -l -U "$user" 2>/dev/null) || return 1
+    printf '%s\n' "$privileges" | grep -Eq \
+        '^[[:space:]]*\((ALL|root)([[:space:]]*:[[:space:]]*(ALL|root))?\)[[:space:]]+((NOPASSWD|PASSWD):[[:space:]]*)?ALL([[:space:]]|$)'
+}
+
 cmd_ssh_hardening() {
     hr
     echo -e "${BOLD}  SSH Hardening${RESET}"
@@ -469,21 +478,40 @@ cmd_ssh_hardening() {
     # Безопасные значения по умолчанию: не отключаем текущие способы входа без явного согласия.
     local permit_root="yes"
     local password_auth="yes"
+    local admin_login_verified=0
 
-    if [[ "$target_user" != "root" ]]; then
+    if [[ "$target_user" != "root" ]] && ssh_user_has_admin_access "$target_user"; then
         echo -ne "${YELLOW}Запретить SSH вход root? [y/N]: ${RESET}"
         read -r ans_disable_root
-        [[ "${ans_disable_root,,}" == "y" ]] && permit_root="no"
+        if [[ "${ans_disable_root,,}" == "y" ]]; then
+            echo -ne "${YELLOW}Уже проверен отдельный SSH-вход и sudo для $target_user? [y/N]: ${RESET}"
+            read -r ans_disable_root
+            if [[ "${ans_disable_root,,}" == "y" ]]; then
+                permit_root="no"
+                admin_login_verified=1
+            fi
+        fi
+    elif [[ "$target_user" != "root" ]]; then
+        warn "Полные sudo-права $target_user не подтверждены; root вход сохраняю."
     else
         warn "Hardening выполняется для root — root вход оставляю включённым, чтобы не потерять доступ."
     fi
 
     if [[ ! -f "$auth_keys" ]] || ! grep -q "ssh-" "$auth_keys" 2>/dev/null; then
         warn "Нет SSH-ключа — пароль оставляем включённым"
+    elif [[ "$target_user" != "root" ]] && ! ssh_user_has_admin_access "$target_user"; then
+        warn "Нет подтверждённого sudo-доступа $target_user; парольный root-вход сохраняю."
     else
         echo -ne "${YELLOW}Отключить SSH вход по паролю? [y/N]: ${RESET}"
         read -r ans_disable_pass
-        [[ "${ans_disable_pass,,}" == "y" ]] && password_auth="no"
+        if [[ "${ans_disable_pass,,}" == "y" ]]; then
+            if [[ "$admin_login_verified" -ne 1 ]]; then
+                echo -ne "${YELLOW}Уже проверен отдельный вход по ключу с правами root/sudo для $target_user? [y/N]: ${RESET}"
+                read -r ans_disable_pass
+                [[ "${ans_disable_pass,,}" == "y" ]] && admin_login_verified=1
+            fi
+            [[ "$admin_login_verified" -ne 1 ]] || password_auth="no"
+        fi
     fi
 
     # Меняем настройки
@@ -1064,6 +1092,75 @@ prompt_edge_routing_mode() {
 }
 
 # ─── Конфиг ──────────────────────────────────────────────────
+load_telegram_env() {
+    local env_file="${CONFIG_DIR}/telegram.env" values key value
+    [[ -e "$env_file" || -L "$env_file" ]] || return 0
+    values=$(python3 - "$env_file" <<'PY'
+import os, re, stat, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r", encoding="utf-8") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+            raise ValueError("permissions")
+        if info.st_size > 16384:
+            raise ValueError("size")
+        settings = {}
+        for line in stream:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, sep, value = line.partition("=")
+            if not sep or key not in {"TG_TOKEN", "SALES_BOT_TOKEN"} or key in settings:
+                raise ValueError("key")
+            if value and not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", value):
+                raise ValueError("token")
+            settings[key] = value
+        for key in ("TG_TOKEN", "SALES_BOT_TOKEN"):
+            print(key + "\t" + settings.get(key, ""))
+except Exception:
+    print("Invalid private telegram.env", file=sys.stderr)
+    sys.exit(1)
+PY
+    ) || return 1
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            TG_TOKEN) TG_TOKEN="$value" ;;
+            SALES_BOT_TOKEN) SALES_BOT_TOKEN="$value" ;;
+        esac
+    done <<< "$values"
+}
+
+save_telegram_env() {
+    local env_file="${CONFIG_DIR}/telegram.env"
+    # Keep legacy configurations compatible until they explicitly use telegram.env.
+    [[ -e "$env_file" || -L "$env_file" ]] || return 0
+    printf 'TG_TOKEN=%s\nSALES_BOT_TOKEN=%s\n' "${TG_TOKEN:-}" "${SALES_BOT_TOKEN:-}" |
+        python3 -c '
+import os, re, stat, sys, tempfile
+path = sys.argv[1]
+temp = None
+try:
+    info = os.lstat(path)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError("permissions")
+    data = sys.stdin.read(16385)
+    if len(data) > 16384 or not re.fullmatch(r"TG_TOKEN=(?:[0-9]+:[A-Za-z0-9_-]{20,})?\nSALES_BOT_TOKEN=(?:[0-9]+:[A-Za-z0-9_-]{20,})?\n", data):
+        raise ValueError("token")
+    fd, temp = tempfile.mkstemp(prefix=".telegram.env.", dir=os.path.dirname(path))
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temp, path)
+except Exception:
+    if temp is not None and os.path.exists(temp):
+        os.unlink(temp)
+    print("Cannot save private telegram.env", file=sys.stderr)
+    sys.exit(1)
+' "$env_file"
+}
+
 load_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         # Безопасность: проверяем владельца и права перед source
@@ -1088,11 +1185,23 @@ load_config() {
             warn "CONFIG_FILE принадлежит не root — пропускаю source"
         fi
     fi
+    local canary_config="${CONFIG_DIR}/nodes-canary.env"
+    if [[ -e "$canary_config" ]]; then
+        [[ -f "$canary_config" && ! -L "$canary_config" \
+            && "$(stat -c '%U:%a' "$canary_config" 2>/dev/null)" == "root:600" ]] || return 1
+        # A separate opt-in survives save_config in already running older bots.
+        source "$canary_config"
+    fi
+    load_telegram_env || { TG_TOKEN=""; SALES_BOT_TOKEN=""; return 1; }
     normalize_lang_ui
     normalize_edge_routing_mode
 }
 
 save_config() {
+    case "${XRAY_REALITY_CLIENT_FINGERPRINT:-chrome}" in
+        chrome|firefox) ;;
+        *) err "Unsupported REALITY client fingerprint"; return 1 ;;
+    esac
     mkdir -p "$CONFIG_DIR"
     chmod 700 "$CONFIG_DIR" 2>/dev/null || true
 
@@ -1103,6 +1212,10 @@ save_config() {
     }
     chmod 600 "$tmp_config"
     normalize_edge_routing_mode
+    if ! save_telegram_env; then
+        rm -f "$tmp_config"
+        return 1
+    fi
 
     if ! {
         printf 'LANG_UI=%q\n' "${LANG_UI:-ru}"
@@ -1123,6 +1236,11 @@ save_config() {
         printf 'SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE=%q\n' "${SUBSCRIPTION_XHTTP_NODE_EXCLUSIVE:-0}"
         printf '# Nodes, используемые только как backend для relay: синхронизируются, но прямые профили не публикуются\n'
         printf 'SUBSCRIPTION_RELAY_ONLY_NODE_NAMES=%q\n' "${SUBSCRIPTION_RELAY_ONLY_NODE_NAMES:-}"
+        printf 'NODES_RELAY_USER_SYNC_NODE_NAMES=%q\n' "${NODES_RELAY_USER_SYNC_NODE_NAMES:-}"
+        printf 'NODES_RELAY_SYNC_SSH_CONFIG=%q\n' "${NODES_RELAY_SYNC_SSH_CONFIG:-}"
+        printf 'NODES_RELAY_SYNC_HELPER=%q\n' "${NODES_RELAY_SYNC_HELPER:-/usr/local/lib/yurich-panel/relay-user-sync.py}"
+        printf 'NODES_CANARY_NODE_NAMES=%q\n' "${NODES_CANARY_NODE_NAMES:-}"
+        printf 'NODES_CANARY_USERS=%q\n' "${NODES_CANARY_USERS:-}"
         printf '# 1 = публиковать XHTTP в основных клиентских подписках, 0 = держать XHTTP отдельно/для тестов\n'
         printf 'SUBSCRIPTION_XHTTP_MAIN_ENABLED=%q\n' "${SUBSCRIPTION_XHTTP_MAIN_ENABLED:-1}"
         printf '# Canary XHTTP: дополнительные nodes публикуются только указанным пользователям\n'
@@ -1157,6 +1275,11 @@ save_config() {
         printf 'VLESS_RELAY_PROFILES=%q\n' "${VLESS_RELAY_PROFILES:-}"
         printf '# Users allowed to receive relay profiles: *, all or a space/comma-separated list\n'
         printf 'VLESS_RELAY_USERS=%q\n' "${VLESS_RELAY_USERS:-}"
+        printf '# Additional relay canaries, independently restricted to selected users\n'
+        printf 'VLESS_RELAY_CANARY_PROFILES=%q\n' "${VLESS_RELAY_CANARY_PROFILES:-}"
+        printf 'VLESS_RELAY_CANARY_USERS=%q\n' "${VLESS_RELAY_CANARY_USERS:-}"
+        printf '# Explicit relay sources read over verified HTTPS instead of management SSH\n'
+        printf 'VLESS_RELAY_HTTPS_SOURCE_NODES=%q\n' "${VLESS_RELAY_HTTPS_SOURCE_NODES:-}"
         printf '# Автомониторинг протоколов: тестовый пользователь, повторы, порог средней задержки в мс\n'
         printf 'PROTOCOL_BENCHMARK_USER=%q\n' "${PROTOCOL_BENCHMARK_USER:-}"
         printf 'PROTOCOL_BENCHMARK_ROUNDS=%q\n' "${PROTOCOL_BENCHMARK_ROUNDS:-3}"
@@ -1174,15 +1297,25 @@ save_config() {
         printf 'PROTOCOL_MONITOR_ALERT_REPEAT=%q\n' "${PROTOCOL_MONITOR_ALERT_REPEAT:-3}"
         printf 'PROTOCOL_MONITOR_ALERT_STATE=%q\n' "${PROTOCOL_MONITOR_ALERT_STATE:-$CONFIG_DIR/protocol-health-alert.state}"
         printf 'PROTOCOL_MONITOR_RECOVERY_ALERT=%q\n' "${PROTOCOL_MONITOR_RECOVERY_ALERT:-1}"
-        printf 'TG_TOKEN=%q\n' "${TG_TOKEN:-}"
+        if [[ -f "${CONFIG_DIR}/telegram.env" ]]; then
+            printf 'TG_TOKEN=%q\nSALES_BOT_TOKEN=%q\n' "" ""
+        else
+            printf 'TG_TOKEN=%q\nSALES_BOT_TOKEN=%q\n' "${TG_TOKEN:-}" "${SALES_BOT_TOKEN:-}"
+        fi
         printf 'TG_CHAT_ID=%q\n' "${TG_CHAT_ID:-}"
+        printf 'TG_ADMIN_ONLY=%q\n' "${TG_ADMIN_ONLY:-0}"
         printf '# Доп. администраторы через запятую: id1,id2,id3\n'
         printf 'TG_ADMINS=%q\n' "${TG_ADMINS:-}"
+        printf 'TG_MONITOR_ENABLED=%q\n' "${TG_MONITOR_ENABLED:-auto}"
+        printf 'TG_MONITOR_LOCAL_NODE=%q\n' "${TG_MONITOR_LOCAL_NODE:-}"
         printf '# Отдельный Telegram бот для продаж и автовыдачи подписок\n'
-        printf 'SALES_BOT_TOKEN=%q\n' "${SALES_BOT_TOKEN:-}"
         printf 'SALES_BOT_ADMIN_ID=%q\n' "${SALES_BOT_ADMIN_ID:-${TG_CHAT_ID:-}}"
         printf 'SALES_BOT_ADMINS=%q\n' "${SALES_BOT_ADMINS:-}"
         printf 'SALES_BOT_PLANS=%q\n' "${SALES_BOT_PLANS:-$SALES_BOT_PLANS_DEFAULT}"
+        printf 'SALES_BOT_PAYMENTS_ENABLED=%q\n' "${SALES_BOT_PAYMENTS_ENABLED:-1}"
+        printf 'SALES_BOT_USERNAME=%q\n' "${SALES_BOT_USERNAME:-}"
+        printf 'SALES_BOT_OWNER_USER=%q\n' "${SALES_BOT_OWNER_USER:-}"
+        printf 'TELEGRAM_COMMUNITY_URL=%q\n' "${TELEGRAM_COMMUNITY_URL:-}"
         printf 'SALES_BOT_CURRENCY=%q\n' "${SALES_BOT_CURRENCY:-$SALES_BOT_CURRENCY_DEFAULT}"
         printf 'SALES_BOT_CHANNEL_URL=%q\n' "${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}"
         printf 'SALES_BOT_PAYMENT_TEXT=%q\n' "${SALES_BOT_PAYMENT_TEXT:-$SALES_BOT_PAYMENT_TEXT_DEFAULT}"
@@ -1200,6 +1333,8 @@ save_config() {
         printf 'HYSTERIA_OBFS_PASSWORD=%q\n' "${HYSTERIA_OBFS_PASSWORD:-}"
         printf '# 1 = направлять только Hysteria 2 через локальный WARP SOCKS5, не трогая Caddy/Xray\n'
         printf 'HYSTERIA_WARP_ENABLED=%q\n' "${HYSTERIA_WARP_ENABLED:-0}"
+        printf '# auto = inherit WARP settings; warp-tcp-direct-udp = Hysteria only; direct = bypass WARP\n'
+        printf 'HYSTERIA_EGRESS_MODE=%q\n' "${HYSTERIA_EGRESS_MODE:-auto}"
         printf '# 1 = добавлять Hysteria 2 Port Hopping профиль и UDP redirect диапазона на Hysteria порт\n'
         printf 'HYSTERIA_PORT_HOP_ENABLED=%q\n' "${HYSTERIA_PORT_HOP_ENABLED:-0}"
         printf 'HYSTERIA_PORT_HOP_PORTS=%q\n' "${HYSTERIA_PORT_HOP_PORTS:-$HYSTERIA_PORT_HOP_PORTS_DEFAULT}"
@@ -1248,6 +1383,7 @@ save_config() {
         printf 'XRAY_CADDY_FALLBACK_PORT=%q\n' "${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
         printf 'XRAY_REALITY_TARGET=%q\n' "${XRAY_REALITY_TARGET:-www.microsoft.com:443}"
         printf 'XRAY_REALITY_SERVER_NAME=%q\n' "${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}"
+        printf 'XRAY_REALITY_CLIENT_FINGERPRINT=%q\n' "${XRAY_REALITY_CLIENT_FINGERPRINT:-chrome}"
         printf '# Optional temporary Reality test profile with a separate SNI/target\n'
         printf 'XRAY_GITHUB_TEST_ENABLED=%q\n' "${XRAY_GITHUB_TEST_ENABLED:-0}"
         printf 'XRAY_GITHUB_TEST_USERS=%q\n' "${XRAY_GITHUB_TEST_USERS:-}"
@@ -1262,11 +1398,11 @@ save_config() {
         printf 'XRAY_ZAPRET_ENABLED=%q\n' "${XRAY_ZAPRET_ENABLED:-0}"
         printf 'XRAY_ZAPRET_DAT=%q\n' "${XRAY_ZAPRET_DAT:-$XRAY_ZAPRET_DAT_DEFAULT}"
         printf 'XRAY_ZAPRET_URL=%q\n' "${XRAY_ZAPRET_URL:-$XRAY_ZAPRET_URL_DEFAULT}"
-        printf 'CADDY_VERSION_PIN=%q\n' "${CADDY_VERSION_PIN:-v2.11.4}"
+        printf 'CADDY_VERSION_PIN=%q\n' "${CADDY_VERSION_PIN:-v2.11.7}"
         printf 'XCADDY_VERSION_PIN=%q\n' "${XCADDY_VERSION_PIN:-v0.4.6}"
         printf 'FORWARDPROXY_REF_PIN=%q\n' "${FORWARDPROXY_REF_PIN:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
         printf 'XRAY_VERSION_PIN=%q\n' "${XRAY_VERSION_PIN:-v26.3.27}"
-        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.12.3}"
+        printf 'HYSTERIA_VERSION_PIN=%q\n' "${HYSTERIA_VERSION_PIN:-app/v2.13.0}"
         printf 'BRIDGE_ENABLED=%q\n' "${BRIDGE_ENABLED:-0}"
         printf 'BRIDGE_NAME=%q\n' "${BRIDGE_NAME:-}"
         printf 'BRIDGE_ENTRY_PROTOCOL=%q\n' "${BRIDGE_ENTRY_PROTOCOL:-naive}"
@@ -1531,18 +1667,24 @@ credential_state_backup() {
 
 credential_state_restore() {
     local source="$1" file name
+    [[ -d "$source" && ( -d "$source/credentials" || -f "$source/credentials.missing" ) ]] || return 1
+    for file in "$USERS_FILE" "$DISABLED_USERS_FILE"; do
+        name=$(basename "$file") || return 1
+        [[ -f "$source/$name" || -f "$source/$name.missing" ]] || return 1
+    done
     for file in "$USERS_FILE" "$DISABLED_USERS_FILE"; do
         name=$(basename "$file")
         if [[ -f "$source/$name.missing" ]]; then
-            rm -f "$file"
+            rm -f "$file" || return 1
         elif [[ -f "$source/$name" ]]; then
-            install -o root -g root -m 600 "$source/$name" "$file"
+            install -o root -g root -m 600 "$source/$name" "$file" || return 1
         fi
     done
-    rm -rf "$CREDENTIALS_DIR"
+    rm -rf "$CREDENTIALS_DIR" || return 1
     if [[ -d "$source/credentials" ]]; then
-        cp -a "$source/credentials" "$CREDENTIALS_DIR"
+        cp -a "$source/credentials" "$CREDENTIALS_DIR" || return 1
     fi
+    return 0
 }
 
 credential_set_user() {
@@ -2084,28 +2226,73 @@ is_valid_tg_chat_id() {
     [[ "${1:-}" =~ ^-?[0-9]{5,20}$ ]]
 }
 
-tg_api_with_token() {
+tg_api_with_token() (
     local token="$1" method="$2"
     shift 2
     [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || return 1
     [[ "$method" =~ ^[A-Za-z][A-Za-z0-9]*(\?[A-Za-z0-9_.%=&-]+)?$ ]] || return 1
 
-    local cfg rc
-    cfg=$(mktemp /tmp/yurich_tg_api_XXXXXX) || return 1
-    chmod 600 "$cfg" 2>/dev/null || true
+    local request_dir cfg rc=0 option value name field index=0
+    local -a curl_args=()
+    umask 077
+    request_dir=$(mktemp -d /tmp/yurich_tg_api_XXXXXX) || return 1
+    trap 'rm -rf -- "$request_dir"' EXIT
+    chmod 700 "$request_dir" || return 1
+    cfg="$request_dir/request.conf"
     printf 'url = "https://api.telegram.org/bot%s/%s"\n' "$token" "$method" > "$cfg"
-
-    curl --config "$cfg" "$@"
-    rc=$?
-    rm -f "$cfg" 2>/dev/null || true
+    while (( $# )); do
+        option="$1"
+        shift
+        case "$option" in
+            --data-urlencode|--form-string|--form|-F)
+                (( $# )) || return 1
+                value="$1"
+                shift
+                ;;
+            --data-urlencode=*|--form-string=*|--form=*)
+                value="${option#*=}"
+                option="${option%%=*}"
+                ;;
+            *)
+                curl_args+=("$option")
+                continue
+                ;;
+        esac
+        if [[ "$value" == *=* ]] && {
+            [[ "$option" == --data-urlencode || "$option" == --form-string ]] \
+                || [[ "$value" == caption=* || "$value" == text=* ]]
+        }; then
+            name="${value%%=*}"
+            [[ "$name" =~ ^[A-Za-z0-9_]*$ ]] || return 1
+            index=$((index + 1))
+            field="$request_dir/field.$index"
+            printf '%s' "${value#*=}" > "$field" || return 1
+            if [[ "$option" == --data-urlencode ]]; then
+                curl_args+=(--data-urlencode "${name}@${field}")
+            else
+                curl_args+=(--form "${name}=<${field}")
+            fi
+        else
+            curl_args+=("$option" "$value")
+        fi
+    done
+    curl --config "$cfg" "${curl_args[@]}" || rc=$?
     return "$rc"
-}
+)
 
 tg_api() {
     local method="$1"
     shift
     [[ -z "${TG_TOKEN:-}" ]] && return 1
     tg_api_with_token "$TG_TOKEN" "$method" "$@"
+}
+
+tg_response_ok() {
+    python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok") is True else 1)' 2>/dev/null
+}
+
+tg_client_api() {
+    tg_api_with_token "${SALES_BOT_TOKEN:-${TG_TOKEN:-}}" "$@"
 }
 
 list_subscription_users() {
@@ -2141,16 +2328,16 @@ expiry_days_text() {
 
 tg_send_to_chat() {
     local chat_id="$1" message="$2" resp
-    [[ -z "${TG_TOKEN:-}" ]] && return 1
+    [[ -z "${SALES_BOT_TOKEN:-${TG_TOKEN:-}}" ]] && return 1
     is_valid_tg_chat_id "$chat_id" || return 1
-    resp=$(tg_api "sendMessage" -s --max-time 12 --retry 2 --retry-delay 2 \
+    resp=$(tg_client_api "sendMessage" -s --max-time 12 \
         -X POST \
         --data-urlencode "chat_id=${chat_id}" \
         --data-urlencode "parse_mode=HTML" \
         --data-urlencode "disable_web_page_preview=true" \
         --data-urlencode "text=${message}" \
         2>/dev/null || true)
-    echo "$resp" | grep -q '"ok":true'
+    printf '%s' "$resp" | tg_response_ok
 }
 
 sales_bot_renew_url() {
@@ -2165,18 +2352,18 @@ sales_bot_renew_url() {
     fi
     [[ -n "${SALES_BOT_TOKEN:-}" ]] || return 1
     resp=$(tg_api_with_token "$SALES_BOT_TOKEN" "getMe" -s --max-time 12 2>/dev/null || true)
-    username=$(printf '%s\n' "$resp" | grep -o '"username":"[^"]*"' | head -1 | cut -d'"' -f4)
+    username=$(printf '%s' "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("result",{}).get("username","") if d.get("ok") is True else "")' 2>/dev/null || true)
     [[ -n "$username" ]] || return 1
     printf 'https://t.me/%s?start=renew\n' "$username"
 }
 
 tg_send_to_chat_with_renew_button() {
     local chat_id="$1" message="$2" renew_url="$3" resp reply_markup
-    [[ -z "${TG_TOKEN:-}" ]] && return 1
+    [[ -z "${SALES_BOT_TOKEN:-${TG_TOKEN:-}}" ]] && return 1
     is_valid_tg_chat_id "$chat_id" || return 1
-    [[ -n "$renew_url" ]] || return 1
+    [[ "$renew_url" =~ ^https://t\.me/[A-Za-z0-9_]+\?start=renew$ ]] || return 1
     reply_markup=$(printf '{"inline_keyboard":[[{"text":"Продлить подписку","url":"%s"}]]}' "$renew_url")
-    resp=$(tg_api "sendMessage" -s --max-time 12 --retry 2 --retry-delay 2 \
+    resp=$(tg_client_api "sendMessage" -s --max-time 12 \
         -X POST \
         --data-urlencode "chat_id=${chat_id}" \
         --data-urlencode "parse_mode=HTML" \
@@ -2184,7 +2371,7 @@ tg_send_to_chat_with_renew_button() {
         --data-urlencode "text=${message}" \
         --data-urlencode "reply_markup=${reply_markup}" \
         2>/dev/null || true)
-    echo "$resp" | grep -q '"ok":true'
+    printf '%s' "$resp" | tg_response_ok
 }
 
 telegram_expiry_message() {
@@ -2261,6 +2448,11 @@ notify_user_expiry() {
         return 0
     fi
     message=$(telegram_expiry_message "$user" "$expires" "$days")
+    if [[ "$force" == "1" ]]; then
+        message="<b>Тест уведомлений. Продление сейчас не требуется.</b>
+
+${message}"
+    fi
     renew_url=$(sales_bot_renew_url 2>/dev/null || true)
     if { [[ -n "$renew_url" ]] && tg_send_to_chat_with_renew_button "$chat_id" "$message" "$renew_url"; } || tg_send_to_chat "$chat_id" "$message"; then
         if [[ "$force" != "1" ]]; then
@@ -2344,7 +2536,7 @@ cmd_notify_expiry_list() {
     done < <(list_subscription_users)
 }
 
-cmd_notify_expiry_run() {
+cmd_notify_expiry_send() {
     local user status total=0 sent=0 no_contact=0 skipped=0 failed=0
     load_config; load_users
     while IFS= read -r user; do
@@ -2361,8 +2553,14 @@ cmd_notify_expiry_run() {
             *) skipped=$((skipped+1)) ;;
         esac
     done < <(list_subscription_users)
-    cmd_enforce_expired_users || failed=$((failed+1))
     printf 'expiry notify: total=%s sent=%s no_contact=%s skipped=%s failed=%s\n' "$total" "$sent" "$no_contact" "$skipped" "$failed"
+    [[ "$failed" -eq 0 ]]
+}
+
+cmd_notify_expiry_run() {
+    local failed=0
+    cmd_notify_expiry_send || failed=1
+    cmd_enforce_expired_users || failed=1
     [[ "$failed" -eq 0 ]]
 }
 
@@ -2471,7 +2669,7 @@ cmd_notify_news_test() {
 }
 
 cmd_notify_news_broadcast() {
-    local body="${1:-}" user chat_id message seen_file total=0 contacts=0 sent=0 failed=0 skipped=0 duplicate=0 bad=0
+    local body="${1:-}" expected_audience="${2:-}" audience audience_hash user chat_id message seen_file total=0 contacts=0 sent=0 failed=0 skipped=0 duplicate=0 bad=0
     load_config; load_users
     if [[ -z "$body" ]]; then
         err "Использование: notify-news ТЕКСТ"
@@ -2498,13 +2696,24 @@ cmd_notify_news_broadcast() {
         fi
         printf '%s\n' "$chat_id" >> "$seen_file"
         contacts=$((contacts + 1))
+    done < <(list_subscription_users)
+    # Freeze recipients before the first delivery; confirmations bind this set.
+    audience=$(sort -u "$seen_file")
+    audience_hash=$(printf '%s' "$audience" | sha256sum | awk '{print $1}')
+    if [[ -n "$expected_audience" && "$expected_audience" != "$audience_hash" ]]; then
+        rm -f "$seen_file"
+        err 'Список получателей изменился. Создай новый предпросмотр.'
+        return 1
+    fi
+    while IFS= read -r chat_id; do
+        [[ -n "$chat_id" ]] || continue
         if tg_send_to_chat "$chat_id" "$message"; then
             sent=$((sent + 1))
         else
             failed=$((failed + 1))
         fi
         sleep 0.25
-    done < <(list_subscription_users)
+    done <<< "$audience"
     rm -f "$seen_file"
     printf 'news broadcast: users=%s contacts=%s sent=%s no_contact=%s duplicate=%s bad_contact=%s failed=%s\n' \
         "$total" "$contacts" "$sent" "$skipped" "$duplicate" "$bad" "$failed"
@@ -2514,6 +2723,7 @@ cmd_notify_news_broadcast() {
 cmd_notify_expiry_install() {
     local script_path="${SCRIPT_PATH:-/usr/local/bin/yurich-panel.sh}"
     load_config; load_users
+    install_script_entrypoints || return 1
     mkdir -p "$(dirname "$EXPIRY_NOTIFY_CRON")" "$(dirname "$EXPIRY_NOTIFY_LOG")"
     cat > "$EXPIRY_NOTIFY_CRON" <<EOF
 SHELL=/bin/bash
@@ -2689,9 +2899,73 @@ setup_telegram() {
 }
 
 # ─── Watchdog (cron) ─────────────────────────────────────────
+install_script_entrypoints() (
+    local source_path target parent owner mode staged bootstrap_dir="" expected actual
+    trap '[[ -z "$bootstrap_dir" ]] || rm -rf -- "$bootstrap_dir"' EXIT
+    source_path=$(realpath -- "${BASH_SOURCE[0]}" 2>/dev/null || true)
+    if [[ -z "$source_path" || ! -f "$source_path" || "$source_path" == /dev/fd/* || "$source_path" == /proc/* ]]; then
+        source_path="${SCRIPT_PATH:-/usr/local/bin/yurich-panel.sh}"
+        if [[ ! -f "$source_path" || -L "$source_path" ]] \
+            || ! grep -Fxq "VERSION=\"$VERSION\"" "$source_path" 2>/dev/null; then
+            umask 077
+            bootstrap_dir=$(mktemp -d /tmp/yurich-bootstrap.XXXXXXXX) || return 1
+            source_path="$bootstrap_dir/script.sh"
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 90 \
+                "$GITHUB_RAW" -o "$source_path" \
+                || ! curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 30 \
+                    "$GITHUB_SHA256_RAW" -o "$bootstrap_dir/script.sha256"; then
+                err "Не удалось получить полную копию установщика и SHA256; задания не установлены."
+                return 1
+            fi
+            expected=$(awk 'NR == 1 {print $1}' "$bootstrap_dir/script.sha256")
+            expected="${expected,,}"
+            actual=$(sha256sum "$source_path" | awk '{print $1}') || return 1
+            if [[ ! "$expected" =~ ^[a-f0-9]{64}$ || "$actual" != "$expected" ]] \
+                || ! grep -Fxq "VERSION=\"$VERSION\"" "$source_path"; then
+                err "Копия установщика не соответствует SHA256 или текущей версии; задания не установлены."
+                return 1
+            fi
+        fi
+    fi
+    if [[ ! -f "$source_path" || -L "$source_path" ]] \
+        || ! bash -n "$source_path" \
+        || ! grep -Eq '^VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$source_path"; then
+        err "Не найдена полная копия скрипта; установка заданий отменена. Запусти локальный файл."
+        return 1
+    fi
+    for target in "$SCRIPT_PATH" "${LEGACY_SCRIPT_PATH:-}"; do
+        [[ -n "$target" ]] || continue
+        [[ "$target" == /* && ! -L "$target" && ! -d "$target" ]] || {
+            err "Небезопасный путь установки скрипта: $target"
+            return 1
+        }
+        parent=$(dirname -- "$target")
+        [[ ! -L "$parent" ]] && mkdir -p -- "$parent" || return 1
+        owner=$(stat -c '%u' "$parent") || return 1
+        mode=$(stat -c '%a' "$parent") || return 1
+        [[ "$owner" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) || {
+            err "Каталог скрипта должен принадлежать root и не разрешать постороннюю запись: $parent"
+            return 1
+        }
+        if [[ -f "$target" ]] && cmp -s -- "$source_path" "$target"; then
+            chmod 755 "$target" || return 1
+            continue
+        fi
+        staged=$(mktemp "${target}.install.XXXXXX") || return 1
+        if ! install -m 755 -- "$source_path" "$staged" || ! mv -fT -- "$staged" "$target"; then
+            rm -f -- "$staged"
+            err "Не удалось установить постоянный скрипт: $target"
+            return 1
+        fi
+    done
+)
+
 install_monitor() {
-    cat > "$MONITOR_SCRIPT" <<'MONITOR'
-#!/bin/bash
+    install_script_entrypoints || return 1
+    {
+    printf '#!/bin/bash\n'
+    declare -f tg_api_with_token
+    cat <<'MONITOR'
 CONFIG_FILE="/etc/naiveproxy/naive.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     _owner=$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null || echo "unknown")
@@ -2702,6 +2976,24 @@ if [[ -f "$CONFIG_FILE" ]]; then
             awk -F= -v key="$key" '$1 == key {sub(/^[^=]*=/, ""); print; exit}' "$CONFIG_FILE" 2>/dev/null
         }
         TG_TOKEN=$(_config_value TG_TOKEN)
+        if [[ -e /etc/naiveproxy/telegram.env || -L /etc/naiveproxy/telegram.env ]]; then
+            TG_TOKEN=$(python3 -c '
+import os, re, stat
+try:
+    fd = os.open("/etc/naiveproxy/telegram.env", os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "r") as stream:
+        info = os.fstat(stream.fileno())
+        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 16384:
+            raise ValueError()
+        for line in stream:
+            key, sep, value = line.strip().partition("=")
+            if key == "TG_TOKEN" and sep and re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", value):
+                print(value)
+                break
+except Exception:
+    pass
+' 2>/dev/null || true)
+        fi
         TG_CHAT_ID=$(_config_value TG_CHAT_ID)
         DOMAIN=$(_config_value DOMAIN)
         [[ "$TG_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || TG_TOKEN=""
@@ -2714,16 +3006,7 @@ fi
 tg_api() {
     local method="$1"
     shift
-    [[ "${TG_TOKEN:-}" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]] || return 1
-    [[ "$method" =~ ^[A-Za-z][A-Za-z0-9]*(\?[A-Za-z0-9_.%=&-]+)?$ ]] || return 1
-    local cfg rc
-    cfg=$(mktemp /tmp/yurich_tg_api_XXXXXX) || return 1
-    chmod 600 "$cfg" 2>/dev/null || true
-    printf 'url = "https://api.telegram.org/bot%s/%s"\n' "$TG_TOKEN" "$method" > "$cfg"
-    curl --config "$cfg" "$@"
-    rc=$?
-    rm -f "$cfg" 2>/dev/null || true
-    return "$rc"
+    tg_api_with_token "${TG_TOKEN:-}" "$method" "$@"
 }
 
 tg_send() {
@@ -2760,23 +3043,16 @@ else
     rm -f "$FLAG"
 fi
 MONITOR
+    } > "$MONITOR_SCRIPT" || return 1
 
     chmod +x "$MONITOR_SCRIPT"
 
-    local script_path
-    # Если запущен через bash <(curl), $0 будет /dev/fd/xx — используем фиксированный путь
-    script_path=$(realpath "$0" 2>/dev/null || echo "")
-    if [[ -z "$script_path" || "$script_path" == /dev/fd/* || "$script_path" == /proc/* ]]; then
-        script_path="${SCRIPT_PATH}"
-        # Копируем себя в постоянное место если ещё не там
-        [[ -f "$script_path" ]] || cp "$0" "$script_path" 2>/dev/null || true
-        [[ -f "$script_path" ]] && chmod +x "$script_path"
-    fi
+    local script_path="$SCRIPT_PATH"
 
     # Очищаем старые naive-cron записи, добавляем новые
-    ( crontab -l 2>/dev/null | grep -v "naiveproxy\|monitor\.sh" || true
-      echo "*/5 * * * * /bin/bash $MONITOR_SCRIPT"
-      echo "0 3 * * 0 /bin/bash ${script_path} update >> ${LOG_DIR}/autoupdate.log 2>&1"
+    ( crontab -l 2>/dev/null | grep -vE 'naiveproxy|monitor\.sh|yurich-panel\.sh[[:space:]]+update([[:space:]]|$)|# yurich-(watchdog|caddy-update)$' || true
+      echo "*/5 * * * * /bin/bash $MONITOR_SCRIPT # yurich-watchdog"
+      echo "0 3 * * 0 /bin/bash ${script_path} update >> ${LOG_DIR}/autoupdate.log 2>&1 # yurich-caddy-update"
     ) | crontab -
 
     ok "Watchdog: каждые 5 минут"
@@ -2837,7 +3113,7 @@ install_deps() {
     go_ver=$(go version 2>/dev/null | grep -oP 'go\K[\d.]+' || echo "0.0")
 
     if version_gt "$go_min" "$go_ver"; then
-        warn "Go $go_ver не подходит для Caddy ${CADDY_VERSION_PIN:-v2.11.4}, ставлю закреплённую версию..."
+        warn "Go $go_ver не подходит для Caddy ${CADDY_VERSION_PIN:-v2.11.7}, ставлю закреплённую версию..."
         local arch
         arch=$(dpkg --print-architecture)
         [[ "$arch" == "arm64" ]] || arch="amd64"
@@ -2877,7 +3153,7 @@ build_caddy() (
     info "Собираю Caddy с forwardproxy (naive)..."
     info "Занимает 5-15 минут, не прерывай..."
     local output_bin="${1:-$CADDY_BIN}"
-    local caddy_ver="${CADDY_VERSION_PIN:-v2.11.4}"
+    local caddy_ver="${CADDY_VERSION_PIN:-v2.11.7}"
     local fp_ref="${FORWARDPROXY_REF_PIN:-d62c80d3dd2c706b6b87579844d2397bddd18317}"
 
     [[ "$caddy_ver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
@@ -2990,17 +3266,34 @@ EOF
     fi
 }
 
+# Redact bearer URLs and credential headers before either logger writes to disk.
+caddy_log_format_block() {
+    cat <<'EOF'
+    format filter {
+        wrap json
+        fields {
+            request>uri regexp "(?i)((?:/|%2f)(?:s|p|%73|%70|%53|%50)(?:/|%2f))[^/?#]+|[?].*" "${1}[REDACTED]"
+            request>headers>Authorization delete
+            request>headers>Proxy-Authorization delete
+            request>headers>Cookie delete
+            request>headers>Referer delete
+            resp_headers>Set-Cookie delete
+        }
+    }
+EOF
+}
+
 # ── Мультидомен: генерация Caddyfile ─────────────────────────
-write_caddyfile_multi() {
-    mkdir -p "$CADDY_DIR" "$WEBROOT" "$LOG_DIR"
+render_caddyfile_multi() {
+    mkdir -p "$CADDY_DIR" "$WEBROOT" "$LOG_DIR" || return 1
 
     if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
         warn "Xray fallback hub включён: мультидомен Caddy отключён, Caddy будет локальным fallback."
-        write_caddyfile
+        render_caddyfile
         return $?
     fi
 
-    install_camouflage_page
+    install_camouflage_page || return 1
 
     # Caddy core basic_auth принимает bcrypt; plaintext в Caddyfile не попадает.
     local auth_blocks=""
@@ -3026,7 +3319,8 @@ write_caddyfile_multi() {
     if [[ "${WARP_PROXY_ENABLED:-0}" == "1" ]]; then
         caddy_upstream="    upstream socks5://127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"$'\n'
     fi
-    local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling=""
+    local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling="" caddy_log_format
+    caddy_log_format=$(caddy_log_format_block)
     local proxy_auth_error_block
     proxy_auth_error_block=$(caddy_proxy_auth_error_block)
     if [[ "${HYSTERIA_PORT:-8443}" == "443" ]]; then
@@ -3055,17 +3349,20 @@ EOF
     fi
 
     # Глобальный блок
-    cat > "$CADDYFILE" <<EOF
+    cat > "$CADDYFILE" <<EOF || return 1
 {
   order forward_proxy before file_server
   servers :443 {
       protocols ${caddy_protocols}
   }
   log {
-    output file ${LOG_DIR}/access.log {
+    output file "${LOG_DIR}/access.log" {
       roll_size 50mb
       roll_keep 3
+      roll_interval 24h
+      roll_keep_for 336h
     }
+${caddy_log_format}
 ${caddy_runtime_sampling}
   }
 }
@@ -3091,7 +3388,7 @@ EOF
             err "Неверный домен в конфиге: $dom"
             return 1
         fi
-        cat >> "$CADDYFILE" <<EOF
+        cat >> "$CADDYFILE" <<EOF || return 1
 ${dom}:443 {
     tls ${EMAIL}
 
@@ -3133,42 +3430,36 @@ ${caddy_upstream}      hide_ip
 ${xhttp_block}
 
   file_server {
-    root ${WEBROOT}
+    root "${WEBROOT}"
   }
 
 ${proxy_auth_error_block}
 
     log {
-        output file ${LOG_DIR}/naive_${dom//./_}.log {
+        output file "${LOG_DIR}/naive_${dom//./_}.log" {
             roll_size 20mb
             roll_keep 5
+            roll_interval 24h
+            roll_keep_for 336h
         }
+${caddy_log_format}
     }
 }
 
 EOF
     done
 
-    chmod 600 "$CADDYFILE"
-    if [[ -x "$CADDY_BIN" ]]; then
-        "$CADDY_BIN" fmt --overwrite "$CADDYFILE" >/dev/null 2>&1 || true
-        "$CADDY_BIN" validate --config "$CADDYFILE" >/dev/null 2>&1 || {
-            err "Сгенерированный Caddyfile не прошёл validate"
-            "$CADDY_BIN" validate --config "$CADDYFILE" || true
-            return 1
-        }
-    fi
     local dom_count
     dom_count=$(echo "$domains_csv" | tr ',' '\n' | grep -c '[a-z]' || echo 1)
-    ok "Caddyfile обновлён (доменов: ${dom_count}, активных пользователей: $(active_user_count))"
+    info "Caddyfile подготовлен (доменов: ${dom_count}, активных пользователей: $(active_user_count))"
 }
 
 
 # ─── КАМУФЛЯЖНАЯ СТРАНИЦА ────────────────────────────────────────
 install_camouflage_page() {
-    mkdir -p "$WEBROOT"
+    mkdir -p "$WEBROOT" || return 1
 
-    cat > "$WEBROOT/index.html" << 'CAMOUFLAGE_EOF'
+    cat > "$WEBROOT/index.html" << 'CAMOUFLAGE_EOF' || return 1
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3379,15 +3670,15 @@ footer{border-top:1px solid var(--border);padding:32px 24px;background:var(--bg2
 </html>
 CAMOUFLAGE_EOF
 
-    chmod 644 "$WEBROOT/index.html"
+    chmod 644 "$WEBROOT/index.html" || return 1
     ok "Камуфляжная страница установлена → $WEBROOT/index.html"
 }
 
 # ─── Caddyfile ───────────────────────────────────────────────
-write_caddyfile() {
-    mkdir -p "$CADDY_DIR" "$WEBROOT" "$LOG_DIR"
+render_caddyfile() {
+    mkdir -p "$CADDY_DIR" "$WEBROOT" "$LOG_DIR" || return 1
 
-    install_camouflage_page
+    install_camouflage_page || return 1
     if ! is_valid_domain "${DOMAIN:-}"; then
         err "Неверный домен в конфиге: ${DOMAIN:-}"
         return 1
@@ -3417,10 +3708,11 @@ write_caddyfile() {
     if [[ "${WARP_PROXY_ENABLED:-0}" == "1" ]]; then
         caddy_upstream="        upstream socks5://127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"$'\n'
     fi
-    local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling="" caddy_bind_line=""
+    local caddy_protocols="h1 h2" xhttp_block="" caddy_runtime_sampling="" caddy_bind_line="" caddy_log_format
+    caddy_log_format=$(caddy_log_format_block)
     local proxy_auth_error_block
     proxy_auth_error_block=$(caddy_proxy_auth_error_block)
-    local caddy_server_port="443"
+    local caddy_server_port="443" caddy_listener_address=":443"
     if [[ "${HYSTERIA_PORT:-8443}" == "443" ]]; then
         caddy_protocols="h1 h2"
     fi
@@ -3460,6 +3752,7 @@ EOF
     local tls_line="  tls ${EMAIL}"
     if [[ "${XRAY_REALITY_SNI_MUX_ENABLED:-0}" == "1" ]]; then
         caddy_server_port="${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
+        caddy_listener_address="127.0.0.1:${caddy_server_port}"
         site_label=":${caddy_server_port}, ${DOMAIN}:${caddy_server_port}"
         caddy_bind_line="    bind 127.0.0.1"
         if [[ "$subscription_domain" != "$DOMAIN" ]]; then
@@ -3467,22 +3760,29 @@ EOF
         fi
         info "Caddy переключён за SNI mux: ${site_label}"
     elif [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
-        site_label="http://127.0.0.1:${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
+        caddy_server_port="${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
+        caddy_listener_address="127.0.0.1:${caddy_server_port}"
+        site_label="http://${caddy_listener_address}"
+        caddy_bind_line="    bind 127.0.0.1"
         tls_line=""
+        caddy_protocols="h1 h2c"
         info "Caddy переключён в Xray fallback mode: ${site_label}"
     fi
 
-    cat > "$CADDYFILE" <<EOF
+    cat > "$CADDYFILE" <<EOF || return 1
 {
     order forward_proxy before file_server
-    servers :${caddy_server_port} {
+    servers ${caddy_listener_address} {
         protocols ${caddy_protocols}
     }
     log {
-        output file ${LOG_DIR}/access.log {
+        output file "${LOG_DIR}/access.log" {
             roll_size 50mb
             roll_keep 3
+            roll_interval 24h
+            roll_keep_for 336h
         }
+${caddy_log_format}
 ${caddy_runtime_sampling}
     }
 }
@@ -3529,38 +3829,150 @@ ${caddy_upstream}            hide_ip
 ${xhttp_block}
 
     file_server {
-        root ${WEBROOT}
+        root "${WEBROOT}"
     }
 
 ${proxy_auth_error_block}
 
     log {
-        output file ${LOG_DIR}/naive.log {
+        output file "${LOG_DIR}/naive.log" {
             roll_size 20mb
             roll_keep 5
+            roll_interval 24h
+            roll_keep_for 336h
         }
+${caddy_log_format}
     }
 }
 EOF
 
-    chmod 600 "$CADDYFILE"
-    if [[ -x "$CADDY_BIN" ]]; then
-        "$CADDY_BIN" fmt --overwrite "$CADDYFILE" >/dev/null 2>&1 || true
-        "$CADDY_BIN" validate --config "$CADDYFILE" >/dev/null 2>&1 || {
-            err "Сгенерированный Caddyfile не прошёл validate"
-            "$CADDY_BIN" validate --config "$CADDYFILE" || true
-            return 1
-        }
+    info "Caddyfile подготовлен (активных пользователей: $(active_user_count))"
+}
+
+caddy_render_current() {
+    if [[ "${DOMAINS:-}" == *,* ]]; then
+        render_caddyfile_multi
+    else
+        render_caddyfile
     fi
-    ok "Caddyfile обновлён (активных пользователей: $(active_user_count))"
+}
+
+caddy_restore_config_backup() {
+    local backup="$1" target="$2" staging
+    staging=$(mktemp "${target}.restore.XXXXXX") || return 1
+    if ! cp -- "$backup" "$staging" || ! chmod 600 "$staging" || ! mv -f -- "$staging" "$target"; then
+        rm -f -- "$staging"
+        return 1
+    fi
+}
+
+caddy_apply_runtime_ready() {
+    systemctl is-active --quiet caddy 2>/dev/null || return 1
+    local port=443 url
+    if [[ "${XRAY_REALITY_SNI_MUX_ENABLED:-0}" == "1" || "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
+        port="${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}"
+    fi
+    is_valid_port "$port" && is_valid_domain "${DOMAIN:-}" || return 1
+    local_tcp_endpoint_ready "$port" || return 1
+    if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" && "${XRAY_REALITY_SNI_MUX_ENABLED:-0}" != "1" ]]; then
+        url="http://127.0.0.1:${port}/"
+    else
+        url="https://${DOMAIN}:${port}/"
+    fi
+    curl --noproxy '*' --resolve "${DOMAIN}:${port}:127.0.0.1" \
+        --connect-timeout 2 --max-time 4 --fail --silent --output /dev/null "$url"
+}
+
+# Keep one lock through staging, validation, publication, reload and rollback.
+caddy_config_transaction() (
+    local renderer="${1:-caddy_render_current}" apply="${2:-0}"
+    local target="$CADDYFILE" staging="" backup_file="" published=0 committed=0 lock_fd attempt
+    case "$renderer" in render_caddyfile|render_caddyfile_multi|caddy_render_current) ;; *) return 1 ;; esac
+    [[ "$apply" == "0" || "$apply" == "1" ]] || return 1
+    umask 077
+    command -v flock >/dev/null 2>&1 || { err "Для Caddy transaction нужен flock (util-linux)"; return 1; }
+    [[ -x "$CADDY_BIN" ]] || { err "Caddy не установлен: конфигурация не изменена"; return 1; }
+    if [[ -L "$target" || -L "${target}.lock" || ( -e "$target" && ! -f "$target" ) ]]; then
+        err "Caddyfile и lock должны быть обычными файлами"
+        return 1
+    fi
+    mkdir -p -- "$(dirname -- "$target")" || return 1
+    exec {lock_fd}> "${target}.lock" || return 1
+    chmod 600 "${target}.lock" || return 1
+    flock -w 30 "$lock_fd" || { err "Caddy transaction занят: конфигурация не изменена"; return 1; }
+
+    caddy_transaction_cleanup() {
+        local rc="$1"
+        if [[ "$apply" == "1" && "$published" == "1" && "$committed" == "0" ]]; then
+            if caddy_restore_config_backup "$backup_file" "$target"; then
+                if systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null; then
+                    warn "Caddyfile восстановлен из rollback backup"
+                else
+                    err "Caddyfile восстановлен, но служба не запустилась; backup: $backup_file"
+                fi
+            else
+                err "Не удалось восстановить Caddyfile; backup: $backup_file"
+            fi
+        fi
+        [[ -z "$staging" ]] || rm -f -- "$staging"
+        return "$rc"
+    }
+    trap 'caddy_transaction_cleanup "$?"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    if [[ "$apply" == "1" ]]; then
+        load_config || return 1
+        load_users || return 1
+        [[ -f "$target" ]] || { err "Safe apply требует исходный Caddyfile для rollback"; return 1; }
+        mkdir -p -- "$BACKUP_DIR" || return 1
+        backup_file=$(mktemp "${BACKUP_DIR}/Caddyfile.safe-apply.$(date +%Y%m%d_%H%M%S).XXXXXX") || return 1
+        cp -- "$target" "$backup_file" && chmod 600 "$backup_file" || return 1
+    fi
+    staging=$(mktemp "${target}.staging.XXXXXX") || return 1
+    CADDYFILE="$staging"
+    if ! "$renderer" || [[ ! -s "$staging" ]]; then
+        err "Генерация Caddyfile не прошла: прежний файл сохранён"
+        return 1
+    fi
+    if ! "$CADDY_BIN" fmt --overwrite "$staging" >/dev/null 2>&1 \
+        || ! "$CADDY_BIN" validate --config "$staging" --adapter caddyfile >/dev/null 2>&1; then
+        err "Новый Caddyfile не прошёл fmt/validate: прежний файл сохранён"
+        return 1
+    fi
+    published=1
+    chmod 600 "$staging" && mv -f -- "$staging" "$target" || return 1
+    CADDYFILE="$target"
+
+    if [[ "$apply" == "1" ]]; then
+        if ! systemctl reload caddy 2>/dev/null; then
+            warn "Reload Caddy не прошёл, пробую restart"
+            systemctl restart caddy 2>/dev/null || { err "Restart Caddy не прошёл"; return 1; }
+        fi
+        for attempt in 1 2 3 4 5; do
+            if caddy_apply_runtime_ready; then
+                committed=1
+                break
+            fi
+            [[ "$attempt" == "5" ]] || sleep 1
+        done
+        [[ "$committed" == "1" ]] || { err "Caddy не прошёл локальную HTTP/TLS-проверку, откатываю"; return 1; }
+        info "Rollback backup: $backup_file"
+    fi
+    committed=1
+    ok "Caddyfile атомарно обновлён"
+)
+
+write_caddyfile() {
+    caddy_config_transaction render_caddyfile 0
+}
+
+write_caddyfile_multi() {
+    caddy_config_transaction render_caddyfile_multi 0
 }
 
 rewrite_caddyfile_current() {
-    if [[ "${DOMAINS:-}" == *,* ]]; then
-        write_caddyfile_multi
-    else
-        write_caddyfile
-    fi
+    caddy_config_transaction caddy_render_current 0
 }
 
 # ─── systemd ─────────────────────────────────────────────────
@@ -3826,34 +4238,7 @@ validate_enabled_configs() {
 safe_apply_caddy_current() {
     load_config
     load_users
-    mkdir -p "$BACKUP_DIR"
-    local ts backup_file
-    ts=$(date +%Y%m%d_%H%M%S)
-    backup_file="$BACKUP_DIR/Caddyfile.safe-apply.${ts}"
-    [[ -f "$CADDYFILE" ]] && cp "$CADDYFILE" "$backup_file"
-
-    if ! rewrite_caddyfile_current; then
-        err "Не удалось сгенерировать Caddyfile"
-        [[ -f "$backup_file" ]] && cp "$backup_file" "$CADDYFILE"
-        return 1
-    fi
-    if [[ -x "$CADDY_BIN" ]] && ! "$CADDY_BIN" validate --config "$CADDYFILE" >/dev/null 2>&1; then
-        err "Новый Caddyfile невалиден, откатываю"
-        [[ -f "$backup_file" ]] && cp "$backup_file" "$CADDYFILE"
-        "$CADDY_BIN" validate --config "$CADDYFILE" >/dev/null 2>&1 || true
-        return 1
-    fi
-    if ! systemctl reload caddy 2>/dev/null; then
-        warn "Reload Caddy не прошёл, пробую restart"
-        if ! systemctl restart caddy 2>/dev/null; then
-            err "Restart Caddy не прошёл, откатываю Caddyfile"
-            [[ -f "$backup_file" ]] && cp "$backup_file" "$CADDYFILE"
-            systemctl restart caddy 2>/dev/null || true
-            return 1
-        fi
-    fi
-    ok "Safe apply Caddy выполнен"
-    [[ -f "$backup_file" ]] && info "Rollback backup: $backup_file"
+    caddy_config_transaction caddy_render_current 1
 }
 
 cmd_safe_apply() {
@@ -5443,45 +5828,83 @@ cmd_export_state() {
     ok "Export создан: $out"
 }
 
+import_shell_word_decode() {
+    # Decode printf %q data without invoking a shell parser or evaluating it.
+    printf '%s' "${1-}" | python3 -c '
+import re
+import sys
+
+def decode(word):
+    if len(word) > 65536:
+        raise ValueError()
+    if word in (b"", b"\x27\x27"):
+        return b""
+    ansi = word.startswith(b"$\x27")
+    if ansi:
+        if len(word) < 3 or not word.endswith(b"\x27"):
+            raise ValueError()
+        word = word[2:-1]
+    output = bytearray()
+    index = 0
+    simple = {92: b"\\", 39: b"\x27", 34: b"\x22", 63: b"?",
+              97: b"\a", 98: b"\b", 101: b"\x1b", 69: b"\x1b",
+              102: b"\f", 110: b"\n", 114: b"\r", 116: b"\t", 118: b"\v"}
+    while index < len(word):
+        char = word[index]
+        index += 1
+        if char == 92:
+            if index == len(word):
+                raise ValueError()
+            char = word[index]
+            index += 1
+            if not ansi:
+                output.append(char)
+            elif char in simple:
+                output.extend(simple[char])
+            elif char in b"01234567":
+                index -= 1
+                match = re.match(rb"[0-7]{1,3}", word[index:])
+                value = int(match[0], 8)
+                if value > 255:
+                    raise ValueError()
+                output.append(value)
+                index += len(match[0])
+            elif char in b"xuU":
+                size = {120: 2, 117: 4, 85: 8}[char]
+                match = re.match(rb"[0-9a-fA-F]{1," + str(size).encode() + rb"}", word[index:])
+                if match is None:
+                    raise ValueError()
+                value = int(match[0], 16)
+                if char == 120:
+                    output.append(value)
+                else:
+                    output.extend(chr(value).encode("utf-8"))
+                index += len(match[0])
+            else:
+                raise ValueError()
+        elif ansi:
+            if char == 39:
+                raise ValueError()
+            output.append(char)
+        else:
+            if char in b" \t\r\n$" + bytes((96, 39, 34)) + b";&|()<>":
+                raise ValueError()
+            output.append(char)
+    text = output.decode("utf-8")
+    if any(ord(char) < 32 or ord(char) == 127 for char in text):
+        raise ValueError()
+    return output
+
+try:
+    value = decode(sys.stdin.buffer.read(65537))
+except (ValueError, UnicodeError, OverflowError):
+    raise SystemExit(1)
+sys.stdout.buffer.write(value)
+'
+}
+
 import_shell_word_is_safe() {
-    local word="${1-}" inner char
-    local i escaped=0
-
-    [[ -z "$word" || "$word" == "''" ]] && return 0
-
-    if [[ "${word:0:2}" == "\$'" && "${word: -1}" == "'" && ${#word} -ge 3 ]]; then
-        inner="${word:2:${#word}-3}"
-        for ((i = 0; i < ${#inner}; i++)); do
-            char="${inner:i:1}"
-            if [[ "$escaped" -eq 1 ]]; then
-                escaped=0
-                continue
-            fi
-            if [[ "$char" == '\\' ]]; then
-                escaped=1
-            elif [[ "$char" == "'" ]]; then
-                return 1
-            fi
-        done
-        [[ "$escaped" -eq 0 ]]
-        return
-    fi
-
-    for ((i = 0; i < ${#word}; i++)); do
-        char="${word:i:1}"
-        if [[ "$escaped" -eq 1 ]]; then
-            escaped=0
-            continue
-        fi
-        if [[ "$char" == '\\' ]]; then
-            escaped=1
-            continue
-        fi
-        case "$char" in
-            [[:space:]]|'$'|'`'|"'"|'"'|';'|'&'|'|'|'('|')'|'<'|'>') return 1 ;;
-        esac
-    done
-    [[ "$escaped" -eq 0 ]]
+    import_shell_word_decode "${1-}" >/dev/null
 }
 
 is_valid_import_chat_id_list() {
@@ -5524,7 +5947,7 @@ sanitize_imported_shell_data_file() {
     local source_file="$1" output_file="$2" mode="${3:-naive}"
     local max_size=1048576 file_size allowed_keys line key value line_no=0 safe_tmp import_value dom
     local -a imported_keys=()
-    local -A seen_keys=()
+    local -A seen_keys=() imported_values=()
 
     [[ -f "$source_file" && ! -L "$source_file" ]] || {
         err "Импортируемый data-файл не является обычным файлом: $source_file"
@@ -5574,14 +5997,15 @@ sanitize_imported_shell_data_file() {
             rm -f "$safe_tmp"
             return 1
         fi
-        if ! import_shell_word_is_safe "$value"; then
+        if ! import_value=$(import_shell_word_decode "$value"); then
             err "Import: небезопасное значение ключа $key"
             rm -f "$safe_tmp"
             return 1
         fi
         seen_keys[$key]=1
         imported_keys+=("$key")
-        printf '%s=%s\n' "$key" "$value" >> "$safe_tmp"
+        imported_values[$key]="$import_value"
+        printf '%s=%q\n' "$key" "$import_value" >> "$safe_tmp"
     done < "$source_file"
 
     [[ -s "$safe_tmp" ]] || { err "Import data-файл не содержит поддерживаемых ключей"; rm -f "$safe_tmp"; return 1; }
@@ -5592,9 +6016,9 @@ sanitize_imported_shell_data_file() {
         local bool_key port_key range_spec min_value max_value cidr_item hop_start hop_end
         local -a cidr_items=()
         for key in "${imported_keys[@]}"; do unset "$key"; done
-        # Файл уже прошёл строгую проверку shell-слов и allowlist ключей.
-        # shellcheck source=/dev/null
-        source "$output_file"
+        for key in "${imported_keys[@]}"; do
+            printf -v "$key" '%s' "${imported_values[$key]}"
+        done
         for key in "${imported_keys[@]}"; do
             import_value="${!key-}"
             if [[ "$import_value" == *$'\n'* || "$import_value" == *$'\r'* || "$import_value" == *$'\t'* ]]; then
@@ -5950,7 +6374,7 @@ sanitize_imported_token_file() {
 }
 
 sanitize_imported_user_meta_file() {
-    local source_file="$1" output_file="$2" expected_user="$3" line key value count=0
+    local source_file="$1" output_file="$2" expected_user="$3" line key value decoded_value count=0
     [[ -f "$source_file" && ! -L "$source_file" ]] || return 1
     [[ "$(stat -c '%s' "$source_file" 2>/dev/null || echo 0)" -le 65536 ]] || { err "Import: metadata-файл слишком большой"; return 1; }
     printf 'USER=%q\n' "$expected_user" > "${output_file}.tmp"
@@ -5961,10 +6385,10 @@ sanitize_imported_user_meta_file() {
         key="${BASH_REMATCH[1]}"
         value="${BASH_REMATCH[2]}"
         [[ "$key" == "USER" ]] && continue
-        import_shell_word_is_safe "$value" || { err "Import: небезопасное metadata-значение"; rm -f "${output_file}.tmp"; return 1; }
+        decoded_value=$(import_shell_word_decode "$value") || { err "Import: небезопасное metadata-значение"; rm -f "${output_file}.tmp"; return 1; }
         count=$((count + 1))
         (( count <= 128 )) || { err "Import: слишком много metadata-полей"; rm -f "${output_file}.tmp"; return 1; }
-        printf '%s=%s\n' "$key" "$value" >> "${output_file}.tmp"
+        printf '%s=%q\n' "$key" "$decoded_value" >> "${output_file}.tmp"
     done < "$source_file"
     install -m 600 "${output_file}.tmp" "$output_file"
     rm -f "${output_file}.tmp"
@@ -6440,8 +6864,14 @@ nodes_ssh() {
     nodes_validate_line "$line" || { err "Небезопасная node-запись"; return 1; }
     nodes_ensure_host_key "$line" || return 1
     IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
+    local -a relay_transport=()
+    if nodes_relay_user_sync_enabled "$node_name" && [[ -n "${NODES_RELAY_SYNC_SSH_CONFIG:-}" ]]; then
+        nodes_relay_transport_valid || return 1
+        relay_transport=(-F "$NODES_RELAY_SYNC_SSH_CONFIG")
+    fi
     if command -v timeout >/dev/null 2>&1; then
         timeout "${ssh_timeout}s" ssh \
+            "${relay_transport[@]}" \
             -n \
             -o BatchMode=yes \
             -o ConnectTimeout=8 \
@@ -6455,6 +6885,7 @@ nodes_ssh() {
         return $?
     fi
     ssh \
+        "${relay_transport[@]}" \
         -n \
         -o BatchMode=yes \
         -o ConnectTimeout=8 \
@@ -6473,7 +6904,13 @@ nodes_scp_to() {
     nodes_validate_line "$line" || { err "Небезопасная node-запись"; return 1; }
     nodes_ensure_host_key "$line" || return 1
     IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
+    local -a relay_transport=()
+    if nodes_relay_user_sync_enabled "$node_name" && [[ -n "${NODES_RELAY_SYNC_SSH_CONFIG:-}" ]]; then
+        nodes_relay_transport_valid || return 1
+        relay_transport=(-F "$NODES_RELAY_SYNC_SSH_CONFIG")
+    fi
     scp \
+        "${relay_transport[@]}" \
         -P "$node_port" \
         -o BatchMode=yes \
         -o ConnectTimeout=8 \
@@ -6668,8 +7105,96 @@ cmd_nodes_deploy_script() {
     fi
 }
 
+nodes_relay_user_sync_enabled() {
+    subscription_name_in_list "$1" "${NODES_RELAY_USER_SYNC_NODE_NAMES:-}"
+}
+
+nodes_relay_transport_valid() {
+    local path="${NODES_RELAY_SYNC_SSH_CONFIG:-}"
+    [[ "$path" == /* && -f "$path" && ! -L "$path" ]] || return 1
+    [[ "$(stat -c %u "$path")" == 0 && "$(stat -c %a "$path")" =~ ^[46]00$ ]]
+}
+
+nodes_sync_relay_line() {
+    local line="$1" payload remote_dir helper sudo_cmd node_user helper_mode rc=0
+    helper="${NODES_RELAY_SYNC_HELPER:-/usr/local/lib/yurich-panel/relay-user-sync.py}"
+    [[ "$helper" =~ ^/[A-Za-z0-9_./-]+$ && -f "$helper" && ! -L "$helper" ]] || {
+        err "Relay user sync helper не установлен"; return 1;
+    }
+    helper_mode=$(stat -c %a "$helper") || return 1
+    [[ "$(stat -c %u "$helper")" == 0 && "$helper_mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$helper_mode & 022) == 0 )) || return 1
+    node_user=$(cut -d'|' -f4 <<< "$line")
+    sudo_cmd=$(nodes_remote_sudo_prefix "$node_user")
+    payload=$(mktemp /run/yurich-relay-users.XXXXXXXX.env) || return 1
+    chmod 600 "$payload"
+    local user
+    while IFS= read -r user; do
+        is_valid_proxy_user "$user" || { rm -f -- "$payload"; return 1; }
+        if ! user_is_expired "$user"; then
+            get_or_create_token_file "${SUBS_DIR}/${user}.token" >/dev/null || { rm -f -- "$payload"; return 1; }
+        fi
+    done < <(list_subscription_users)
+    if ! python3 -B "$helper" export --file "$payload" >/dev/null; then
+        rm -f -- "$payload"; return 1
+    fi
+    remote_dir=$(nodes_ssh "$line" 'umask 077; mktemp -d /tmp/yurich-relay-users.XXXXXXXX') || {
+        rm -f -- "$payload"; return 1;
+    }
+    if [[ ! "$remote_dir" =~ ^/tmp/yurich-relay-users\.[A-Za-z0-9]{8}$ ]]; then
+        rm -f -- "$payload"; return 1
+    fi
+    if nodes_scp_to "$line" "$payload" "$remote_dir/users.env"; then
+        nodes_ssh "$line" "trap 'rm -f -- $remote_dir/users.env; rmdir -- $remote_dir' EXIT; ${sudo_cmd}python3 -B $helper apply --file $remote_dir/users.env" || rc=1
+    else
+        nodes_ssh "$line" "rm -f -- $remote_dir/users.env; rmdir -- $remote_dir" >/dev/null 2>&1 || true
+        rc=1
+    fi
+    rm -f -- "$payload"
+    return "$rc"
+}
+
+cmd_nodes_relay_sync_users() {
+    [[ -n "${NODES_RELAY_USER_SYNC_NODE_NAMES:-}" ]] || return 0
+    local line name failed=0 lock_fd selected=0 pending="${CONFIG_DIR}/.relay-users-sync-pending"
+    exec {lock_fd}>/run/lock/yurich-relay-users-sync.lock || return 1
+    if ! flock -w 30 "$lock_fd"; then exec {lock_fd}>&-; return 75; fi
+    while IFS= read -r line; do
+        name="${line%%|*}"
+        nodes_relay_user_sync_enabled "$name" || continue
+        selected=$((selected + 1))
+        nodes_sync_relay_line "$line" || failed=1
+    done < <(nodes_list_lines)
+    flock -u "$lock_fd"; exec {lock_fd}>&-
+    [[ "$selected" -gt 0 ]] || failed=1
+    if [[ "$failed" -ne 0 ]]; then
+        touch "$pending"; chmod 600 "$pending"
+    else
+        rm -f -- "$pending"
+    fi
+    return "$failed"
+}
+
+cmd_nodes_relay_maintain() {
+    load_config; load_users
+    [[ -n "${NODES_RELAY_USER_SYNC_NODE_NAMES:-}" ]] || return 0
+    local helper="${NODES_RELAY_SYNC_HELPER:-/usr/local/lib/yurich-panel/relay-user-sync.py}"
+    local marker="${CONFIG_DIR}/relay-users-publication.env" digest previous="" tmp
+    cmd_nodes_relay_sync_users || return 1
+    digest=$(python3 -B "$helper" fingerprint) || return 1
+    [[ "$digest" =~ ^[a-f0-9]{64}$ ]] || return 1
+    [[ ! -f "$marker" ]] || previous=$(awk -F= '$1=="SOURCE_SHA256"{print $2;exit}' "$marker")
+    [[ "$digest" != "$previous" ]] || return 0
+    local SUBSCRIPTION_RELAY_REFRESH_ONLY=1
+    cmd_nodes_rebuild_subscriptions || return 1
+    tmp=$(mktemp "${CONFIG_DIR}/.relay-publication.XXXXXXXX.env") || return 1
+    printf 'SOURCE_SHA256=%s\n' "$digest" > "$tmp"
+    chmod 600 "$tmp"
+    mv -f -- "$tmp" "$marker"
+}
+
 cmd_nodes_sync_users() {
-    local target="${1:-}" archive remote_tmp failed=0 lines=() items=()
+    local target="${1:-}" archive remote_tmp node_archive scoped_archive failed=0 lines=() items=()
     load_config
     load_users
     nodes_ensure_file
@@ -6700,15 +7225,34 @@ cmd_nodes_sync_users() {
     for line in "${lines[@]}"; do
         local node_name node_host node_port node_user node_domain node_role node_weight node_enabled sudo_cmd
         IFS='|' read -r node_name node_host node_port node_user node_domain node_role node_weight node_enabled <<< "$line"
-        [[ "$node_enabled" == "1" ]] || { warn "Node ${node_name} выключена, пропускаю"; continue; }
+        if nodes_relay_user_sync_enabled "$node_name"; then
+            nodes_sync_relay_line "$line" || failed=1
+            continue
+        fi
+        nodes_canary_runtime_enabled "$node_name" "$node_enabled" || { warn "Node ${node_name} выключена, пропускаю"; continue; }
+        node_archive="$archive"
+        scoped_archive=""
+        if subscription_name_in_list "$node_name" "${NODES_CANARY_NODE_NAMES:-}"; then
+            scoped_archive=$(mktemp /tmp/yurich-panel-canary-sync-XXXXXX.tar.gz) || { failed=1; continue; }
+            if ! python3 -B /usr/local/lib/yurich-panel/node-canary-state.py \
+                --source "$archive" --output "$scoped_archive" --users "${NODES_CANARY_USERS:-}"; then
+                rm -f -- "$scoped_archive"
+                err "Canary scope rejected: ${node_name}"
+                failed=1
+                continue
+            fi
+            node_archive="$scoped_archive"
+        fi
         remote_tmp="/tmp/yurich-panel-node-sync-${RANDOM}-$$.tar.gz"
         sudo_cmd=$(nodes_remote_sudo_prefix "$node_user")
         info "Синхронизирую пользователей на ${node_name}..."
-        if ! nodes_scp_to "$line" "$archive" "$remote_tmp"; then
+        if ! nodes_scp_to "$line" "$node_archive" "$remote_tmp"; then
+            [[ -z "$scoped_archive" ]] || rm -f -- "$scoped_archive"
             err "Не удалось отправить архив на ${node_name}"
             failed=1
             continue
         fi
+        [[ -z "$scoped_archive" ]] || rm -f -- "$scoped_archive"
         if nodes_ssh "$line" "trap 'rm -f ${remote_tmp}' EXIT; ${sudo_cmd}chmod 600 ${remote_tmp} || exit 16; ${sudo_cmd}mkdir -p ${CONFIG_DIR} ${BACKUP_DIR} ${USER_META_DIR} ${SUBS_DIR} || exit 17; ${sudo_cmd}tar -tzf ${remote_tmp} >/dev/null || exit 18; ${sudo_cmd}tar -C ${CONFIG_DIR} -czf ${BACKUP_DIR}/node-sync-before-\$(date +%Y%m%d_%H%M%S).tar.gz users.conf credentials users.d subscriptions subscription-aliases.conf xray-users.conf xray-compat-users.conf xray-users.disabled users.disabled 2>/dev/null || true; ${sudo_cmd}find ${BACKUP_DIR} -maxdepth 1 -type f -name 'node-sync-before-*.tar.gz' -exec chmod 600 {} +; ${sudo_cmd}tar -C ${CONFIG_DIR} -xzf ${remote_tmp} || exit 19; ${sudo_cmd}chmod 700 ${CONFIG_DIR} ${CREDENTIALS_DIR} ${USER_META_DIR} ${SUBS_DIR} 2>/dev/null || true; ${sudo_cmd}chmod 600 ${USERS_FILE} ${DISABLED_USERS_FILE} ${CREDENTIALS_PRIVATE_KEY} ${USERS_SECRETS_FILE} ${ACTIVE_USERS_HASH_FILE} ${CREDENTIALS_LOCK_FILE} ${XRAY_USERS_FILE} ${XRAY_COMPAT_USERS_FILE} ${XRAY_DISABLED_USERS_FILE} ${SUBS_ALIASES_FILE} ${USER_META_DIR}/*.env ${SUBS_DIR}/*.token 2>/dev/null || true; ${sudo_cmd}chmod 644 ${CREDENTIALS_PUBLIC_KEY} 2>/dev/null || true; sync_status=0; if ${sudo_cmd}test -x ${SCRIPT_PATH}; then if ${sudo_cmd}test -x ${CADDY_BIN} && ${sudo_cmd}test -f ${CADDYFILE}; then ${sudo_cmd}bash ${SCRIPT_PATH} safe-apply || sync_status=20; fi; if ${sudo_cmd}test -x ${HYSTERIA_BIN} || ${sudo_cmd}test -f ${HYSTERIA_CONFIG}; then ${sudo_cmd}bash ${SCRIPT_PATH} hysteria-sync >/dev/null 2>&1 || sync_status=21; fi; if ${sudo_cmd}test -x ${XRAY_BIN} || ${sudo_cmd}test -f ${XRAY_CONFIG}; then ${sudo_cmd}bash ${SCRIPT_PATH} xray-rebuild >/dev/null 2>&1 || sync_status=22; fi; ${sudo_cmd}bash ${SCRIPT_PATH} nodes-subscriptions >/dev/null 2>&1 || sync_status=23; else sync_status=24; fi; exit \$sync_status"; then
             ok "Users synced: ${node_name}"
         else
@@ -6731,11 +7275,12 @@ node_links_for_user() {
     [[ -n "$pass" ]] || return 0
     [[ -f "$NODES_FILE" ]] || return 0
     nodes_list_lines | while IFS='|' read -r name host port ssh_user node_domain role weight enabled; do
-        [[ "$enabled" == "1" ]] || continue
+        nodes_canary_runtime_enabled "$name" "$enabled" || continue
         [[ "${role:-edge}" == "edge" ]] || continue
         [[ -n "$node_domain" && "$node_domain" != "-" ]] || continue
         is_valid_domain "$node_domain" || continue
         subscription_node_core_enabled "$name" || continue
+        subscription_node_user_allowed "$user" "$name" || continue
         printf 'naive+https://%s:%s@%s:443#%s\n' "$user" "$pass" "$node_domain" \
             "$(uri_fragment_encode "$(pretty_profile_name "$user" "HTTPS" "$name")")"
     done
@@ -6763,6 +7308,7 @@ naive_extra_links_for_user() {
         node=$(printf '%s' "$node" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
         is_valid_domain "$host" || return 1
         [[ "$node" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || return 1
+        subscription_node_user_allowed "$user" "$node" || continue
         [[ -z "${seen_hosts[$host]+x}" ]] || continue
         seen_hosts["$host"]=1
         printf 'naive+https://%s:%s@%s:443#%s\n' "$user" "$pass" "$host" \
@@ -6805,6 +7351,7 @@ subscription_http_node_links_for_user() {
         entry=$(printf '%s' "$entry" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
         [[ -n "$entry" ]] || continue
         IFS='|' read -r node domain ip extra <<< "$entry"
+        subscription_node_user_allowed "$user" "$node" || continue
         tmp=$(mktemp /tmp/yurich-http-node-links-XXXXXX) || return 1
         chmod 600 "$tmp"
         if ! curl --proto '=https' --tlsv1.2 -fsS \
@@ -6857,7 +7404,7 @@ browser_subscription_node_is_enabled() {
         return 0
     fi
     IFS='|' read -r _name _host _port _user _domain _role _weight enabled <<< "$line"
-    [[ "$enabled" == "1" ]]
+    nodes_canary_runtime_enabled "$node_name" "$enabled"
 }
 
 browser_subscription_links_for_user() {
@@ -6886,6 +7433,7 @@ browser_subscription_links_for_user() {
         is_valid_domain "$host" || return 1
         [[ "$node" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || return 1
         browser_subscription_node_is_enabled "$node" "$host" || continue
+        subscription_node_user_allowed "$user" "$node" || continue
         [[ -z "${seen_hosts[$host]+x}" ]] || continue
         seen_hosts["$host"]=1
         if [[ "$emit_profiles" == "1" ]]; then
@@ -6922,9 +7470,24 @@ subscription_node_xhttp_enabled() {
     subscription_name_in_list "$node_name" "$xhttp_nodes"
 }
 
+nodes_canary_runtime_enabled() {
+    local node_name="$1" enabled="$2"
+    [[ "$enabled" == "1" ]] && return 0
+    [[ "$enabled" == "0" && -n "${NODES_CANARY_USERS:-}" ]] || return 1
+    subscription_name_in_list "$node_name" "${NODES_CANARY_NODE_NAMES:-}"
+}
+
+subscription_node_user_allowed() {
+    local user="$1" node_name="$2" allowed="${NODES_CANARY_USERS:-}"
+    subscription_name_in_list "$node_name" "${NODES_CANARY_NODE_NAMES:-}" || return 0
+    [[ " ${allowed//,/ } " != *" all "* && " ${allowed//,/ } " != *" * "* ]] || return 1
+    subscription_name_in_list "$user" "$allowed"
+}
+
 subscription_user_xhttp_enabled() {
     local user="$1" node_name="$2"
     local canary_users="${SUBSCRIPTION_XHTTP_CANARY_USERS:-}"
+    subscription_node_user_allowed "$user" "$node_name" || return 1
     subscription_node_xhttp_enabled "$node_name" && return 0
     subscription_name_in_list "$node_name" "${SUBSCRIPTION_XHTTP_CANARY_NODE_NAMES:-}" || return 1
     [[ "$canary_users" == "*" ]] && return 0
@@ -6942,6 +7505,8 @@ subscription_node_core_enabled() {
 
 subscription_node_relay_only() {
     local node_name="$1"
+    # Older loaded renderers keep canaries hidden; current renderers apply the user gate.
+    subscription_name_in_list "$node_name" "${NODES_CANARY_NODE_NAMES:-}" && return 1
     subscription_name_in_list "$node_name" "${SUBSCRIPTION_RELAY_ONLY_NODE_NAMES:-}"
 }
 
@@ -6977,12 +7542,41 @@ cmd_node_subscription_export() {
             uuid=$(get_xray_user_uuid "$user" 2>/dev/null || true)
             if [[ -n "$uuid" ]]; then
                 reality_link=$(uri_with_profile_name \
-                    "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID}&spx=%2F" \
+                    "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=${XRAY_REALITY_CLIENT_FINGERPRINT:-chrome}&pbk=${XRAY_REALITY_PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID}&spx=%2F" \
                     "$(pretty_profile_name "$user" "Reality")")
                 printf '%s\t%s\n' "$user" "$reality_link"
             fi
         fi
     done < <(list_subscription_users)
+}
+
+cmd_node_relay_source_export() {
+    local user="${1:-}" transport="${2:-}" output
+    load_config
+    load_users
+    is_valid_proxy_user "$user" || return 1
+    subscription_user_exists "$user" || return 1
+    user_is_expired "$user" && return 1
+    is_valid_domain "$DOMAIN" || return 1
+    systemctl is-active --quiet xray 2>/dev/null || return 1
+
+    # Relay sources must remain independent of the public subscription policy.
+    case "$transport" in
+        reality)
+            output=$(cmd_node_subscription_export "$user" | awk -F '\t' '
+                $2 ~ /^vless:\/\// && $2 ~ /security=reality/ && $2 ~ /type=tcp/ {
+                    print substr($0, index($0, "\t") + 1); exit
+                }
+            ') || return 1
+            ;;
+        xhttp)
+            [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" ]] || return 1
+            output=$(node_xhttp_link_for_user "$user" "" "$DOMAIN") || return 1
+            ;;
+        *) return 1 ;;
+    esac
+    [[ -n "$output" ]] || return 1
+    printf '%s\n' "$output"
 }
 
 subscription_node_cache_ready() {
@@ -7005,7 +7599,7 @@ subscription_prepare_node_link_cache() {
     [[ -d "$cache_dir" ]] || return 1
 
     while IFS='|' read -r name host port ssh_user node_domain role weight enabled; do
-        [[ "$enabled" == "1" ]] || continue
+        nodes_canary_runtime_enabled "$name" "$enabled" || continue
         [[ -n "$node_domain" && "$node_domain" != "-" ]] || continue
         is_valid_domain "$node_domain" || continue
         subscription_node_core_enabled "$name" || continue
@@ -7066,9 +7660,10 @@ node_app_links_for_user() {
     [[ -n "$user" ]] || return 0
     [[ -f "$NODES_FILE" ]] || return 0
     nodes_list_lines | while IFS='|' read -r name host port ssh_user node_domain role weight enabled; do
-        [[ "$enabled" == "1" ]] || continue
+        nodes_canary_runtime_enabled "$name" "$enabled" || continue
         [[ -n "$node_domain" && "$node_domain" != "-" ]] || continue
         is_valid_domain "$node_domain" || continue
+        subscription_node_user_allowed "$user" "$name" || continue
 
         local line sudo_cmd remote_cmd
         line="${name}|${host}|${port}|${ssh_user}|${node_domain}|${role}|${weight}|${enabled}"
@@ -7116,7 +7711,7 @@ node_app_links_for_user() {
 node_relay_source_link_for_user() {
     local user="$1" line="$2" node_domain="$3" transport="$4"
     local node_name node_host node_port node_user node_role node_weight node_enabled
-    local sudo_cmd remote_cmd output quoted_user awk_filter
+    local sudo_cmd remote_cmd output quoted_user awk_filter token tmp
 
     is_valid_proxy_user "$user" || return 1
     nodes_validate_line "$line" || return 1
@@ -7132,9 +7727,33 @@ node_relay_source_link_for_user() {
     esac
 
     IFS='|' read -r node_name node_host node_port node_user _ node_role node_weight node_enabled <<< "$line"
+    if subscription_name_in_list "$node_name" "${VLESS_RELAY_HTTPS_SOURCE_NODES:-}"; then
+        is_valid_ipv4 "$node_host" || return 1
+        token=$(cat "${SUBS_DIR}/${user}.token" 2>/dev/null) || return 1
+        [[ "$token" =~ ^[a-fA-F0-9]{32,64}$ ]] || return 1
+        tmp=$(mktemp -d /tmp/yurich-relay-source-XXXXXX) || return 1
+        chmod 700 "$tmp"
+        printf 'url = "https://%s/s/%s/links.txt"\n' "$node_domain" "$token" > "$tmp/request.env"
+        chmod 600 "$tmp/request.env"
+        if ! curl --config "$tmp/request.env" --proto '=https' --tlsv1.2 -fsS \
+            --connect-timeout 5 --max-time 15 --max-filesize 1048576 \
+            --resolve "${node_domain}:443:${node_host}" -o "$tmp/links" 2>/dev/null; then
+            rm -rf -- "$tmp"
+            return 1
+        fi
+        output=$(awk -v authority="@${node_domain}:443?" -v transport="$transport" '
+            /^vless:\/\// && index($0, authority) &&
+            ((transport == "reality" && /security=reality/ && /type=tcp/) ||
+             (transport == "xhttp" && /security=tls/ && /type=xhttp/)) {print; exit}
+        ' "$tmp/links")
+        rm -rf -- "$tmp"
+        [[ -n "$output" ]] || return 1
+        printf '%s\n' "$output"
+        return 0
+    fi
     sudo_cmd=$(nodes_remote_sudo_prefix "$node_user")
     printf -v quoted_user '%q' "$user"
-    remote_cmd="${sudo_cmd}bash -lc 'u=${quoted_user}; token_file=\"/etc/naiveproxy/subscriptions/\${u}.token\"; token=\$(tr -dc \"a-fA-F0-9\" < \"\$token_file\" 2>/dev/null | head -c 64); links=\"/var/www/html/s/\${token}/links.txt\"; [ -s \"\$links\" ] || exit 3; awk '\''${awk_filter}'\'' \"\$links\"'"
+    remote_cmd="${sudo_cmd}bash -lc 'u=${quoted_user}; if [ -x /usr/local/bin/yurich-panel.sh ] && grep -q \"node-relay-export)\" /usr/local/bin/yurich-panel.sh; then exec /usr/local/bin/yurich-panel.sh node-relay-export \"\$u\" ${transport}; fi; token_file=\"/etc/naiveproxy/subscriptions/\${u}.token\"; token=\$(tr -dc \"a-fA-F0-9\" < \"\$token_file\" 2>/dev/null | head -c 64); links=\"/var/www/html/s/\${token}/links.txt\"; [ -s \"\$links\" ] || exit 3; awk '\''${awk_filter}'\'' \"\$links\"'"
     output=$(nodes_ssh "$line" "$remote_cmd") || return 1
     printf '%s\n' "$output" | awk -v authority="@${node_domain}:443?" 'index($0, authority) {print; exit}'
 }
@@ -7147,8 +7766,14 @@ subscription_vless_relay_links_for_user() {
     local -A seen=()
 
     [[ -n "$user" ]] || return 0
-    subscription_name_in_list "$user" "${VLESS_RELAY_USERS:-}" || return 0
-    configured="${VLESS_RELAY_PROFILES:-}"
+    configured=""
+    if subscription_name_in_list "$user" "${VLESS_RELAY_USERS:-}"; then
+        configured="${VLESS_RELAY_PROFILES:-}"
+    fi
+    if subscription_name_in_list "$user" "${VLESS_RELAY_CANARY_USERS:-}" && [[ -n "${VLESS_RELAY_CANARY_PROFILES:-}" ]]; then
+        [[ -z "$configured" ]] || configured+=";"
+        configured+="${VLESS_RELAY_CANARY_PROFILES}"
+    fi
     [[ -n "$configured" ]] || return 0
 
     IFS=';' read -r -a entries <<< "$configured"
@@ -7185,6 +7810,11 @@ subscription_vless_relay_links_for_user() {
                     ;;
                 *) return 1 ;;
             esac
+            if subscription_name_in_list "$user" "${VLESS_RELAY_CANARY_USERS:-}" \
+                && [[ ";${VLESS_RELAY_CANARY_PROFILES:-};" == *";${entry};"* ]] \
+                && [[ ";${VLESS_RELAY_PROFILES:-};" != *";${entry};"* ]]; then
+                protocol_label+=" TEST"
+            fi
             if [[ -z "$source_link" && "$source_node" != "local" ]]; then
                 source_link=$(node_relay_source_link_for_user "$user" "$node_line" "$source_domain" "$transport") || return 1
             fi
@@ -7204,11 +7834,52 @@ subscription_vless_relay_links_for_user() {
 }
 
 subscription_filter_published_links() {
-    awk '
+    local user="${1:-}" entry source_node relay_host relay_port transports source_domain line transport
+    local -a entries=() replacements=()
+    if subscription_name_in_list "$user" "${VLESS_RELAY_USERS:-}"; then
+        IFS=';' read -r -a entries <<< "${VLESS_RELAY_PROFILES:-}"
+        for entry in "${entries[@]}"; do
+            IFS='|' read -r source_node relay_host relay_port transports <<< "$entry"
+            subscription_name_in_list "$source_node" "${SUBSCRIPTION_RELAY_ONLY_NODE_NAMES:-}" || continue
+            if [[ "$source_node" == local ]]; then
+                source_domain="$DOMAIN"
+            else
+                line=$(nodes_get_line "$source_node") || return 1
+                IFS='|' read -r _ _ _ _ source_domain _ _ _ <<< "$line"
+            fi
+            is_valid_domain "$source_domain" || return 1
+            for transport in ${transports//,/ }; do
+                case "$transport" in reality|xhttp) ;; *) return 1 ;; esac
+                replacements+=("${source_domain,,}|${transport}")
+            done
+        done
+    fi
+    if [[ "${#replacements[@]}" -eq 0 ]]; then
+        awk '
         /Reality GitHub TEST/ { next }
         /spx=%2Fgithub-test-/ { next }
         NF && !seen[$0]++ { print }
-    '
+        '
+        return
+    fi
+    python3 -c '
+import sys
+from urllib.parse import parse_qs, urlsplit
+replacements = {tuple(value.split("|", 1)) for value in sys.argv[1:]}
+seen = set()
+for row in sys.stdin:
+    value = row.rstrip("\r\n")
+    if not value.strip() or value in seen or "Reality GitHub TEST" in value or "spx=%2Fgithub-test-" in value:
+        continue
+    uri = urlsplit(value)
+    if uri.scheme == "vless" and uri.port == 443:
+        query = parse_qs(uri.query)
+        kind = "xhttp" if query.get("type") == ["xhttp"] else "reality" if query.get("security") == ["reality"] else ""
+        if (uri.hostname, kind) in replacements:
+            continue
+    seen.add(value)
+    print(value)
+' "${replacements[@]}"
 }
 
 subscription_rebuild_worker_count() {
@@ -7279,9 +7950,10 @@ subscription_generate_pages_parallel() {
     return "$failed"
 }
 
-cmd_nodes_rebuild_subscriptions() {
+cmd_nodes_rebuild_subscriptions() (
     load_config
     load_users
+    cmd_nodes_relay_sync_users >/dev/null || { err "Relay users не синхронизированы; прежние подписки сохранены"; return 1; }
     local lock_fd cache_dir="" build_log_dir="" active_users_file="" results_file=""
     local failed=0 failed_users="" jobs status user expected=0 result_count=0
     install -d -m 755 /run/lock
@@ -7291,7 +7963,9 @@ cmd_nodes_rebuild_subscriptions() {
         return 75
     fi
 
-    cleanup_orphan_subscription_pages
+    if [[ "${SUBSCRIPTION_RELAY_REFRESH_ONLY:-0}" != "1" ]]; then
+        cleanup_orphan_subscription_pages
+    fi
     ensure_web_privacy_files
     subscription_build_traffic_cache >/dev/null 2>&1 || true
     ensure_qrencode_for_subscriptions >/dev/null 2>&1 || warn "qrencode недоступен; QR-коды будут пропущены"
@@ -7315,7 +7989,11 @@ cmd_nodes_rebuild_subscriptions() {
     while IFS= read -r user; do
         [[ -z "$user" ]] && continue
         if user_is_expired "$user"; then
-            cleanup_subscription_page "$user"
+            if [[ "${SUBSCRIPTION_RELAY_REFRESH_ONLY:-0}" == "1" ]]; then
+                suspend_subscription_page "$user" || failed=$((failed + 1))
+            else
+                cleanup_subscription_page "$user"
+            fi
             continue
         fi
         printf '%s\n' "$user" >> "$active_users_file"
@@ -7355,7 +8033,7 @@ cmd_nodes_rebuild_subscriptions() {
     fi
     apply_subscription_aliases >/dev/null 2>&1 || { err "Не удалось обновить alias URL"; return 1; }
     ok "Пересобраны страницы подписки: ${count}"
-}
+)
 
 cmd_subscription_rebuild_clean() {
     load_config
@@ -8558,11 +9236,16 @@ profile_flag_for_label() {
         swe|*sweden*|*stockholm*) printf '🇸🇪' ;;
         estonia|ee|*estonia*|*tallinn*) printf '🇪🇪' ;;
         *germany*|*deutschland*|*berlin*|*frankfurt*) printf '🇩🇪' ;;
+        *switzerland*|*swiss*|*zurich*) printf '🇨🇭' ;;
         *netherlands*|*holland*|*amsterdam*) printf '🇳🇱' ;;
         *united\ states*|*america*|*california*|*fremont*|*new\ york*) printf '🇺🇸' ;;
         *united\ kingdom*|*london*|*britain*) printf '🇬🇧' ;;
         *france*|*paris*) printf '🇫🇷' ;;
         *poland*|*warsaw*) printf '🇵🇱' ;;
+        *czech*|*prague*|*praha*) printf '🇨🇿' ;;
+        *romania*|*bucharest*|*bucuresti*) printf '🇷🇴' ;;
+        *belarus*|*minsk*) printf '🇧🇾' ;;
+        *turkey*|*turkiye*|*istanbul*|*ankara*) printf '🇹🇷' ;;
         *russia*|*moscow*) printf '🇷🇺' ;;
         *) printf '🌐' ;;
     esac
@@ -8574,6 +9257,7 @@ node_location_label() {
     case "$lowered" in
         germany|de|main) printf 'Germany' ;;
         germany2|germany-2|de2) printf 'Germany 2' ;;
+        switzerland|swiss|ch|zurich) printf 'Switzerland' ;;
         fin|finland|fi) printf 'Finland' ;;
         finland2|finland-2|helsinki|fi2) printf 'Finland 2' ;;
         swe|sweden|finland3|finland-3) printf 'SWE' ;;
@@ -8581,6 +9265,10 @@ node_location_label() {
         netherlands|nl|holland|amsterdam) printf 'Netherlands' ;;
         usa|us|america|california|fremont) printf 'USA California' ;;
         poland|pl|warsaw) printf 'Poland' ;;
+        prague|praha|cz|czech|czechia) printf 'Czechia Prague' ;;
+        bucharest|bucuresti|romania|ro) printf 'Romania Bucharest' ;;
+        belarus|bel|by|minsk) printf 'Belarus' ;;
+        turkey|tur|tr|turkiye|istanbul|ankara) printf 'Turkey' ;;
         poland2|pl2|usa2|test) printf 'Poland 2' ;;
         france|fr|paris) printf 'France' ;;
         uk|gb|united-kingdom|united_kingdom|great-britain|britain|london) printf 'United Kingdom' ;;
@@ -8670,6 +9358,12 @@ import urllib.parse
 
 def loc_code(host, label):
     text = f"{host} {label}".lower()
+    if "prague" in text or "praha" in text or "czech" in text:
+        return "CZ"
+    if "romania" in text or "bucharest" in text or "bucuresti" in text:
+        return "RO"
+    if "switzerland" in text or "swiss" in text or "zurich" in text:
+        return "CH"
     if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "SWE"
     if "estonia" in text or "tallinn" in text:
@@ -8696,6 +9390,12 @@ def loc_code(host, label):
 
 def loc_label(host, label):
     text = f"{host} {label}".lower()
+    if "prague" in text or "praha" in text or "czech" in text:
+        return "🇨🇿 Czechia Prague"
+    if "romania" in text or "bucharest" in text or "bucuresti" in text:
+        return "🇷🇴 Romania Bucharest"
+    if "switzerland" in text or "swiss" in text or "zurich" in text:
+        return "🇨🇭 Switzerland"
     if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "🇸🇪 SWE"
     if "estonia" in text or "tallinn" in text:
@@ -8723,7 +9423,8 @@ def loc_label(host, label):
     return "🌐 VPN"
 
 def clean_label(host, old_label, proto):
-    return urllib.parse.quote(f"{loc_label(host, old_label)} • {proto}", safe="-._~")
+    suffix = " Relay TEST" if "Relay TEST" in old_label else ""
+    return urllib.parse.quote(f"{loc_label(host, old_label)} • {proto}{suffix}", safe="-._~")
 
 def one(line):
     raw = line.strip()
@@ -8794,6 +9495,10 @@ force_xray_core = len(sys.argv) > 2 and sys.argv[2] == "1"
 
 def loc_code(host, label):
     text = f"{host} {label}".lower()
+    if "switzerland" in text or "swiss" in text or "zurich" in text:
+        return "CH"
+    if "romania" in text or "bucharest" in text or "bucuresti" in text:
+        return "RO"
     if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "SWE"
     if "estonia" in text or "tallinn" in text:
@@ -8820,6 +9525,10 @@ def loc_code(host, label):
 
 def loc_label(host, label):
     text = f"{host} {label}".lower()
+    if "switzerland" in text or "swiss" in text or "zurich" in text:
+        return "🇨🇭 Switzerland"
+    if "romania" in text or "bucharest" in text or "bucuresti" in text:
+        return "🇷🇴 Romania Bucharest"
     if "sweden" in text or "stockholm" in text or "swe •" in text:
         return "🇸🇪 SWE"
     if "estonia" in text or "tallinn" in text:
@@ -8847,7 +9556,8 @@ def loc_label(host, label):
     return "🌐 VPN"
 
 def clean_label(host, old_label, proto):
-    return urllib.parse.quote(f"{loc_label(host, old_label)} • {proto}", safe="-._~")
+    suffix = " Relay TEST" if "Relay TEST" in old_label else ""
+    return urllib.parse.quote(f"{loc_label(host, old_label)} • {proto}{suffix}", safe="-._~")
 
 def first(query, key, default=""):
     values = query.get(key)
@@ -9155,11 +9865,11 @@ EOF
     local uri="naive+https://${first_user}:${first_pass}@${DOMAIN}:443"
     if command -v qrencode &>/dev/null; then
         echo
-        qrencode -t ANSIUTF8 "$uri"
+        printf '%s' "$uri" | qrencode -t ANSIUTF8
         echo
     else
         info "Устанавливаю qrencode для QR кода..."
-        apt-get install -y -q qrencode 2>/dev/null &&         echo && qrencode -t ANSIUTF8 "$uri" && echo ||         warn "qrencode недоступен — установи вручную: apt install qrencode"
+        apt-get install -y -q qrencode 2>/dev/null &&         echo && printf '%s' "$uri" | qrencode -t ANSIUTF8 && echo ||         warn "qrencode недоступен — установи вручную: apt install qrencode"
     fi
     ok "QR содержит совместимый naive+https URI для NekoBox / Shadowrocket / Hiddify"
     hr
@@ -9412,9 +10122,16 @@ write_hysteria_config() {
     install_hysteria_auth_helper || return 1
     install_hysteria_tls_sync || return 1
     save_config
-    if [[ "${HYSTERIA_WARP_ENABLED:-0}" == "1" || "${WARP_PROXY_ENABLED:-0}" == "1" ]]; then
-        hy_warp_enabled=1
-    fi
+    case "${HYSTERIA_EGRESS_MODE:-auto}" in
+        warp-tcp-direct-udp) hy_warp_enabled=1 ;;
+        direct) ;;
+        auto)
+            if [[ "${WARP_PROXY_ENABLED:-0}" == "1" && "${WARP_MODE:-off}" == "proxy" ]]; then
+                hy_warp_enabled=1
+            fi
+            ;;
+        *) err "Unknown Hysteria egress mode"; return 1 ;;
+    esac
     mkdir -p "$CONFIG_DIR"
     if [[ -f "$HYSTERIA_CONFIG" ]]; then
         hysteria_config_backup=$(mktemp /tmp/yurich_hysteria_backup_XXXXXX.yaml)
@@ -9467,8 +10184,7 @@ EOF
     if [[ "$hy_warp_enabled" == "1" ]]; then
         cat >> "$HYSTERIA_CONFIG" <<EOF
 
-# WARP local proxy outbound.
-# Without ACL Hysteria routes all server-side exits through the first outbound.
+# WARP local SOCKS supports TCP only; UDP uses the encrypted tunnel to this VPS.
 outbounds:
   - name: warp-socks5
     type: socks5
@@ -9477,6 +10193,34 @@ outbounds:
   - name: direct
     type: direct
 EOF
+    fi
+    cat >> "$HYSTERIA_CONFIG" <<'EOF'
+
+# Reject private/metadata destinations before any protocol-specific bypass.
+acl:
+  inline:
+    - reject(0.0.0.0/8)
+    - reject(10.0.0.0/8)
+    - reject(100.64.0.0/10)
+    - reject(127.0.0.0/8)
+    - reject(169.254.0.0/16)
+    - reject(172.16.0.0/12)
+    - reject(192.168.0.0/16)
+    - reject(224.0.0.0/4)
+    - reject(240.0.0.0/4)
+    - reject(::/128)
+    - reject(::1/128)
+    - reject(fc00::/7)
+    - reject(fe80::/10)
+    - reject(ff00::/8)
+EOF
+    if [[ "$hy_warp_enabled" == "1" ]]; then
+        cat >> "$HYSTERIA_CONFIG" <<'EOF'
+    - direct(all, udp)
+    - default(all)
+EOF
+    else
+        printf '    - direct(all)\n' >> "$HYSTERIA_CONFIG"
     fi
     chmod 600 "$HYSTERIA_CONFIG"
 
@@ -9495,7 +10239,7 @@ EOF
 
     ok "Hysteria 2 конфиг записан: $HYSTERIA_CONFIG"
     if [[ "$hy_warp_enabled" == "1" ]]; then
-        ok "Hysteria 2 outbound направлен через WARP SOCKS5: 127.0.0.1:${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
+        ok "Hysteria 2: TCP через WARP SOCKS5, UDP через IP VPS"
     fi
 }
 
@@ -9686,6 +10430,9 @@ cmd_post_update() {
     if hysteria_tls_layout_needs_repair; then
         info "Обнаружена старая TLS-схема Hysteria 2; запускаю безопасную миграцию"
         cmd_hysteria_repair || return 1
+    fi
+    if [[ -d /usr/local/lib/yurich-panel || -f /etc/systemd/system/naiveproxy-bot.service ]]; then
+        install_admin_bot_modules || return 1
     fi
 }
 
@@ -10044,11 +10791,43 @@ EOF
     fi
     echo
     if command -v qrencode &>/dev/null; then
-        qrencode -t ANSIUTF8 "$hy2_uri"
+        printf '%s' "$hy2_uri" | qrencode -t ANSIUTF8
     else
         info "Для QR установи: apt install qrencode"
     fi
     hr
+}
+
+hysteria_udp_port_available() {
+    local port="${1:-}" listeners main_pid line remaining owner_pid has_owner
+    is_valid_port "$port" || return 1
+    if ! listeners=$(ss -H -uanp "sport = :${port}" 2>/dev/null); then
+        err "Cannot inspect UDP/${port} ownership"
+        return 1
+    fi
+    [[ -n "$listeners" ]] || return 0
+
+    if ! systemctl is-active --quiet hysteria; then
+        err "UDP/${port} is already occupied"
+        return 1
+    fi
+    main_pid=$(systemctl show hysteria --property=MainPID --value 2>/dev/null) || return 1
+    [[ "$main_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+
+    # Every socket owner must be the active service, not just a matching process name.
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        [[ "$line" == *users:* ]] || { err "Unknown owner of UDP/${port}"; return 1; }
+        remaining="${line#*users:}"
+        has_owner=0
+        while [[ "$remaining" =~ pid=([0-9]+) ]]; do
+            owner_pid="${BASH_REMATCH[1]}"
+            [[ "$owner_pid" == "$main_pid" ]] || { err "Foreign owner of UDP/${port}"; return 1; }
+            has_owner=1
+            remaining="${remaining#*pid=${owner_pid}}"
+        done
+        [[ "$has_owner" == "1" ]] || { err "Unknown owner of UDP/${port}"; return 1; }
+    done <<< "$listeners"
 }
 
 choose_hysteria_port() {
@@ -10060,9 +10839,7 @@ choose_hysteria_port() {
             return 1
         fi
         next_port="$requested_port"
-        if [[ "$next_port" != "$current_port" ]] && ss -ulpn 2>/dev/null | grep -E ":${next_port}([[:space:]]|$)" >/dev/null; then
-            warn "UDP порт ${next_port} уже слушается. Продолжаю, потому что это неинтерактивный режим."
-        fi
+        hysteria_udp_port_available "$next_port" || return 1
         HYSTERIA_PORT="$next_port"
         ok "Hysteria 2 порт: UDP/${HYSTERIA_PORT}"
         return 0
@@ -10101,12 +10878,7 @@ choose_hysteria_port() {
         [[ "${ans,,}" == "y" ]] || next_port="8443"
     fi
 
-    if [[ "$next_port" != "$current_port" ]] && ss -ulpn 2>/dev/null | grep -E ":${next_port}([[:space:]]|$)" >/dev/null; then
-        warn "UDP порт ${next_port} уже слушается. Проверь: ss -ulpn | grep ':${next_port}'"
-        echo -ne "${YELLOW}Продолжить всё равно? [y/N]: ${RESET}"
-        read -r ans
-        [[ "${ans,,}" == "y" ]] || return 1
-    fi
+    hysteria_udp_port_available "$next_port" || return 1
 
     HYSTERIA_PORT="$next_port"
     ok "Hysteria 2 порт: UDP/${HYSTERIA_PORT}"
@@ -10286,6 +11058,10 @@ cmd_hysteria_remove() {
 
 cmd_hysteria_warp_enable() {
     load_config
+    if [[ "${WARP_PROXY_ENABLED:-0}" != "1" || "${WARP_MODE:-off}" != "proxy" ]]; then
+        err "Enable WARP proxy mode before enabling the Hysteria SOCKS outbound"
+        return 1
+    fi
     local port="${WARP_PROXY_PORT:-$WARP_PROXY_PORT_DEFAULT}"
     hr
     echo -e "${BOLD}  Hysteria 2 через WARP proxy${RESET}"
@@ -10297,6 +11073,7 @@ cmd_hysteria_warp_enable() {
     fi
 
     HYSTERIA_WARP_ENABLED="1"
+    HYSTERIA_EGRESS_MODE="warp-tcp-direct-udp"
     save_config
     write_hysteria_config || return 1
     if systemctl restart hysteria && sleep 2 && systemctl is-active --quiet hysteria; then
@@ -10314,6 +11091,7 @@ cmd_hysteria_warp_disable() {
     echo -e "${BOLD}  Отключение WARP только для Hysteria 2${RESET}"
     hr
     HYSTERIA_WARP_ENABLED="0"
+    HYSTERIA_EGRESS_MODE="direct"
     save_config
     write_hysteria_config || return 1
     if systemctl restart hysteria && sleep 2 && systemctl is-active --quiet hysteria; then
@@ -10982,7 +11760,7 @@ write_xray_config() {
     local seed_user="${1:-}"
     if [[ -n "$seed_user" ]]; then
         load_xray_users "$seed_user"
-    elif [[ ! -s "$XRAY_USERS_FILE" ]]; then
+    elif [[ ! -f "$XRAY_USERS_FILE" ]]; then
         load_xray_users "xray"
     fi
     ensure_xray_reality_keys || return 1
@@ -11017,10 +11795,6 @@ write_xray_config() {
     xhttp_clients_json=""
     if [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" ]]; then
         xhttp_clients_json=$(xray_clients_json_no_flow "${XRAY_XHTTP_ALLOWED_USERS:-all}")
-        if [[ -z "$xhttp_clients_json" ]]; then
-            err "XHTTP allowlist не содержит активных Xray-пользователей: ${XRAY_XHTTP_ALLOWED_USERS:-all}"
-            return 1
-        fi
     fi
     if [[ "${XRAY_GITHUB_TEST_ENABLED:-0}" == "1" ]]; then
         if ! is_valid_domain "$github_test_sni"; then
@@ -11067,6 +11841,7 @@ EOF
     if xray_local_dns_ready; then
         cat >> "$XRAY_CONFIG" <<'EOF'
   "dns": {
+    "tag": "yurich-internal-dns",
     "servers": [
       {
         "address": "127.0.0.1",
@@ -11097,22 +11872,39 @@ EOF
   },
 EOF
 
-    if [[ "$zapret_enabled" == "1" || "$xray_warp_enabled" == "1" ]]; then
-        cat >> "$XRAY_CONFIG" <<EOF
+    cat >> "$XRAY_CONFIG" <<'EOF'
   "routing": {
-    "domainStrategy": "AsIs",
+    "domainStrategy": "IPOnDemand",
     "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["yurich-internal-dns"],
+        "ip": ["127.0.0.1/32"],
+        "port": "53",
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
+          "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16", "198.18.0.0/15",
+          "224.0.0.0/4", "240.0.0.0/4", "::/128", "::1/128",
+          "fc00::/7", "fe80::/10", "ff00::/8"
+        ],
+        "outboundTag": "block"
+      }
 EOF
-        if [[ "$xray_warp_enabled" == "1" ]]; then
-            cat >> "$XRAY_CONFIG" <<EOF
+    if [[ "$xray_warp_enabled" == "1" ]]; then
+        cat >> "$XRAY_CONFIG" <<EOF
+      ,
       { "type": "field", "network": "tcp,udp", "outboundTag": "warp-proxy" }
 EOF
-        fi
-        cat >> "$XRAY_CONFIG" <<EOF
+    fi
+    cat >> "$XRAY_CONFIG" <<EOF
     ]
   },
 EOF
-    fi
 
     cat >> "$XRAY_CONFIG" <<EOF
   "inbounds": [
@@ -11397,7 +12189,7 @@ print_xray_client_config() {
     echo -e "  User: ${BOLD}${user}${RESET}"
     echo
     echo -e "${CYAN}  VLESS REALITY TCP:${RESET}"
-    echo "  vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2F#${user}-reality"
+    echo "  vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=${XRAY_REALITY_CLIENT_FINGERPRINT:-chrome}&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2F#${user}-reality"
     if [[ -n "$(yurich_dns_client_ip)" ]]; then
         echo
         echo -e "${CYAN}  DNS (Unbound) для full TUN/sing-box:${RESET}"
@@ -11956,7 +12748,7 @@ write_subscription_qr() {
 
     ensure_qrencode_for_subscriptions || return 1
     tmp_qr=$(mktemp "${output}.tmp.XXXXXX") || return 1
-    if ! qrencode -o "$tmp_qr" -s 8 -m 2 -- "$value" 2>/dev/null; then
+    if ! printf '%s' "$value" | qrencode -o "$tmp_qr" -s 8 -m 2 2>/dev/null; then
         rm -f -- "$tmp_qr"
         return 1
     fi
@@ -12450,6 +13242,7 @@ generate_subscription_page() {
     if [[ "${SUBSCRIPTION_REBUILD_WORKER:-0}" != "1" ]]; then
         load_config
         load_users
+        cmd_nodes_relay_sync_users >/dev/null || { err "Relay users не синхронизированы; прежняя подписка сохранена"; return 1; }
     fi
 
     local user="$1"
@@ -12536,12 +13329,12 @@ generate_subscription_page() {
     reality_links=""
     if [[ -n "$uuid" ]]; then
         reality_public_label="Reality"
-        reality_link=$(uri_with_profile_name "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2F" "$(pretty_profile_name "$user" "$reality_public_label")")
+        reality_link=$(uri_with_profile_name "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${XRAY_REALITY_SERVER_NAME:-www.microsoft.com}&fp=${XRAY_REALITY_CLIENT_FINGERPRINT:-chrome}&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2F" "$(pretty_profile_name "$user" "$reality_public_label")")
         if [[ "${XRAY_GITHUB_TEST_ENABLED:-0}" == "1" ]]; then
             github_test_users_norm=",${XRAY_GITHUB_TEST_USERS//[[:space:]]/},"
             if [[ -z "${XRAY_GITHUB_TEST_USERS:-}" || "$github_test_users_norm" == *",$user,"* ]]; then
                 github_test_sni="${XRAY_GITHUB_TEST_SERVER_NAME:-$XRAY_GITHUB_TEST_SERVER_NAME_DEFAULT}"
-                github_test_link=$(uri_with_profile_name "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${github_test_sni}&fp=chrome&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2Fgithub-test-${user}" "$(pretty_profile_name "$user" "Reality GitHub TEST")")
+                github_test_link=$(uri_with_profile_name "vless://${uuid}@${DOMAIN}:${reality_public_port}?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=${github_test_sni}&fp=${XRAY_REALITY_CLIENT_FINGERPRINT:-chrome}&pbk=${XRAY_REALITY_PUBLIC_KEY:-PUBLIC_KEY}&sid=${XRAY_REALITY_SHORT_ID:-SHORT_ID}&spx=%2Fgithub-test-${user}" "$(pretty_profile_name "$user" "Reality GitHub TEST")")
             fi
         fi
     fi
@@ -12566,18 +13359,23 @@ generate_subscription_page() {
         return 1
     fi
     remote_http_app_links=$(printf '%s\n' "$remote_http_links" | awk 'NF && /^(hy2:\/\/|hysteria2:\/\/|vless:\/\/)/')
+    local_xhttp_link=""
+    if [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" && -n "$uuid" ]]; then
+        if ! local_xhttp_link=$(node_xhttp_link_for_user "$user" "" "$DOMAIN"); then
+            err "Не удалось получить локальный XHTTP-профиль"
+            [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
+            return 1
+        fi
+    fi
     relay_source_links=$({
         [[ -n "$reality_links" ]] && printf '%s\n' "$reality_links"
         [[ -n "$node_app_links" ]] && printf '%s\n' "$node_app_links"
+        [[ -n "$local_xhttp_link" ]] && printf '%s\n' "$local_xhttp_link"
     } | awk 'NF')
     if ! relay_links=$(subscription_vless_relay_links_for_user "$user" "$relay_source_links"); then
         err "Некорректный VLESS_RELAY_PROFILES или недоступна исходная node"
         [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
         return 1
-    fi
-    local_xhttp_link=""
-    if [[ "${XRAY_XHTTP_ENABLED:-0}" == "1" && -n "$uuid" ]]; then
-        local_xhttp_link=$(node_xhttp_link_for_user "$user" "" "$DOMAIN") || return 1
     fi
     local subscription_local_enabled subscription_local_position local_links local_app_links
     subscription_local_enabled="${SUBSCRIPTION_LOCAL_ENABLED:-1}"
@@ -12642,8 +13440,22 @@ generate_subscription_page() {
             [[ -n "$relay_links" ]] && printf '%s\n' "$relay_links"
         } | awk 'NF')
     fi
-    active_links=$(printf '%s\n' "$active_links" | subscription_filter_published_links)
-    app_links=$(printf '%s\n' "$app_links" | subscription_filter_published_links)
+    local test_routes_config="${SUBSCRIPTION_TEST_ROUTES_CONFIG:-/etc/naiveproxy/subscription-test-routes.json}"
+    local test_routes_helper="${SUBSCRIPTION_TEST_ROUTES_HELPER:-/usr/local/lib/yurich-panel/subscription-test-routes.py}"
+    if [[ -f "$test_routes_config" ]]; then
+        if ! active_links=$(printf '%s\n' "$active_links" | python3 -B "$test_routes_helper" --config "$test_routes_config" "$user") \
+            || ! app_links=$(printf '%s\n' "$app_links" | python3 -B "$test_routes_helper" --config "$test_routes_config" "$user"); then
+            err "Test relay profiles failed validation; previous subscription retained"
+            [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
+            return 1
+        fi
+    fi
+    if ! active_links=$(printf '%s\n' "$active_links" | subscription_filter_published_links "$user") \
+        || ! app_links=$(printf '%s\n' "$app_links" | subscription_filter_published_links "$user"); then
+        err "Не удалось проверить публикуемые профили"
+        [[ -z "$build_page_dir" ]] || subscription_discard_build_dir "$build_page_dir"
+        return 1
+    fi
     v2rayng_links=$(printf '%s\n' "$app_links" | awk 'NF && /^vless:\/\// && ((/security=reality/ && /type=tcp/) || (/security=tls/ && /type=xhttp/)) { if (!seen[$0]++) print }')
     happ_links=$(printf '%s\n' "$v2rayng_links" | awk '!/type=xhttp/' | happ_compat_links)
     printf '%s\n' "$active_links" > "$links_file"
@@ -12771,6 +13583,10 @@ generate_subscription_page() {
     safe_karing_url=$(html_escape_text "$KARING_APP_URL")
     safe_telegram_url=$(html_escape_text "$TELEGRAM_COMMUNITY_URL")
     safe_donation_url=$(html_escape_text "$PROJECT_DONATION_URL")
+    local donation_button_html=""
+    if [[ -n "${PROJECT_DONATION_URL:-}" ]]; then
+        donation_button_html="<a class=\"btn primary\" href=\"${safe_donation_url}\" target=\"_blank\" rel=\"noopener noreferrer\">Поддержать проект</a>"
+    fi
     safe_tg_bot_url=$(html_escape_text "$TELEGRAM_BOT_URL")
     safe_tg_id_bot_url=$(html_escape_text "$TELEGRAM_ID_BOT_URL")
     traffic_summary=$(subscription_traffic_summary "$user")
@@ -13039,7 +13855,7 @@ ${pingtunnel_panel_html}
       </div>
       <div class="help-actions">
         ${project_help_qr_html}
-        <a class="btn primary" href="${safe_donation_url}" target="_blank" rel="noopener noreferrer">Поддержать проект</a>
+        ${donation_button_html}
       </div>
     </div>
   </section>
@@ -13308,7 +14124,7 @@ ${pingtunnel_panel_html}
         </div>
         <div class="help-actions">
           ${project_help_qr_html}
-          <a class="btn primary" href="${safe_donation_url}" target="_blank" rel="noopener noreferrer">Поддержать проект</a>
+          ${donation_button_html}
         </div>
       </div>
     </section>
@@ -14320,10 +15136,6 @@ cmd_xray_rebuild() {
         warn "Xray не установлен — rebuild пропущен"
         return 0
     fi
-    if [[ ! -s "$XRAY_USERS_FILE" ]]; then
-        warn "xray-users.conf пустой — rebuild пропущен"
-        return 0
-    fi
     write_xray_config || return 1
     write_xray_service
     if [[ "${XRAY_FALLBACK_ENABLED:-0}" == "1" ]]; then
@@ -15238,6 +16050,8 @@ cmd_warp_disable() {
     warp_disarm_rollback
     warp_cli disconnect >/dev/null 2>&1 || true
     WARP_PROXY_ENABLED="0"
+    HYSTERIA_WARP_ENABLED="0"
+    HYSTERIA_EGRESS_MODE="direct"
     WARP_MODE="off"
     save_config
     refresh_services_after_warp_change
@@ -15254,6 +16068,8 @@ cmd_warp_remove() {
     apt-get purge -y -q cloudflare-warp || true
     rm -f /etc/apt/sources.list.d/cloudflare-client.list
     WARP_PROXY_ENABLED="0"
+    HYSTERIA_WARP_ENABLED="0"
+    HYSTERIA_EGRESS_MODE="direct"
     WARP_PROXY_PORT="$WARP_PROXY_PORT_DEFAULT"
     WARP_MODE="off"
     WARP_PROTOCOL="auto"
@@ -15471,7 +16287,7 @@ restore_user_credentials_backup() {
 }
 
 rotate_user_credentials() {
-    local target="$1" new_pass="$2" backup_dir tmp new_uuid changed_xray=0
+    local target="$1" new_pass="$2" backup_dir tmp new_uuid changed_xray=0 publish_failed=0 has_nodes=0
     is_valid_proxy_user "$target" || return 1
     is_valid_proxy_pass "$new_pass" || return 1
     get_user_hash "$target" >/dev/null 2>&1 || { err "Пользователь $target не найден"; return 1; }
@@ -15490,6 +16306,14 @@ rotate_user_credentials() {
     [[ -f "$XRAY_USERS_FILE" ]] && cp -a "$XRAY_USERS_FILE" "$backup_dir/xray-users.conf"
     [[ -f "$XRAY_COMPAT_USERS_FILE" ]] && cp -a "$XRAY_COMPAT_USERS_FILE" "$backup_dir/xray-compat-users.conf"
 
+    if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]]; then
+        has_nodes=1
+        nodes_sync_mark_pending || {
+            err "Не удалось сохранить обязательную синхронизацию; ротация отменена"
+            rm -rf -- "$backup_dir"
+            return 1
+        }
+    fi
     if ! credential_set_user "$target" "$new_pass"; then
         restore_user_credentials_backup "$backup_dir"
         rm -rf -- "$backup_dir"
@@ -15531,12 +16355,16 @@ rotate_user_credentials() {
         return 1
     fi
     rm -rf -- "$backup_dir"
-    generate_subscription_page "$target" >/dev/null 2>&1 || { err "Credentials обновлены, но страницу подписки не удалось пересобрать"; return 1; }
-    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
-    if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
+    generate_subscription_page "$target" >/dev/null 2>&1 || {
+        err "Credentials обновлены, но страницу подписки не удалось пересобрать"
+        publish_failed=1
+    }
+    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || publish_failed=1
+    if [[ "$has_nodes" -eq 1 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
         err "Credentials обновлены локально; синхронизация nodes поставлена в повтор"
         return 1
     fi
+    [[ "$publish_failed" -eq 0 ]] || return 1
     if [[ "$changed_xray" -eq 1 ]]; then
         ok "Naive/Hysteria password обновлён, VLESS UUID ротирован"
     else
@@ -15663,28 +16491,36 @@ cmd_users() {
                 fi
                 local new_months
                 new_months=$(prompt_user_term_months 12) || continue
-                local users_backup
-                users_backup=$(mktemp -d /run/yurich-add-user.XXXXXX)
-                credential_state_backup "$users_backup/credential-state"
+                local users_backup existing_user=0
+                subscription_user_exists "$new_user" && existing_user=1
+                users_backup=$(mktemp -d /run/yurich-add-user.XXXXXX) || return 1
+                credential_state_backup "$users_backup/credential-state" || { err "Не удалось сохранить credentials; backup: $users_backup"; return 1; }
                 if ! credential_set_user "$new_user" "$new_pass"; then
                     rm -rf "$users_backup"
                     err "Пользователь $new_user не создан"
                     continue
                 fi
-                set_user_expiry_months "$new_user" "$new_months" || true
+                if [[ "$existing_user" -eq 0 ]] && { ! set_user_expiry_months "$new_user" "$new_months" || ! get_user_expiry "$new_user" >/dev/null; }; then
+                    credential_state_restore "$users_backup/credential-state" || { err "Не удалось откатить credentials; backup: $users_backup"; return 1; }
+                    cleanup_user_metadata "$new_user"
+                    rm -rf "$users_backup"
+                    err "Срок не сохранён, пользователь $new_user отменён"
+                    continue
+                fi
                 backup_config
                 if ! rewrite_caddyfile_current; then
-                    credential_state_restore "$users_backup/credential-state"
+                    credential_state_restore "$users_backup/credential-state" || { err "Не удалось откатить credentials; backup: $users_backup"; return 1; }
                     rm -rf "$users_backup"
-                    cleanup_user_metadata "$new_user"
+                    [[ "$existing_user" -eq 1 ]] || cleanup_user_metadata "$new_user"
                     err "Caddyfile не собрался, пользователь $new_user отменён"
                     continue
                 fi
                 if ! systemctl reload caddy 2>/dev/null && ! systemctl restart caddy 2>/dev/null; then
-                    credential_state_restore "$users_backup/credential-state"
+                    credential_state_restore "$users_backup/credential-state" || { err "Не удалось откатить credentials; backup: $users_backup"; return 1; }
+                    [[ "$existing_user" -eq 1 ]] || cleanup_user_metadata "$new_user"
+                    rewrite_caddyfile_current >/dev/null 2>&1 || { err "Не удалось восстановить Caddyfile; backup: $users_backup"; return 1; }
+                    safe_apply_caddy_current || { err "Не удалось восстановить Caddy после отката пользователя $new_user"; return 1; }
                     rm -rf "$users_backup"
-                    cleanup_user_metadata "$new_user"
-                    rewrite_caddyfile_current >/dev/null 2>&1 || true
                     err "Caddy не перезагрузился, пользователь $new_user отменён"
                     continue
                 fi
@@ -15890,6 +16726,11 @@ EOF
     fi
 }
 
+nodes_sync_mark_pending() {
+    [[ -n "${NODES_PENDING_SYNC_FILE:-}" && ! -L "$NODES_PENDING_SYNC_FILE" ]] || return 1
+    touch -- "$NODES_PENDING_SYNC_FILE" && chmod 600 -- "$NODES_PENDING_SYNC_FILE"
+}
+
 apply_user_access_runtime() {
     local failed=0
     load_config
@@ -15907,7 +16748,7 @@ apply_user_access_runtime() {
 }
 
 device_disable_user() {
-    local target="$1" has_user=0
+    local target="$1" has_user=0 publish_failed=0
     if ! is_valid_proxy_user "$target"; then
         err "Некорректный логин"
         return 1
@@ -15916,9 +16757,16 @@ device_disable_user() {
     [[ "$has_user" -eq 1 ]] || { err "Пользователь $target не найден"; return 1; }
     if user_is_blocked "$target"; then
         warn "Пользователь $target уже приостановлен"
+        if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]]; then
+            nodes_sync_mark_pending || return 1
+            cmd_nodes_sync_users all >/dev/null 2>&1 || return 1
+        fi
         return 0
     fi
 
+    if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]]; then
+        nodes_sync_mark_pending || return 1
+    fi
     user_meta_set "$target" ACCESS_BLOCKED "1" || return 1
     user_meta_set "$target" BLOCKED_REASON "device-limit/admin" || return 1
     user_meta_set "$target" BLOCKED_AT "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || return 1
@@ -15933,23 +16781,27 @@ device_disable_user() {
     fi
     if ! suspend_subscription_page "$target"; then
         err "Доступ заблокирован, но страницу подписки не удалось заменить"
-        return 1
+        publish_failed=1
     fi
-    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
+    cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || publish_failed=1
     if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
         err "Пользователь заблокирован локально; синхронизация nodes поставлена в повтор"
         return 1
     fi
+    [[ "$publish_failed" -eq 0 ]] || return 1
     ok "Все протоколы и страница подписки $target приостановлены"
 }
 
 device_enable_user() {
-    local target="$1"
+    local target="$1" publish_failed=0
     if ! is_valid_proxy_user "$target"; then
         err "Некорректный логин"
         return 1
     fi
     if user_is_blocked "$target"; then
+        if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]]; then
+            nodes_sync_mark_pending || return 1
+        fi
         user_meta_unset "$target" ACCESS_BLOCKED || return 1
         user_meta_unset "$target" BLOCKED_REASON >/dev/null 2>&1 || true
         user_meta_unset "$target" BLOCKED_AT >/dev/null 2>&1 || true
@@ -15962,16 +16814,20 @@ device_enable_user() {
             return 1
         fi
         if user_is_time_expired "$target"; then
-            suspend_subscription_page "$target" >/dev/null 2>&1 || true
+            suspend_subscription_page "$target" >/dev/null 2>&1 || publish_failed=1
             warn "Блокировка снята, но срок подписки истёк: $(user_expiry_label "$target")"
         else
-            generate_subscription_page "$target" >/dev/null 2>&1 || { err "Не удалось восстановить страницу подписки"; return 1; }
+            generate_subscription_page "$target" >/dev/null 2>&1 || {
+                err "Не удалось восстановить страницу подписки"
+                publish_failed=1
+            }
         fi
-        cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || true
+        cmd_nodes_rebuild_subscriptions >/dev/null 2>&1 || publish_failed=1
         if [[ "$(nodes_count 2>/dev/null || echo 0)" -gt 0 ]] && ! cmd_nodes_sync_users all >/dev/null 2>&1; then
             err "Локальная разблокировка выполнена; синхронизация nodes поставлена в повтор"
             return 1
         fi
+        [[ "$publish_failed" -eq 0 ]] || return 1
         ok "Все протоколы и страница подписки $target разблокированы"
         return 0
     fi
@@ -17283,8 +18139,366 @@ tg_admin_ids() {
 tg_reply() {
     local chat_id="$1"
     local message="$2"
-    [[ -z "${TG_TOKEN:-}" ]] && return
-    tg_api "sendMessage" -s --max-time 10         -X POST         --data-urlencode "chat_id=${chat_id}"         --data-urlencode "parse_mode=HTML"         --data-urlencode "text=${message}"         >/dev/null 2>&1 || true
+    local response
+    [[ -n "${TG_TOKEN:-}" && "$chat_id" =~ ^[0-9]{5,15}$ ]] || return 1
+    response=$(tg_api "sendMessage" -s --max-time 10 -X POST \
+        --data-urlencode "chat_id=${chat_id}" --data-urlencode "parse_mode=HTML" \
+        --data-urlencode "text=${message}" 2>/dev/null) || return 1
+    printf '%s' "$response" | tg_response_ok
+}
+
+tg_fleet_health_helper() {
+    local helper="${TG_FLEET_HEALTH_HELPER:-/usr/local/lib/yurich-panel/admin-bot-health.py}"
+    if [[ ! -f "$helper" ]]; then
+        helper="$(dirname "${BASH_SOURCE[0]}")/ops/admin-bot-health.py"
+    fi
+    [[ -f "$helper" && ! -L "$helper" ]] || return 1
+    printf '%s\n' "$helper"
+}
+
+tg_fleet_node_label() {
+    case "$1" in
+        all) printf 'Все серверы' ;;
+        local) [[ "${DOMAIN:-}" == poland.* ]] && printf 'Польша · основной' || printf 'Основной сервер' ;;
+        germany) printf 'Германия' ;;
+        uk2) printf 'UK2' ;;
+        belarus) printf 'Беларусь' ;;
+        turkey) printf 'Турция' ;;
+        prague) printf 'Прага · Чехия' ;;
+        switzerland) printf 'Швейцария' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+tg_admin_menu_helper() {
+    local helper="${TG_ADMIN_MENU_HELPER:-/usr/local/lib/yurich-panel/admin-bot-menu.py}"
+    [[ -f "$helper" ]] || helper="$(dirname "${BASH_SOURCE[0]}")/ops/admin-bot-menu.py"
+    [[ -f "$helper" && ! -L "$helper" ]] || return 1
+    printf '%s\n' "$helper"
+}
+
+tg_admin_ui() {
+    local helper
+    helper=$(tg_admin_menu_helper) || { printf '{"error":"Модуль меню не установлен."}\n'; return 1; }
+    python3 -B "$helper" "$@"
+}
+
+tg_admin_send() {
+    local chat_id="$1" payload="$2" message markup
+    message=$(printf '%s' "$payload" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("error") or d["message"])') || return 1
+    markup=$(printf '%s' "$payload" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("markup",{})))') || return 1
+    if [[ "$markup" == '{}' ]]; then tg_reply "$chat_id" "$message"; return; fi
+    tg_reply_menu "$chat_id" "$message" custom "$markup"
+}
+
+tg_incidents_helper() {
+    local path="${TG_INCIDENTS_HELPER:-/usr/local/lib/yurich-panel/admin-incidents.py}"
+    [[ -f "$path" ]] || path="$(dirname "${BASH_SOURCE[0]}")/ops/admin-incidents.py"
+    [[ -f "$path" ]] || return 1
+    printf '%s\n' "$path"
+}
+
+tg_monitor_helper() {
+    local path="${TG_MONITOR_HELPER:-/usr/local/lib/yurich-panel/admin-monitor.py}"
+    [[ -f "$path" ]] || path="$(dirname "${BASH_SOURCE[0]}")/ops/admin-monitor.py"
+    [[ -f "$path" ]] || return 1
+    printf '%s\n' "$path"
+}
+
+tg_monitor_local_node() {
+    local name="${TG_MONITOR_LOCAL_NODE:-}"
+    if [[ -z "$name" ]]; then
+        [[ "${DOMAIN:-}" == poland.* ]] && name=poland || name=primary
+    fi
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$ ]] || return 1
+    printf '%s\n' "$name"
+}
+
+tg_incidents_page() {
+    local chat_id="$1" request="${2:-}" helper payload node="all" page=1 item
+    local state="${TG_INCIDENTS_STATE_DIR:-/var/lib/yurich-panel/incidents}"
+    local -a arguments=() parts=()
+    read -r -a parts <<< "$request"
+    if [[ "${#parts[@]}" -gt 2 ]]; then
+        tg_reply "$chat_id" 'Некорректный запрос инцидентов.'
+        return 1
+    fi
+    for item in "${parts[@]}"; do
+        if [[ "$item" =~ ^[1-9][0-9]{0,5}$ ]]; then page="$item";
+        elif [[ "$node" == all ]] && tg_fleet_node_valid "$item"; then node="$item";
+        else tg_reply "$chat_id" 'Неизвестная нода или страница.'; return 1; fi
+    done
+    if [[ "$node" == local ]]; then
+        node=$(tg_monitor_local_node) || return 1
+    fi
+    [[ "$node" == all ]] || arguments+=(--node "$node")
+    helper=$(tg_incidents_helper) || { tg_reply "$chat_id" 'Модуль инцидентов не установлен.'; return 1; }
+    payload=$(python3 -B "$helper" render --state-dir "$state" --page "$page" "${arguments[@]}") || {
+        tg_reply "$chat_id" 'Хранилище инцидентов недоступно; отсутствие аварий не подтверждено.'; return 1;
+    }
+    payload=$(printf '%s' "$payload" | python3 -c 'import json,re,sys
+d=json.load(sys.stdin)
+if d.get("ok") is not True: raise SystemExit(1)
+suffix=" "+d["node"] if d.get("node") else ""
+rows=[]
+nav=[]
+if d["page"]>1: nav.append("/incidents"+suffix+" "+str(d["page"]-1))
+if d["page"]<d["pages"]: nav.append("/incidents"+suffix+" "+str(d["page"]+1))
+if nav: rows.append(nav)
+for value in re.findall(r"<code>([0-9a-f]{32})</code>",d["message"])[:3]: rows.append(["/incack "+value])
+rows.append(["Мониторинг","🏠 Главное меню"])
+d["markup"]={"keyboard":[[{"text":value} for value in row] for row in rows],"resize_keyboard":True}
+print(json.dumps(d,ensure_ascii=False))') || return 1
+    tg_admin_send "$chat_id" "$payload"
+}
+
+tg_incident_ack() {
+    local chat_id="$1" actor="$2" incident="$3" helper payload
+    [[ "$incident" =~ ^[a-f0-9]{32}$ ]] || { tg_reply "$chat_id" 'Некорректный номер инцидента.'; return 1; }
+    helper=$(tg_incidents_helper) || return 1
+    payload=$(python3 -B "$helper" ack --state-dir "${TG_INCIDENTS_STATE_DIR:-/var/lib/yurich-panel/incidents}" --id "$incident" --actor "$actor") || {
+        tg_reply "$chat_id" 'Инцидент не найден или хранилище недоступно.'; return 1;
+    }
+    printf '%s' "$payload" | python3 -c 'import json,sys; assert json.load(sys.stdin).get("ok") is True' || return 1
+    tg_reply "$chat_id" 'Инцидент отмечен как просмотренный. Состояние сервера не менялось.'
+}
+
+tg_monitor_show() {
+    local chat_id="$1" helper payload
+    helper=$(tg_monitor_helper) || { tg_reply "$chat_id" 'Модуль мониторинга не установлен.'; return 1; }
+    payload=$(python3 -B "$helper" status --state-dir "${TG_INCIDENTS_STATE_DIR:-/var/lib/yurich-panel/incidents}") || {
+        tg_reply "$chat_id" 'Мониторинг недоступен; состояние серверов не подтверждено.'; return 1;
+    }
+    tg_admin_send "$chat_id" "$payload"
+}
+
+tg_admin_rows() {
+    local view="$1" user expires chat
+    while IFS= read -r user; do
+        [[ -n "$user" ]] || continue
+        is_valid_proxy_user "$user" || return 1
+        expires=""; chat=""
+        if [[ "$view" == expiry || "$view" == notifications || "$view" == detail ]]; then
+            expires=$(get_user_expiry "$user" 2>/dev/null || true)
+            chat=$(user_meta_get "$user" TELEGRAM_CHAT_ID 2>/dev/null || true)
+        fi
+        printf '%s\0%s\0%s\0' "$user" "$expires" "$chat"
+    done < <(list_subscription_users)
+}
+
+tg_admin_page() {
+    local chat_id="$1" view="$2" request="${3:-}" payload
+    if ! payload=$(tg_admin_rows "$view" | tg_admin_ui page --view "$view" --request="$request"); then
+        tg_reply "$chat_id" 'Не удалось получить список. Проверь запрос и модуль меню.'
+        return 1
+    fi
+    tg_admin_send "$chat_id" "$payload"
+}
+
+tg_admin_delete_fingerprint() {
+    local user="$1"
+    is_valid_proxy_user "$user" && subscription_user_exists "$user" || return 1
+    {
+        printf 'delete:%s\n' "$user"
+        get_user_hash "$user" 2>/dev/null || true
+        if [[ -s "$XRAY_USERS_FILE" ]]; then awk -F: -v u="$user" '$1==u {print}' "$XRAY_USERS_FILE"; fi
+        get_user_expiry "$user" 2>/dev/null || true
+    } | sha256sum | awk '{print $1}'
+}
+
+tg_admin_news_audience() {
+    local user chat
+    while IFS= read -r user; do
+        chat=$(user_meta_get "$user" TELEGRAM_CHAT_ID 2>/dev/null || true)
+        if is_valid_tg_chat_id "$chat"; then printf '%s\n' "$chat"; fi
+    done < <(list_subscription_users) | sort -u
+}
+
+tg_admin_stage() {
+    local chat_id="$1" kind="$2" value="$3" fingerprint audience count=0 subject="" body="" payload
+    if [[ "$kind" == delete ]]; then
+        subject="$value"
+        fingerprint=$(tg_admin_delete_fingerprint "$subject") || { tg_reply "$chat_id" 'Пользователь не найден.'; return 1; }
+    else
+        body="$value"
+        audience=$(tg_admin_news_audience) || return 1
+        [[ -n "$audience" ]] && count=$(printf '%s\n' "$audience" | wc -l)
+        fingerprint=$(printf '%s' "$audience" | sha256sum | awk '{print $1}')
+    fi
+    payload=$(printf '%s' "$body" | tg_admin_ui stage --state-dir "$CONFIG_DIR/telegram-state" --chat "$chat_id" \
+        --kind "$kind" --subject="$subject" --fingerprint "$fingerprint" --count "$count")
+    tg_admin_send "$chat_id" "$payload"
+}
+
+tg_admin_confirm_action() {
+    local chat_id="$1" nonce="$2" pending kind subject fingerprint audience taken body output rc
+    [[ "$nonce" =~ ^[a-f0-9]{32}$ ]] || { tg_reply "$chat_id" 'Некорректное подтверждение.'; return 1; }
+    if ! pending=$(tg_admin_ui peek --state-dir "$CONFIG_DIR/telegram-state" --chat "$chat_id"); then
+        tg_admin_send "$chat_id" "$pending"; return 1
+    fi
+    kind=$(printf '%s' "$pending" | python3 -c 'import json,sys; print(json.load(sys.stdin)["kind"])') || return 1
+    subject=$(printf '%s' "$pending" | python3 -c 'import json,sys; print(json.load(sys.stdin)["subject"])') || return 1
+    if [[ "$kind" == delete ]]; then
+        fingerprint=$(tg_admin_delete_fingerprint "$subject") || { tg_reply "$chat_id" 'Пользователь изменился или уже удалён. Создай новый запрос.'; return 1; }
+    elif [[ "$kind" == news ]]; then
+        audience=$(tg_admin_news_audience) || return 1
+        fingerprint=$(printf '%s' "$audience" | sha256sum | awk '{print $1}')
+    else
+        tg_reply "$chat_id" 'Неизвестное действие.'; return 1
+    fi
+    if ! taken=$(tg_admin_ui take --state-dir "$CONFIG_DIR/telegram-state" --chat "$chat_id" --nonce "$nonce" --fingerprint "$fingerprint"); then
+        tg_admin_send "$chat_id" "$taken"; return 1
+    fi
+    if [[ "$kind" == delete ]]; then
+        if delete_subscription_user_everywhere "$subject"; then
+            tg_reply "$chat_id" "Пользователь <code>$(html_escape_text "$subject")</code>, его подписка и доступ удалены со всех нод."
+        else
+            tg_reply "$chat_id" 'Удаление завершилось не полностью. Проверь журнал; повторное действие требует нового подтверждения.'
+            return 1
+        fi
+    else
+        body=$(printf '%s' "$taken" | python3 -c 'import json,sys; print(json.load(sys.stdin)["body"],end="")') || return 1
+        output=$(cmd_notify_news_broadcast "$body" "$fingerprint" 2>&1); rc=$?
+        if [[ "$rc" -eq 0 ]]; then
+            tg_reply_pre "$chat_id" 'Рассылка завершена' "$output"
+        else
+            tg_reply_pre "$chat_id" 'Рассылка завершилась с ошибками; автоматического повтора нет' "$output"
+            return 1
+        fi
+    fi
+}
+
+tg_fleet_node_valid() {
+    [[ "$1" == local || "$1" == all ]] && return 0
+    nodes_get_line "$1" >/dev/null 2>&1
+}
+
+tg_fleet_selection() {
+    local chat_id="$1" node path="$CONFIG_DIR/telegram-state/admin-selection.$1.env"
+    [[ "$chat_id" =~ ^[0-9]{5,15}$ ]] || return 1
+    if [[ -f "$path" && ! -L "$path" ]]; then
+        node=$(sed -n 's/^NODE=\([a-zA-Z0-9_-]*\)$/\1/p' "$path")
+        if [[ -n "$node" ]] && tg_fleet_node_valid "$node"; then
+            printf '%s\n' "$node"
+            return
+        fi
+    fi
+    printf 'all\n'
+}
+
+tg_fleet_select() {
+    local chat_id="$1" node="$2" directory="$CONFIG_DIR/telegram-state" temporary path
+    [[ "$chat_id" =~ ^[0-9]{5,15}$ ]] && tg_fleet_node_valid "$node" || return 1
+    [[ ! -L "$directory" ]] || return 1
+    mkdir -p "$directory" && chmod 700 "$directory" || return 1
+    path="$directory/admin-selection.$chat_id.env"
+    [[ ! -L "$path" ]] || return 1
+    temporary=$(mktemp "$directory/.admin-selection.XXXXXX") || return 1
+    printf 'NODE=%s\n' "$node" > "$temporary"
+    chmod 600 "$temporary" && mv -f -- "$temporary" "$path"
+}
+
+tg_fleet_menu_markup() {
+    {
+        printf 'local|%s\n' "$(tg_fleet_node_label local)"
+        local line name
+        while IFS= read -r line; do
+            name="${line%%|*}"
+            printf '%s|%s\n' "$name" "$(tg_fleet_node_label "$name")"
+        done < <(nodes_list_lines)
+    } | python3 -c 'import json,sys
+rows=[[{"text":"🖥 "+name+" · "+label}] for name,label in (line.strip().split("|",1) for line in sys.stdin if line.strip())]
+rows += [[{"text":"🌐 Все серверы"},{"text":"🏠 Главное меню"}]]
+print(json.dumps({"keyboard":rows,"resize_keyboard":True,"is_persistent":True},ensure_ascii=False))'
+}
+
+tg_fleet_routes() {
+    local node="$1" row name host port protocols line node_domain=""
+    if [[ "$node" != local ]]; then
+        line=$(nodes_get_line "$node") || return 1
+        node_domain=$(printf '%s' "$line" | cut -d'|' -f5)
+    fi
+    while IFS= read -r row; do
+        IFS='|' read -r name host port protocols <<< "$row"
+        [[ "$name" == "$node" || ( -n "$node_domain" && "$host" == "$node_domain" ) ]] || continue
+        line=$(nodes_get_line "$name") || continue
+        printf 'VLESS: TCP-вход %s:%s → %s (%s).\n' "$host" "$port" "$(printf '%s' "$line" | cut -d'|' -f5)" "$protocols"
+        printf 'TLS/SNI для XHTTP: %s.\n' "$(printf '%s' "$line" | cut -d'|' -f5)"
+    done < <(printf '%s' "${VLESS_RELAY_PROFILES:-}" | tr ';' '\n'; printf '\n')
+    if subscription_node_relay_only "$node"; then
+        printf 'Прямые Reality/XHTTP скрыты; используются relay-профили.\n'
+    fi
+    [[ "$node" == local ]] && printf 'Основной сервер пользователей и подписок.\n'
+    return 0
+}
+
+tg_fleet_snapshot() {
+    local node="$1" mode="$2" helper="$3" line remote_user encoded remote_command
+    [[ "$mode" =~ ^(status|diagnose|protocols|cert|logs)$ ]] || return 1
+    if [[ "$node" == local ]]; then
+        python3 -B "$helper" collect "$mode"
+        return
+    fi
+    line=$(nodes_get_line "$node") || return 1
+    remote_user=$(printf '%s' "$line" | cut -d'|' -f4)
+    encoded=$(base64 -w 0 "$helper") || return 1
+    remote_command="$(nodes_remote_sudo_prefix "$remote_user")python3 -B -c 'import base64;exec(compile(base64.b64decode(\"$encoded\"),\"<yurich-health>\",\"exec\"))' collect $mode"
+    local NODES_SSH_TIMEOUT_SECONDS=45
+    nodes_ssh "$line" "$remote_command" 2>/dev/null
+}
+
+tg_fleet_relay_checks() {
+    local node="$1" helper="$2" row name host port protocols line domain node_domain="" result
+    if [[ "$node" != local ]]; then
+        line=$(nodes_get_line "$node") || return 1
+        node_domain=$(printf '%s' "$line" | cut -d'|' -f5)
+    fi
+    while IFS= read -r row; do
+        IFS='|' read -r name host port protocols <<< "$row"
+        [[ "$name" == "$node" || ( -n "$node_domain" && "$host" == "$node_domain" ) ]] || continue
+        line=$(nodes_get_line "$name") || continue
+        domain=$(printf '%s' "$line" | cut -d'|' -f5)
+        result=$(python3 -B "$helper" relay --host "$host" --port "$port" --tls-name "$domain") || result='{"ok":false,"error":"relay_check_unavailable"}'
+        printf '%s\n' "$result"
+    done < <(printf '%s' "${VLESS_RELAY_PROFILES:-}" | tr ';' '\n'; printf '\n') |
+        python3 -c 'import json,sys; print(json.dumps([json.loads(line) for line in sys.stdin if line.strip()],ensure_ascii=False))'
+}
+
+tg_fleet_show() {
+    local chat_id="$1" mode="$2" requested="${3:-}" selected node line helper snapshot envelope output label routes relay_checks
+    helper=$(tg_fleet_health_helper) || { tg_reply "$chat_id" '❌ Модуль диагностики не установлен; проверка не выполнена.'; return 1; }
+    selected="${requested:-$(tg_fleet_selection "$chat_id")}"
+    if ! tg_fleet_node_valid "$selected"; then
+        tg_reply "$chat_id" '❌ Нет такой ноды. Выбери сервер через /servers.'
+        return 1
+    fi
+    while IFS= read -r node; do
+        label=$(tg_fleet_node_label "$node")
+        routes=$(tg_fleet_routes "$node")
+        snapshot=$(tg_fleet_snapshot "$node" "$mode" "$helper") || snapshot='{"ok":false}'
+        relay_checks='[]'
+        if [[ "$mode" != logs ]]; then
+            relay_checks=$(tg_fleet_relay_checks "$node" "$helper") || relay_checks='[{"ok":false,"error":"relay_check_unavailable"}]'
+        fi
+        envelope=$(printf '%s' "$snapshot" | python3 -c 'import json,sys
+try:
+ data=json.load(sys.stdin)
+ if not isinstance(data,dict): raise ValueError()
+except (ValueError,TypeError): data={"ok":False}
+data["label"],data["routes"]=sys.argv[1:3]
+try: data["relay_checks"]=json.loads(sys.argv[3])
+except (ValueError,TypeError): data["relay_checks"]=[{"ok":False,"error":"relay_check_unavailable"}]
+print(json.dumps(data,ensure_ascii=False))' "$label" "$routes" "$relay_checks")
+        output=$(printf '%s' "$envelope" | python3 -B "$helper" render "$mode") || output='❌ Не удалось разобрать результат проверки.'
+        tg_reply "$chat_id" "$output" || return 1
+    done < <(
+        if [[ "$selected" == all ]]; then
+            printf 'local\n'
+            while IFS= read -r line; do printf '%s\n' "${line%%|*}"; done < <(nodes_list_lines)
+        else
+            printf '%s\n' "$selected"
+        fi
+    )
 }
 
 tg_user_commands_json() {
@@ -17305,10 +18519,16 @@ tg_bot_commands_json() {
   {"command":"start","description":"Открыть меню"},
   {"command":"help","description":"Помощь и список команд"},
   {"command":"menu","description":"Показать кнопки управления"},
-  {"command":"status","description":"Статус сервера"},
-  {"command":"stats","description":"Статистика ресурсов и трафика"},
+  {"command":"servers","description":"Выбрать сервер"},
+  {"command":"network","description":"Все серверы"},
+  {"command":"status","description":"Состояние серверов и ресурсы"},
+  {"command":"protocols","description":"Протоколы и relay-маршруты"},
+  {"command":"stats","description":"Ресурсы и пользователи основного сервера"},
   {"command":"haproxy","description":"HAProxy SNI mux и маршруты"},
   {"command":"diagnose","description":"Диагностика системы"},
+  {"command":"incidents","description":"Аварии и история восстановления"},
+  {"command":"incack","description":"Подтвердить получение инцидента"},
+  {"command":"monitor","description":"Состояние фонового мониторинга"},
   {"command":"logs","description":"Последние логи Caddy"},
   {"command":"cert","description":"Статус TLS сертификата"},
   {"command":"users","description":"Список пользователей"},
@@ -17318,6 +18538,10 @@ tg_bot_commands_json() {
   {"command":"sub","description":"Страница подписки"},
   {"command":"subreset","description":"Перевыпустить подписку"},
   {"command":"expiring","description":"Сроки подписок и Telegram ID"},
+  {"command":"notifications","description":"Уведомления и привязки Telegram"},
+  {"command":"user","description":"Карточка пользователя"},
+  {"command":"confirm","description":"Подтвердить ожидающее действие"},
+  {"command":"cancel","description":"Отменить ожидающее действие"},
   {"command":"bindtg","description":"Привязать Telegram ID к пользователю"},
   {"command":"notifyrun","description":"Запустить проверку уведомлений"},
   {"command":"testnotify","description":"Тест уведомления пользователю"},
@@ -17330,7 +18554,7 @@ tg_bot_commands_json() {
   {"command":"xrayadduser","description":"Создать Xray пользователя"},
   {"command":"xraystatus","description":"Статус Xray"},
   {"command":"hysteria","description":"Статус Hysteria 2"},
-  {"command":"warp","description":"Статус WARP"},
+  {"command":"warp","description":"WARP основного сервера"},
   {"command":"restart","description":"Перезапустить Caddy"},
   {"command":"update","description":"Обновить Caddy"},
   {"command":"selfupdate","description":"Обновить скрипт"},
@@ -17349,6 +18573,7 @@ tg_apply_bot_menu() {
 
     local user_commands admin_commands menu_button resp_cmd resp_menu admin_id admin_scope admin_resp failed=0
     user_commands=$(tg_user_commands_json | tr -d '\n')
+    [[ "${TG_ADMIN_ONLY:-0}" == "1" ]] && user_commands='[{"command":"start","description":"Доступ администратора"},{"command":"help","description":"Помощь"}]'
     admin_commands=$(tg_bot_commands_json | tr -d '\n')
     menu_button='{"type":"commands"}'
 
@@ -17357,9 +18582,8 @@ tg_apply_bot_menu() {
         --data-urlencode "commands=${user_commands}" \
         2>/dev/null || echo "{}")
 
-    if ! echo "$resp_cmd" | grep -q '"ok":true'; then
+    if ! printf '%s' "$resp_cmd" | tg_response_ok; then
         err "Не удалось установить пользовательское Telegram commands menu"
-        echo "$resp_cmd"
         return 1
     fi
 
@@ -17371,7 +18595,7 @@ tg_apply_bot_menu() {
             --data-urlencode "commands=${admin_commands}" \
             --data-urlencode "scope=${admin_scope}" \
             2>/dev/null || echo "{}")
-        if ! echo "$admin_resp" | grep -q '"ok":true'; then
+        if ! printf '%s' "$admin_resp" | tg_response_ok; then
             warn "Не удалось установить админское меню для Telegram ID ${admin_id}"
             failed=$((failed + 1))
         fi
@@ -17382,11 +18606,11 @@ tg_apply_bot_menu() {
         --data-urlencode "menu_button=${menu_button}" \
         2>/dev/null || echo "{}")
 
-    if echo "$resp_menu" | grep -q '"ok":true'; then
+    if printf '%s' "$resp_menu" | tg_response_ok; then
         ok "Telegram Menu button включён"
     else
         warn "Команды установлены, но Menu button не подтвердился"
-        echo "$resp_menu"
+        failed=$((failed + 1))
     fi
     [[ "$failed" -eq 0 ]]
 }
@@ -17397,7 +18621,7 @@ tg_apply_bot_menu_silent() {
 
 tg_main_menu_markup() {
     cat <<'EOF'
-{"keyboard":[[{"text":"📊 Статус"},{"text":"👥 Пользователи"}],[{"text":"➕ Добавить пользователя"},{"text":"🗑 Удалить пользователя"}],[{"text":"📱 QR / ссылка"},{"text":"🔗 Подписка"}],[{"text":"📰 Новости"},{"text":"🔔 Уведомления"}],[{"text":"🧬 Xray"},{"text":"⚡ Hysteria"},{"text":"🌀 WARP"}],[{"text":"🔀 HAProxy"},{"text":"🔍 Диагностика"}],[{"text":"📄 Логи"},{"text":"♻️ Restart Caddy"}],[{"text":"🛠 Автофикс"},{"text":"💛 Донат"}],[{"text":"❓ Помощь"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
+{"keyboard":[[{"text":"🖥 Серверы"},{"text":"📊 Статус"}],[{"text":"🧪 Протоколы"},{"text":"🔍 Диагностика"}],[{"text":"Инциденты"},{"text":"Мониторинг"}],[{"text":"🔐 Сертификаты"},{"text":"📄 Логи"}],[{"text":"👥 Пользователи"},{"text":"🔗 Подписка"}],[{"text":"➕ Добавить пользователя"},{"text":"🗑 Удалить пользователя"}],[{"text":"📱 QR / ссылка"},{"text":"🔔 Уведомления"}],[{"text":"📰 Новости"},{"text":"📅 Сроки подписок"}],[{"text":"🌐 Все серверы"},{"text":"❓ Помощь"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
 EOF
 }
 
@@ -17412,19 +18636,26 @@ tg_reply_menu() {
     local message="$2"
     local menu_kind="${3:-admin}"
     local reply_markup
-    [[ -z "${TG_TOKEN:-}" ]] && return
+    local response
+    [[ -n "${TG_TOKEN:-}" && "$chat_id" =~ ^[0-9]{5,15}$ ]] || return 1
     if [[ "$menu_kind" == "user" ]]; then
         reply_markup=$(tg_user_menu_markup)
+    elif [[ "$menu_kind" == "fleet" ]]; then
+        reply_markup=$(tg_fleet_menu_markup)
+    elif [[ "$menu_kind" == custom ]]; then
+        reply_markup="${4:-}"
+        printf '%s' "$reply_markup" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("keyboard"),list)' || return 1
     else
         reply_markup=$(tg_main_menu_markup)
     fi
-    tg_api "sendMessage" -s --max-time 10 \
+    response=$(tg_api "sendMessage" -s --max-time 10 \
         -X POST \
         --data-urlencode "chat_id=${chat_id}" \
         --data-urlencode "parse_mode=HTML" \
         --data-urlencode "text=${message}" \
         --data-urlencode "reply_markup=${reply_markup}" \
-        >/dev/null 2>&1 || true
+        2>/dev/null) || return 1
+    printf '%s' "$response" | tg_response_ok
 }
 
 tg_user_welcome_message() {
@@ -17457,30 +18688,224 @@ sales_tg_api() {
 sales_reply() {
     local chat_id="$1" message="$2"
     [[ -n "${SALES_BOT_TOKEN:-}" ]] || return 0
-    sales_tg_api "sendMessage" -s --max-time 12 \
+    sales_reply_checked "$chat_id" "$message" || true
+}
+
+sales_reply_checked() {
+    local chat_id="$1" message="$2" response
+    [[ -n "${SALES_BOT_TOKEN:-}" ]] || return 1
+    response=$(sales_tg_api "sendMessage" -s --max-time 12 \
         -X POST \
         --data-urlencode "chat_id=${chat_id}" \
         --data-urlencode "parse_mode=HTML" \
         --data-urlencode "disable_web_page_preview=true" \
         --data-urlencode "text=${message}" \
-        >/dev/null 2>&1 || true
+        2>/dev/null || true)
+    printf '%s\n' "$response" | grep -Eq '"ok":[[:space:]]*true'
 }
 
 sales_menu_markup() {
     cat <<'EOF'
-{"keyboard":[[{"text":"💎 Купить VPN"},{"text":"🟢 Моя подписка"}],[{"text":"📲 Приложения"},{"text":"🚀 Как подключить"}],[{"text":"📣 Канал"},{"text":"🛟 Поддержка"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
+{"keyboard":[[{"text":"💎 Купить VPN"},{"text":"🟢 Моя подписка"}],[{"text":"📲 Приложения"},{"text":"🚀 Как подключить"}],[{"text":"FAQ"},{"text":"🛟 Поддержка"}],[{"text":"📣 Канал"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
 EOF
 }
 
 sales_admin_menu_markup() {
     cat <<'EOF'
-{"keyboard":[[{"text":"🧾 Заявки"},{"text":"📊 Статус продаж"}],[{"text":"💎 Купить VPN"},{"text":"🟢 Моя подписка"}],[{"text":"📲 Приложения"},{"text":"📣 Канал"}],[{"text":"🛟 Поддержка"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
+{"keyboard":[[{"text":"🧾 Заявки"},{"text":"📊 Статус продаж"}],[{"text":"💎 Купить VPN"},{"text":"🟢 Моя подписка"}],[{"text":"📲 Приложения"},{"text":"📣 Канал"}],[{"text":"FAQ"},{"text":"🛟 Поддержка"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
 EOF
+}
+
+sales_faq_menu_markup() {
+    cat <<'EOF'
+{"keyboard":[[{"text":"Android"},{"text":"Windows"}],[{"text":"iPhone / iPad"},{"text":"Обновление подписки"}],[{"text":"Протоколы и локации"},{"text":"Проблемы подключения"}],[{"text":"Оплата и продление"},{"text":"Аккаунт и безопасность"}],[{"text":"Главное меню"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
+EOF
+}
+
+sales_apps_text() {
+    cat <<EOF
+<b>Приложения Yurich Connect</b>
+
+Android - Yurich Connect:
+${ANDROID_APP_RELEASES_URL}
+
+Windows - Yurich Connect:
+${WINDOWS_APP_RELEASES_URL}
+
+iPhone / iPad - Karing:
+${KARING_APP_URL}
+
+Подключение и ответы на вопросы: /faq
+Личная подписка: /status
+EOF
+}
+
+sales_faq_text() {
+    case "${1:-index}" in
+        android|Android)
+            cat <<'EOF'
+<b>FAQ: Android</b>
+
+1. Установи Yurich Connect по ссылке из /apps. На странице Releases выбери APK из Assets. Разрешение на установку из браузера включай только для скачанного официального APK.
+2. Открой /status и личную страницу подписки. Скопируй URL формата «Общие ссылки» (links.txt), а не адрес самой веб-страницы и не отдельную строку vless://.
+3. В приложении добавь подписку по ссылке и дождись загрузки профилей.
+4. Выбери локацию и профиль, нажми «Подключить» и разреши создание VPN-соединения Android.
+5. Открой сайт в браузере. Одновременно используй только одно VPN-приложение.
+
+Для Hiddify выбери на странице формат hiddify.txt; для NekoBox или v2rayNG - формат с названием приложения. Набор поддерживаемых протоколов зависит от клиента и его версии.
+
+Если Android отключает VPN в фоне, проверь ограничения батареи для приложения. Данные подписки не публикуй. Остальные темы: /faq
+EOF
+            ;;
+        windows|Windows)
+            cat <<'EOF'
+<b>FAQ: Windows</b>
+
+1. Скачай Yurich Connect Windows через /apps. В Releases открой Assets и установи подходящую сборку.
+2. В /status открой личную страницу и скопируй URL «Общие ссылки» (links.txt).
+3. В разделе профилей добавь подписку по URL, дождись загрузки и выбери профиль нужной локации.
+4. Нажми «Подключить». Если выбран режим TUN и приложение запрашивает права администратора, подтверди запуск только официальной установленной сборки.
+5. Проверь открытие сайта. При смене приложения сначала отключи и полностью закрой предыдущий VPN-клиент.
+
+Системный прокси используют не все программы; TUN предназначен для передачи трафика через виртуальный сетевой адаптер. Названия режимов зависят от версии клиента.
+Не отключай антивирус или firewall ради подключения. При ошибке сохрани её текст и версию приложения для /support.
+
+Другие темы: /faq
+EOF
+            ;;
+        ios|iPhone\ /\ iPad)
+            cat <<EOF
+<b>FAQ: iPhone / iPad - Karing</b>
+
+1. Установи Karing из App Store:
+${KARING_APP_URL}
+2. Открой /status и личную страницу подписки. Скопируй URL формата Karing (karing.txt); это ссылка на конфигурацию, не адрес страницы с инструкцией.
+3. В Karing открой добавление конфигурации, выбери добавление по ссылке, вставь URL и сохрани. Названия пунктов могут отличаться в зависимости от языка и версии.
+4. Вернись на главный экран, выбери сервер и включи подключение. Подтверди системный запрос на добавление VPN-конфигурации.
+5. Проверь сайт в Safari. Другой VPN на время использования Karing должен быть отключён.
+
+Протоколы, доступные в разных клиентах, могут отличаться. Отсутствие отдельного профиля не обязательно означает неисправность сервера.
+Официальная инструкция: https://karing.app/en/quickstart
+
+Обновление и диагностика: /faq
+EOF
+            ;;
+        update|Обновление\ подписки)
+            cat <<'EOF'
+<b>FAQ: обновление подписки</b>
+
+Подписка по URL получает изменения с сервера: новые локации, актуальные профили и сроки. Импорт отдельной строки или локального файла сам по себе не даёт обновлений.
+
+Yurich Connect: открой список подписок/профилей и запусти обновление своей подписки. В Karing открой «Мои конфигурации» и обнови нужную конфигурацию (в некоторых версиях нажатием на время её обновления).
+
+Если не добавились локации или остались старые:
+1. Проверь срок и профиль в /status.
+2. Убедись, что сохранён URL файла нужного формата: links.txt для Yurich Connect, karing.txt для Karing, hiddify.txt для Hiddify. Страница, заканчивающаяся на /, предназначена для браузера.
+3. Повтори обновление. Если запрос зависает, проверь Wi-Fi и мобильную сеть; при доступном рабочем VPN попробуй обновить через него.
+4. Если URL открывается в браузере, но приложение выдаёт ошибку, отправь её текст и версию клиента в /support.
+
+Не удаляй рабочую подписку и не перевыпускай ссылку без необходимости. Продление обычно не требует новой ссылки.
+EOF
+            ;;
+        protocols|Протоколы\ и\ локации)
+            cat <<'EOF'
+<b>FAQ: протоколы и локации</b>
+
+Локация - место выхода в интернет, протокол - способ подключения. Одна локация может иметь несколько профилей:
+
+<b>HTTPS / Naive</b> - HTTPS-прокси, нужен клиент с поддержкой Naive.
+<b>Turbo / Hysteria2</b> - соединение на основе QUIC/UDP. Если сеть ограничивает UDP, попробуй доступный TCP-профиль.
+<b>Reality</b> - VLESS с REALITY.
+<b>XHTTP</b> - VLESS с транспортом XHTTP, поддержка зависит от приложения и его ядра.
+
+Используй профили, которые появились после обновления подписки. Нет одного протокола, который всегда работает у любого оператора. Если подключение не удаётся, попробуй другой профиль этой локации или другую локацию.
+
+Низкая задержка не гарантирует открытие сайтов: после теста задержки проверь реальное подключение.
+Пометка Relay означает промежуточный сервер: вход может быть через одну страну, а выход в интернет - через указанную локацию. Маршрут уже задан в профиле; менять IP, порт или SNI вручную не нужно.
+
+Проблемы подключения: /faq connection
+EOF
+            ;;
+        connection|Проблемы\ подключения)
+            cat <<'EOF'
+<b>FAQ: не подключается или нет интернета</b>
+
+1. Отключи VPN и проверь обычный интернет. Не прерывай соединение, от которого сейчас зависит важная работа.
+2. Проверь /status, обнови подписку и выбери другой доступный профиль или локацию.
+3. Сравни Wi-Fi и мобильную сеть. На одной сети сервер может быть доступен, а на другой - ограничен оператором.
+4. Закрой второй VPN-клиент. Перезапусти приложение, проверь разрешение VPN и автоматические дату/время устройства.
+5. Если соединение есть, а отдельные сайты не работают, проверь выбранный режим прокси/TUN и маршрутизации, если эти настройки есть в твоей версии приложения. Не меняй DNS и маршруты наугад.
+
+При предупреждении TLS/сертификата не отключай проверку сертификата. При ошибке установки не отключай защиту Windows.
+
+Для /support подготовь: приложение и версию, ОС, оператор/Wi-Fi, время сбоя, локацию и протокол, точный текст ошибки, работает ли другой профиль. Из логов и скриншотов убери ссылки подписки, пароли, UUID и токены. Отправляй диагностику только в личную поддержку.
+EOF
+            ;;
+        payment|Оплата\ и\ продление)
+            if [[ "${SALES_BOT_PAYMENTS_ENABLED:-1}" != "1" ]]; then
+                printf '<b>FAQ: оплата и продление</b>\n\nНовые платёжные заявки сейчас выключены. Для подключения или продления обратись в /support. Текущая подписка и её срок: /status. Не переводи деньги по сохранённому старому QR без подтверждения поддержки.\n'
+                return
+            fi
+            cat <<'EOF'
+<b>FAQ: оплата и продление</b>
+
+1. Открой /plans и выбери срок. Бот создаст заявку и покажет её номер, точную сумму и актуальный платёжный QR.
+2. Перед переводом проверь получателя и сумму в банковском приложении. Используй QR из своей текущей заявки.
+3. После оплаты отправь скрин платежа сюда в клиентский бот. Скрывай лишние реквизиты, баланс и другие операции; оставь сумму, дату/время, получателя и статус платежа.
+4. Администратор сверит поступление денег и вручную подтвердит заявку. Сам по себе скрин и сообщение «оплатил» не включают доступ.
+5. После подтверждения бот пришлёт результат. Проверь /status и обнови подписку в приложении; синхронизация между серверами может занять несколько минут.
+
+Если уже оплатил, но ответа ещё нет, не плати повторно: отправь номер заявки в /support. Возврат или ошибочный перевод также обсуждаются с поддержкой.
+Бот не запрашивает пароли банка, SMS-коды, CVV или полный номер карты.
+EOF
+            ;;
+        account|Аккаунт\ и\ безопасность)
+            cat <<'EOF'
+<b>FAQ: аккаунт и безопасность</b>
+
+<b>Подписка есть, но бот её не видит?</b>
+Открой /myid и отправь свой Telegram ID поддержке вместе с именем профиля. Привязка существующего профиля не должна менять его ссылку или оплаченный срок. Проверка владельца выполняется поддержкой.
+
+<b>Как получать уведомления?</b>
+Запусти клиентского бота командой /start и не блокируй его. Для напоминаний профиль должен быть привязан к твоему Telegram ID. Telegram-уведомление не заменяет проверку срока в /status.
+
+<b>Можно ли пользоваться на другом устройстве?</b>
+Импортируй свою подписку в подходящее приложение. Действующие ограничения устройств уточняй в /support; название локации не означает отдельную подписку.
+
+<b>Можно ли делиться ссылкой?</b>
+Нет: персональная ссылка и QR подписки дают доступ к твоим VPN-профилям. Не публикуй их, пароли, UUID и токены. При утечке сразу обратись в /support: перевыпуск ссылки потребует обновить её на своих устройствах.
+
+Ссылки на официальные приложения: /apps
+EOF
+            ;;
+        *)
+            cat <<'EOF'
+<b>FAQ Yurich Connect</b>
+
+Выбери тему на клавиатуре:
+Android, Windows, iPhone / iPad, обновление подписки, протоколы и локации, проблемы подключения, оплата и продление, аккаунт и безопасность.
+
+<b>Быстрый старт</b>
+1. Установи приложение через /apps.
+2. Открой /status и личную страницу подписки.
+3. Скопируй URL формата для своего приложения и добавь подписку по ссылке.
+4. Выбери профиль, подключись и разреши системный запрос VPN, если он появится.
+
+Нет подписки: /plans
+Есть подписка, но нужна привязка: /myid и /support
+Вернуться: /menu
+EOF
+            ;;
+    esac
 }
 
 sales_reply_menu() {
     local chat_id="$1" message="$2" kind="${3:-user}" reply_markup
-    [[ "$kind" == "admin" ]] && reply_markup=$(sales_admin_menu_markup) || reply_markup=$(sales_menu_markup)
+    case "$kind" in
+        admin) reply_markup=$(sales_admin_menu_markup) ;;
+        faq) reply_markup=$(sales_faq_menu_markup) ;;
+        *) reply_markup=$(sales_menu_markup) ;;
+    esac
     sales_tg_api "sendMessage" -s --max-time 12 \
         -X POST \
         --data-urlencode "chat_id=${chat_id}" \
@@ -17500,11 +18925,17 @@ sales_welcome_text() {
 ✨ <b>Что внутри</b>
 • стабильные профили HTTPS, Turbo и Reality;
 • личная страница подписки;
-• удобный импорт в Yurich Connect, Hiddify, NekoBox, v2rayNG и Streisand;
+• удобный импорт в Yurich Connect, Hiddify, NekoBox, v2rayNG и Karing;
 • уведомления о сроке подписки в Telegram.
 
-Выбери тариф ниже, оплати по QR и отправь скрин платежа сюда в бот.
+Подключение и ответы на вопросы: /faq
+
 EOF
+    if [[ "${SALES_BOT_PAYMENTS_ENABLED:-1}" == "1" ]]; then
+        printf '\nВыбери тариф, оплати по QR и отправь чек сюда в бот. Доступ выдаётся только после проверки оплаты.\n'
+    else
+        printf '\nДля подключения или продления открой «Поддержка». Текущая подписка доступна в «Моя подписка».\n'
+    fi
 }
 
 sales_send_welcome_visual() {
@@ -17522,7 +18953,7 @@ sales_send_welcome_visual() {
             --form-string "reply_markup=${reply_markup}" \
             -F "animation=@${animation_path};type=image/gif" \
             2>/dev/null || echo "{}")
-        echo "$response" | grep -q '"ok":true' && return 0
+        printf '%s' "$response" | tg_response_ok && return 0
     fi
     if [[ -s "$image_path" ]]; then
         response=$(sales_tg_api "sendPhoto" -s --max-time 30 \
@@ -17533,7 +18964,7 @@ sales_send_welcome_visual() {
             --form-string "reply_markup=${reply_markup}" \
             -F "photo=@${image_path};type=image/jpeg" \
             2>/dev/null || echo "{}")
-        echo "$response" | grep -q '"ok":true' && return 0
+        printf '%s' "$response" | tg_response_ok && return 0
     fi
     return 1
 }
@@ -17552,7 +18983,9 @@ sales_bot_commands_json() {
   {"command":"start","description":"Открыть меню"},
   {"command":"plans","description":"Посмотреть тарифы"},
   {"command":"status","description":"Моя подписка"},
+  {"command":"myid","description":"Мой Telegram ID"},
   {"command":"apps","description":"Скачать приложения"},
+  {"command":"faq","description":"Подключение и частые вопросы"},
   {"command":"channel","description":"Канал Yurich Connect"},
   {"command":"support","description":"Поддержка"}
 ]
@@ -17570,6 +19003,7 @@ sales_bot_admin_commands_json() {
   {"command":"plans","description":"Тарифы"},
   {"command":"status","description":"Моя подписка"},
   {"command":"apps","description":"Скачать приложения"},
+  {"command":"faq","description":"Подключение и частые вопросы"},
   {"command":"channel","description":"Канал Yurich Connect"},
   {"command":"support","description":"Поддержка"}
 ]
@@ -17600,7 +19034,7 @@ sales_is_admin() {
 
 sales_apply_bot_menu() {
     [[ -n "${SALES_BOT_TOKEN:-}" ]] || { err "Sales bot token не настроен"; return 1; }
-    local user_commands admin_commands menu_button resp admin_id admin_scope admin_resp failed=0
+    local user_commands admin_commands menu_button resp admin_id admin_scope admin_resp language failed=0
     user_commands=$(sales_bot_commands_json | tr -d '\n')
     admin_commands=$(sales_bot_admin_commands_json | tr -d '\n')
     menu_button='{"type":"commands"}'
@@ -17611,28 +19045,34 @@ sales_apply_bot_menu() {
         >/dev/null 2>&1 || true
     sales_tg_api "setMyShortDescription" -s --max-time 15 \
         -X POST \
-        --data-urlencode "short_description=VPN-подписки от 50 руб: оплата по QR, выдача после проверки." \
+        --data-urlencode "short_description=Подписка, продление, приложения и уведомления Yurich Connect." \
         >/dev/null 2>&1 || true
     sales_tg_api "setMyDescription" -s --max-time 15 \
         -X POST \
-        --data-urlencode "description=Yurich Connect VPN: HTTPS, Turbo и Reality-профили для телефона и компьютера. Выберите тариф на 1 день, 1, 3, 6 или 12 месяцев, оплатите по QR и отправьте скрин платежа в бот. После проверки бот пришлёт страницу подписки. Канал: ${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}" \
+        --data-urlencode "description=Yurich Connect: личная подписка, сроки доступа, продление, приложения для Android, Windows и iPhone / iPad, FAQ и уведомления. Для привязки существующего профиля отправьте поддержке свой Telegram ID из /myid. Канал: ${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}" \
         >/dev/null 2>&1 || true
 
-    resp=$(sales_tg_api "setMyCommands" -s --max-time 15 \
-        -X POST \
-        --data-urlencode "commands=${user_commands}" \
-        2>/dev/null || echo "{}")
-    echo "$resp" | grep -q '"ok":true' || { err "Не удалось установить команды sales bot"; echo "$resp"; return 1; }
+    for language in "" ru; do
+        resp=$(sales_tg_api "setMyCommands" -s --max-time 15 \
+            -X POST \
+            --data-urlencode "commands=${user_commands}" \
+            --data-urlencode "language_code=${language}" \
+            2>/dev/null || echo "{}")
+        printf '%s' "$resp" | tg_response_ok || { err "Не удалось установить команды sales bot"; return 1; }
+    done
 
     while IFS= read -r admin_id; do
         [[ -z "$admin_id" ]] && continue
         admin_scope=$(printf '{"type":"chat","chat_id":%s}' "$admin_id")
-        admin_resp=$(sales_tg_api "setMyCommands" -s --max-time 15 \
-            -X POST \
-            --data-urlencode "commands=${admin_commands}" \
-            --data-urlencode "scope=${admin_scope}" \
-            2>/dev/null || echo "{}")
-        echo "$admin_resp" | grep -q '"ok":true' || failed=$((failed + 1))
+        for language in "" ru; do
+            admin_resp=$(sales_tg_api "setMyCommands" -s --max-time 15 \
+                -X POST \
+                --data-urlencode "commands=${admin_commands}" \
+                --data-urlencode "scope=${admin_scope}" \
+                --data-urlencode "language_code=${language}" \
+                2>/dev/null || echo "{}")
+            printf '%s' "$admin_resp" | tg_response_ok || failed=$((failed + 1))
+        done
     done < <(sales_admin_ids | sort -u)
 
     sales_tg_api "setChatMenuButton" -s --max-time 15 \
@@ -17662,21 +19102,26 @@ sales_plan_price() {
 }
 
 sales_plan_regular_price() {
-    local term
+    local term monthly_price
     term=$(normalize_user_term "${1:-}" 2>/dev/null || true)
     case "$term" in
-        1d) printf '50\n' ;;
-        *m) printf '%s\n' $(( ${term%m} * 250 )) ;;
+        1d) sales_plan_price 1d ;;
+        *m)
+            monthly_price=$(sales_plan_price 1m) || return 1
+            printf '%s\n' $(( ${term%m} * monthly_price ))
+            ;;
         *) return 1 ;;
     esac
 }
 
 sales_plans_text() {
-    local item key term p regular discount pct per_month currency channel plan_lines="" icon badge plans
+    local item key term p regular discount pct pct_tenths per_month per_month_cents currency channel plan_lines="" icon badge plans monthly_price base_note=""
     currency="${SALES_BOT_CURRENCY:-$SALES_BOT_CURRENCY_DEFAULT}"
     channel="${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}"
     plans="${SALES_BOT_PLANS:-$SALES_BOT_PLANS_DEFAULT}"
     is_valid_sales_plans_value "$plans" || plans="$SALES_BOT_PLANS_DEFAULT"
+    monthly_price=$(sales_plan_price 1m 2>/dev/null || true)
+    [[ -z "$monthly_price" ]] || base_note="База: <b>${monthly_price} ${currency} / месяц</b>."
     IFS=',' read -ra _sales_plan_items <<< "$plans"
     for item in "${_sales_plan_items[@]}"; do
         key="${item%%:*}"
@@ -17697,15 +19142,17 @@ sales_plans_text() {
         regular=$(sales_plan_regular_price "$term" 2>/dev/null || echo "$p")
         if [[ "$p" -lt "$regular" ]]; then
             discount=$((regular - p))
-            pct=$(((discount * 100 + regular / 2) / regular))
+            pct_tenths=$(((discount * 1000 + regular / 2) / regular))
+            printf -v pct '%d.%d' "$((pct_tenths / 10))" "$((pct_tenths % 10))"
             if [[ "$term" == *m ]]; then
-                per_month=$((p / ${term%m}))
+                per_month_cents=$(((p * 100 + ${term%m} / 2) / ${term%m}))
+                printf -v per_month '%d.%02d' "$((per_month_cents / 100))" "$((per_month_cents % 100))"
                 plan_lines="${plan_lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
-   ${badge}: ~${per_month} руб/мес, экономия ${discount} руб / ${pct}%
+   ${badge}: ~${per_month} ${currency}/мес, экономия ${discount} ${currency} / ${pct}%
 "
             else
                 plan_lines="${plan_lines}${icon} <b>$(user_term_label "$term")</b> — <code>${p} ${currency}</code>
-   ${badge}: экономия ${discount} руб / ${pct}%
+   ${badge}: экономия ${discount} ${currency} / ${pct}%
 "
             fi
         else
@@ -17718,7 +19165,7 @@ sales_plans_text() {
 💎 <b>Тарифы Yurich Connect VPN</b>
 
 ${plan_lines}
-💡 База: <b>250 руб / месяц</b>.
+${base_note}
 Чем больше срок, тем ниже цена за месяц.
 
 ✅ <b>Включено</b>
@@ -17743,13 +19190,13 @@ EOF
 sales_buy_menu_markup() {
     local pd p1 p3 p6 p12 currency
     pd=$(sales_plan_price 1d 2>/dev/null || printf '50')
-    p1=$(sales_plan_price 1m 2>/dev/null || printf '250')
-    p3=$(sales_plan_price 3m 2>/dev/null || printf '700')
-    p6=$(sales_plan_price 6m 2>/dev/null || printf '1300')
-    p12=$(sales_plan_price 12m 2>/dev/null || printf '2400')
+    p1=$(sales_plan_price 1m 2>/dev/null || printf '350')
+    p3=$(sales_plan_price 3m 2>/dev/null || printf '980')
+    p6=$(sales_plan_price 6m 2>/dev/null || printf '1820')
+    p12=$(sales_plan_price 12m 2>/dev/null || printf '3360')
     currency="${SALES_BOT_CURRENCY:-$SALES_BOT_CURRENCY_DEFAULT}"
     cat <<EOF
-{"keyboard":[[{"text":"⚡ 1 день - ${pd} ${currency}"},{"text":"🚀 1 месяц - ${p1} ${currency}"}],[{"text":"⭐ 3 месяца - ${p3} ${currency}"},{"text":"🔥 6 месяцев - ${p6} ${currency}"}],[{"text":"👑 12 месяцев - ${p12} ${currency}"}],[{"text":"🟢 Моя подписка"},{"text":"📲 Приложения"}],[{"text":"📣 Канал"},{"text":"🛟 Поддержка"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
+{"keyboard":[[{"text":"⚡ 1 день - ${pd} ${currency}"},{"text":"🚀 1 месяц - ${p1} ${currency}"}],[{"text":"⭐ 3 месяца - ${p3} ${currency}"},{"text":"🔥 6 месяцев - ${p6} ${currency}"}],[{"text":"👑 12 месяцев - ${p12} ${currency}"},{"text":"FAQ"}],[{"text":"🟢 Моя подписка"},{"text":"📲 Приложения"}],[{"text":"📣 Канал"},{"text":"🛟 Поддержка"}]],"resize_keyboard":true,"one_time_keyboard":false,"is_persistent":true}
 EOF
 }
 
@@ -17767,40 +19214,26 @@ sales_reply_buy_menu() {
 }
 
 sales_months_from_text() {
-    local text="${1,,}"
-    if [[ "$text" =~ ^/buy[[:space:]]+(day|день|1d) ]]; then
-        printf '1d\n'
-        return 0
+    local text="${1,,}" term
+    text="${text#"${text%%[![:space:]]*}"}"
+    text="${text%"${text##*[![:space:]]}"}"
+    # The period identifies a button, including cached buttons with an old price.
+    case "$text" in
+        "⚡ "*|"🚀 "*|"⭐ "*|"🔥 "*|"👑 "*) text="${text#* }" ;;
+    esac
+    if [[ "$text" =~ ^/buy[[:space:]]+(day|день|1d|[0-9]{1,2}m?)[[:space:]]*$ ]]; then
+        term="${BASH_REMATCH[1]}"
+    elif [[ "$text" == day || "$text" == день || "$text" == 1d ]] || \
+         [[ "$text" =~ ^1[[:space:]]+день([[:space:]]*-[[:space:]]*[0-9]+[[:space:]]+[a-z]{3})?$ ]]; then
+        term=1d
+    elif [[ "$text" =~ ^(1|3|6|12)[[:space:]]*(мес|месяц|месяца|месяцев)?([[:space:]]*-[[:space:]]*[0-9]+[[:space:]]+[a-z]{3})?$ ]]; then
+        term="${BASH_REMATCH[1]}m"
+    else
+        return 1
     fi
-    if [[ "$text" =~ ^/buy[[:space:]]+([0-9]{1,2}) ]]; then
-        printf '%sm\n' "${BASH_REMATCH[1]}"
-        return 0
-    fi
-    if [[ "$text" == *"день"* || "$text" == *"50"* ]]; then
-        printf '1d\n'
-        return 0
-    fi
-    if [[ "$text" == *"250"* ]]; then
-        printf '1m\n'
-        return 0
-    fi
-    if [[ "$text" == *"700"* ]]; then
-        printf '3m\n'
-        return 0
-    fi
-    if [[ "$text" == *"1300"* ]]; then
-        printf '6m\n'
-        return 0
-    fi
-    if [[ "$text" == *"2400"* ]]; then
-        printf '12m\n'
-        return 0
-    fi
-    if [[ "$text" =~ (^|[[:space:]])(1|3|6|12)[[:space:]]*(мес|месяц|месяца|месяцев)? ]]; then
-        printf '%sm\n' "${BASH_REMATCH[2]}"
-        return 0
-    fi
-    return 1
+    term=$(normalize_user_term "$term") || return 1
+    sales_plan_price "$term" >/dev/null || return 1
+    printf '%s\n' "$term"
 }
 
 sales_order_valid_id() {
@@ -17808,9 +19241,20 @@ sales_order_valid_id() {
 }
 
 sales_user_for_chat() {
-    local chat_id="$1"
-    chat_id="${chat_id#-}"
-    printf 'tg%s\n' "$chat_id"
+    local chat_id="$1" user matched="" primary="${SALES_BOT_OWNER_USER:-}"
+    [[ "$chat_id" =~ ^[0-9]{5,20}$ ]] || return 1
+    if [[ "$chat_id" == "${SALES_BOT_ADMIN_ID:-}" ]] && is_valid_proxy_user "$primary" && \
+        subscription_user_exists "$primary" && [[ "$(user_meta_get "$primary" TELEGRAM_CHAT_ID 2>/dev/null || true)" == "$chat_id" ]]; then
+        printf '%s\n' "$primary"
+        return 0
+    fi
+    while IFS= read -r user; do
+        is_valid_proxy_user "$user" || continue
+        [[ "$(user_meta_get "$user" TELEGRAM_CHAT_ID 2>/dev/null || true)" == "$chat_id" ]] || continue
+        [[ -z "$matched" ]] || return 1
+        matched="$user"
+    done < <(list_subscription_users)
+    printf '%s\n' "${matched:-tg${chat_id}}"
 }
 
 sales_notify_admins() {
@@ -18024,7 +19468,7 @@ sales_latest_pending_order_for_chat() {
 }
 
 sales_handle_payment_proof() {
-    local chat_id="$1" from_id="$2" username="$3" first_name="$4" message_id="$5" proof_kind="$6" order_file order_id safe_user safe_name admin_id
+    local chat_id="$1" from_id="$2" username="$3" first_name="$4" message_id="$5" proof_kind="$6" order_file order_id safe_user safe_name admin_id forward_response delivered=0
     if ! order_file=$(sales_latest_pending_order_for_chat "$chat_id" 2>/dev/null); then
         sales_reply "$chat_id" "Скрин оплаты получил, но активной заявки не нашёл. Сначала выбери тариф через /plans."
         return 0
@@ -18045,7 +19489,7 @@ sales_handle_payment_proof() {
 
     while IFS= read -r admin_id; do
         [[ -z "$admin_id" ]] && continue
-        sales_reply "$admin_id" "<b>Скрин оплаты по заявке</b>
+        if sales_reply_checked "$admin_id" "<b>Скрин оплаты по заявке</b>
 
 ORDER: <code>${order_id}</code>
 Клиент: <code>${chat_id}</code>
@@ -18059,20 +19503,33 @@ Username: <code>${safe_user}</code>
 <code>/approve ${order_id}</code>
 
 Отклонить:
-<code>/reject ${order_id}</code>"
-        sales_tg_api "forwardMessage" -s --max-time 20 \
-            -X POST \
-            --data-urlencode "chat_id=${admin_id}" \
-            --data-urlencode "from_chat_id=${chat_id}" \
-            --data-urlencode "message_id=${message_id}" \
-            >/dev/null 2>&1 || true
+<code>/reject ${order_id}</code>"; then
+            forward_response=$(sales_tg_api "forwardMessage" -s --max-time 20 \
+                -X POST \
+                --data-urlencode "chat_id=${admin_id}" \
+                --data-urlencode "from_chat_id=${chat_id}" \
+                --data-urlencode "message_id=${message_id}" \
+                2>/dev/null || true)
+            if printf '%s\n' "$forward_response" | grep -Eq '"ok":[[:space:]]*true'; then
+                delivered=$((delivered + 1))
+            fi
+        fi
     done < <(sales_admin_ids | sort -u)
 
-    sales_reply "$chat_id" "Скрин оплаты получил и отправил администратору. После проверки тебе придёт ссылка на подписку."
+    if (( delivered > 0 )); then
+        sales_reply "$chat_id" "Скрин оплаты получил и отправил администратору. После проверки тебе придёт ссылка на подписку."
+    else
+        warn "Не удалось передать подтверждение оплаты администратору для заявки ${order_id}"
+        sales_reply "$chat_id" "Скрин оплаты получил, но доставку администратору подтвердить не удалось. Отправь его повторно позже или напиши в поддержку."
+    fi
 }
 
 sales_create_order() {
     local chat_id="$1" from_id="$2" username="$3" first_name="$4" term="$5" price order_id order_file created safe_user safe_name payment_text term_label
+    if [[ "${SALES_BOT_PAYMENTS_ENABLED:-1}" != "1" ]]; then
+        sales_reply "$chat_id" "Для подключения или продления напиши в поддержку: ${TELEGRAM_COMMUNITY_URL}. Автоматический приём оплат пока выключен."
+        return 0
+    fi
     local order_lock_fd file file_values file_chat file_status file_epoch now pending_count=0 total_count=0 newest_epoch=0
     local min_interval max_pending max_files
     term=$(normalize_user_term "$term" 2>/dev/null || true)
@@ -18189,30 +19646,41 @@ Username: <code>${safe_user}</code>
 }
 
 sales_subscription_status_text() {
-    local chat_id="$1" user sub_url expires channel
-    user=$(sales_user_for_chat "$chat_id")
+    local chat_id="$1" user sub_url="" expires channel token domain state="Активна"
+    if ! user=$(sales_user_for_chat "$chat_id"); then
+        printf 'Не удалось однозначно определить профиль. Обратись в поддержку: /support\n'
+        return 0
+    fi
     if ! subscription_user_exists "$user"; then
         cat <<EOF
 Подписка для твоего Telegram ID пока не найдена.
 
-Открой тарифы: /plans
+Для привязки существующей подписки отправь поддержке свой ID из /myid.
+Тарифы: /plans
 EOF
         return 0
     fi
     expires=$(user_expiry_label "$user")
-    sub_url=$(generate_subscription_page "$user" 2>/dev/null || true)
+    token=$(cat "${SUBS_DIR}/${user}.token" 2>/dev/null || true)
+    domain=$(subscription_public_domain)
+    if [[ "$token" =~ ^[A-Fa-f0-9]{32,64}$ && "$domain" =~ ^[A-Za-z0-9.-]+$ ]]; then
+        sub_url="https://${domain}/s/${token}/"
+    fi
+    user_is_time_expired "$user" && state="Срок истёк"
+    user_is_blocked "$user" && state="Приостановлена"
     channel="${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}"
     cat <<EOF
 <b>Твоя подписка Yurich Connect</b>
 
-Профиль: <code>${user}</code>
-Срок: <code>${expires}</code>
+Профиль: <code>$(html_escape_text "$user")</code>
+Статус: <b>${state}</b>
+Срок: <code>$(html_escape_text "$expires")</code>
 
 Страница подписки:
-<code>${sub_url:-не удалось создать ссылку}</code>
+<code>$(html_escape_text "${sub_url:-Ссылка ещё не подготовлена. Обратись в поддержку.}")</code>
 
 Канал:
-${channel}
+$(html_escape_text "$channel")
 EOF
 }
 
@@ -18231,7 +19699,7 @@ sales_restore_issue_state() {
 
 sales_issue_subscription() {
     local chat_id="$1" term="$2" order_id="${3:-manual}" user pass users_backup meta_backup meta_file meta_existed=0 created=0 sub_url sync_note="" last_order
-    user=$(sales_user_for_chat "$chat_id")
+    user=$(sales_user_for_chat "$chat_id") || { err "Неоднозначная Telegram-привязка"; return 1; }
     term=$(normalize_user_term "$term" 2>/dev/null || true)
     if ! is_valid_user_term "$term"; then
         err "Некорректный срок sales-подписки"
@@ -18388,13 +19856,17 @@ ORDER: <code>${order_id}</code>
 Страница подписки:
 <code>${sub_url}</code>
 
-Открой ссылку и импортируй подписку в Yurich Connect, Hiddify, NekoBox, v2rayNG или Streisand.
+Открой страницу и скопируй URL подписки для своего приложения. Для iPhone / iPad используй Karing.
+Инструкции по подключению: /faq
 
 Android:
 ${ANDROID_APP_RELEASES_URL}
 
 Windows:
 ${WINDOWS_APP_RELEASES_URL}
+
+iPhone / iPad - Karing:
+${KARING_APP_URL}
 
 Канал:
 ${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}
@@ -18455,9 +19927,10 @@ sales_orders_text() {
 }
 
 sales_handle_command() {
-    local chat_id="$1" from_id="$2" username="$3" first_name="$4" text="$5" is_admin=0 term order_id reason
+    local chat_id="$1" from_id="$2" username="$3" first_name="$4" text="$5" is_admin=0 term order_id reason faq_topic
     set +e
     sales_is_admin "$from_id" && is_admin=1
+    [[ "$chat_id" == "$from_id" ]] || return 1
 
     if [[ "$is_admin" -ne 1 ]]; then
         if sales_captcha_has_pending "$chat_id"; then
@@ -18465,7 +19938,7 @@ sales_handle_command() {
             return
         fi
         case "$text" in
-            *"Купить VPN"*|*"Тарифы"*|/start|/menu|/plans|/buy|/buy*)
+            *"Купить VPN"*|*"Тарифы"*|/start|/start\ renew|/menu|/plans|/buy|/buy*)
                 if ! sales_captcha_is_verified "$chat_id"; then
                     sales_captcha_prompt "$chat_id"
                     return
@@ -18482,40 +19955,32 @@ sales_handle_command() {
     fi
 
     case "$text" in
-        /start|/menu)
+        /start)
             sales_reply_start "$chat_id" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
             ;;
-        *"Купить VPN"*|*"Тарифы"*|/plans|/buy)
+        /menu|Главное\ меню)
+            sales_reply_menu "$chat_id" "$(sales_welcome_text)" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
+            ;;
+        *"Купить VPN"*|*"Тарифы"*|/plans|/buy|/start\ renew)
             sales_reply_buy_menu "$chat_id" "$(sales_plans_text)"
             ;;
         *"Моя подписка"*|/status|/sub|/subscription)
             sales_reply_menu "$chat_id" "$(sales_subscription_status_text "$chat_id")" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
             ;;
+        /myid|/id)
+            sales_reply_menu "$chat_id" "Твой Telegram ID: <code>${from_id}</code>
+
+Для привязки существующей подписки отправь этот ID поддержке вместе с именем профиля." "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
+            ;;
         *"Как подключить"*|/help)
-            sales_reply_menu "$chat_id" "<b>Как подключить</b>
-
-1. Выбери тариф на 1 день, 1, 3, 6 или 12 месяцев.
-2. Оплати по QR-коду и отправь скрин платежа сюда в бот.
-3. После подтверждения оплаты бот пришлёт страницу подписки.
-4. Открой страницу в приложении или скопируй URL.
-
-Android: Yurich Connect, Hiddify, NekoBox, v2rayNG.
-iPhone: Streisand.
-Windows: Yurich Connect Windows, v2rayN, Hiddify." "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
+            sales_reply_menu "$chat_id" "$(sales_faq_text)" "faq"
+            ;;
+        /faq|/faq\ *|FAQ|Android|Windows|iPhone\ /\ iPad|Обновление\ подписки|Протоколы\ и\ локации|Проблемы\ подключения|Оплата\ и\ продление|Аккаунт\ и\ безопасность)
+            faq_topic="${text#/faq }"
+            sales_reply_menu "$chat_id" "$(sales_faq_text "$faq_topic")" "faq"
             ;;
         *"Приложения"*|/apps)
-            sales_reply_menu "$chat_id" "<b>Приложения</b>
-
-Тариф включает телефон и компьютер.
-
-Android:
-${ANDROID_APP_RELEASES_URL}
-
-Windows:
-${WINDOWS_APP_RELEASES_URL}
-
-iPhone:
-${STREISAND_APP_URL}" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
+            sales_reply_menu "$chat_id" "$(sales_apps_text)" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
             ;;
         *"Канал"*|/channel)
             sales_reply_menu "$chat_id" "<b>Канал Yurich Connect</b>
@@ -18527,7 +19992,7 @@ ${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}" "$([[ "$is_admin" -eq 
             sales_reply_menu "$chat_id" "<b>Поддержка</b>
 
 Telegram: ${TELEGRAM_COMMUNITY_URL}
-Email: ${SUPPORT_EMAIL}" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
+Твой Telegram ID: <code>${from_id}</code>" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
             ;;
         *"Заявки"*|/sales_orders)
             if [[ "$is_admin" -ne 1 ]]; then sales_reply "$chat_id" "Команда доступна только администратору."; return; fi
@@ -18541,15 +20006,16 @@ Email: ${SUPPORT_EMAIL}" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
 Тарифы: <code>${SALES_BOT_PLANS:-}</code>
 Валюта: <code>${SALES_BOT_CURRENCY:-RUB}</code>
 Канал: <code>${SALES_BOT_CHANNEL_URL:-$SALES_BOT_CHANNEL_URL_DEFAULT}</code>
-Лимит устройств: <code>выключен</code>
+Лимит устройств: <code>${DEVICE_LIMIT_ENABLED:-0}; максимум ${DEVICE_LIMIT:-$DEVICE_LIMIT_DEFAULT}</code>
+Приём оплат: <code>${SALES_BOT_PAYMENTS_ENABLED:-1}</code>
 Заявки: <code>${SALES_BOT_ORDERS_DIR}</code>" "admin"
             ;;
-        /approve*)
+        /approve|/approve\ *)
             if [[ "$is_admin" -ne 1 ]]; then sales_reply "$chat_id" "Команда доступна только администратору."; return; fi
             order_id=$(printf '%s\n' "$text" | awk '{print $2}')
             sales_approve_order "$order_id" "$chat_id"
             ;;
-        /reject*)
+        /reject|/reject\ *)
             if [[ "$is_admin" -ne 1 ]]; then sales_reply "$chat_id" "Команда доступна только администратору."; return; fi
             order_id=$(printf '%s\n' "$text" | awk '{print $2}')
             reason=$(printf '%s\n' "$text" | cut -d' ' -f3-)
@@ -18561,66 +20027,122 @@ Email: ${SUPPORT_EMAIL}" "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
             if [[ -n "$term" ]]; then
                 sales_create_order "$chat_id" "$from_id" "$username" "$first_name" "$term"
             else
-                sales_reply_menu "$chat_id" "Не понял команду. Открой меню или напиши /plans." "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
+                sales_reply_menu "$chat_id" "Не понял команду. Открой /menu, /faq или /plans." "$([[ "$is_admin" -eq 1 ]] && echo admin || echo user)"
             fi
             ;;
     esac
 }
 
-cmd_sales_bot() {
-    [[ -n "${SALES_BOT_TOKEN:-}" ]] || { err "Sales bot не настроен. Запусти интерактивно: sudo bash ${SCRIPT_PATH} sales-bot-install"; return 1; }
-    sales_apply_bot_menu >/dev/null 2>&1 || true
-    mkdir -p "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR"
-    chmod 700 "$SALES_BOT_DIR" "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR" 2>/dev/null || true
-    info "Запускаю Yurich Sales Bot..."
-    local offset=0 response updates
+telegram_updates_rows() {
+    python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if data.get("ok") is not True:
+        code = data.get("error_code", 0)
+        delay = data.get("parameters", {}).get("retry_after", 5)
+        code = code if type(code) is int else 0
+        delay = max(1, min(delay, 3600)) if type(delay) is int else 5
+        print("ERROR|%s|%s" % (code, delay))
+        sys.exit(0)
+    def clean(value, limit=120):
+        return "".join(" " if c == "|" or ord(c) < 32 else c for c in str(value or ""))[:limit]
+    for update in data.get("result", []):
+        uid = update.get("update_id")
+        if type(uid) is not int or not 0 <= uid <= 2147483646:
+            continue
+        msg = update.get("message") or {}
+        chat, sender = msg.get("chat") or {}, msg.get("from") or {}
+        text = str(msg.get("text") or "")
+        kind = "text" if text else "photo" if msg.get("photo") else "document" if msg.get("document") else "ignore"
+        print("|".join([str(uid), clean(chat.get("id")), clean(chat.get("type")),
+                        clean(sender.get("id")), clean(sender.get("username")),
+                        clean(sender.get("first_name")), clean(msg.get("message_id")),
+                        kind, clean(text, 3501)]))
+except (ValueError, TypeError, AttributeError):
+    sys.exit(1)
+'
+}
+
+telegram_poll_loop() {
+    local role="$1" api state_dir="${CONFIG_DIR}/telegram-state" offset=0 poll_lock
+    local response updates update_id chat_id chat_type from_id username first_name message_id kind text temp delay
+    local window=0 now count allowed message_slots=0
+    local -A message_counts=()
+    [[ "$role" == "client" ]] && api=sales_tg_api || api=tg_api
+    mkdir -p "$state_dir" || return 1
+    chmod 700 "$state_dir"
+    exec {poll_lock}>"${state_dir}/${role}.lock"
+    flock -n "$poll_lock" || { err "Telegram poller ${role} already running"; return 1; }
+    chmod 600 "${state_dir}/${role}.lock"
+    if [[ -f "${state_dir}/${role}.offset" ]]; then
+        offset=$(cat "${state_dir}/${role}.offset")
+        is_canonical_uint_in_range "$offset" 0 2147483647 || return 1
+    fi
     while true; do
-        response=$(sales_tg_api "getUpdates?offset=${offset}&timeout=30&allowed_updates=%5B%22message%22%5D" -s --max-time 35 2>/dev/null || echo "")
-        if [[ -z "$response" ]]; then
+        load_config || return 1
+        response=$("$api" "getUpdates?offset=${offset}&timeout=30&allowed_updates=%5B%22message%22%5D" -s --max-time 35 2>/dev/null || true)
+        if ! updates=$(printf '%s' "$response" | telegram_updates_rows); then
+            warn "Telegram ${role}: network or invalid API response"
             sleep 5
             continue
         fi
-        updates=$(echo "$response" | python3 -c "
-import json, sys
-try:
-    data=json.load(sys.stdin)
-    if not data.get('ok'): sys.exit(0)
-    for u in data.get('result', []):
-        uid=u.get('update_id',0)
-        msg=u.get('message') or {}
-        chat=msg.get('chat') or {}
-        frm=msg.get('from') or {}
-        text=str(msg.get('text') or '')
-        kind='text'
-        if not text:
-            if msg.get('photo'):
-                kind='photo'
-                text='__PAYMENT_PROOF__'
-            elif msg.get('document'):
-                kind='document'
-                text='__PAYMENT_PROOF__'
-            else:
-                continue
-        def clean(v):
-            return str(v or '').replace('|',' ').replace('\\r',' ').replace('\\n',' ')[:120]
-        print('|'.join([str(uid), clean(chat.get('id')), clean(chat.get('type')), clean(frm.get('id')), clean(frm.get('username')), clean(frm.get('first_name')), clean(msg.get('message_id')), clean(kind), clean(text)]))
-except Exception:
-    pass
-" 2>/dev/null || echo "")
+        if [[ "$updates" == ERROR\|* ]]; then
+            IFS='|' read -r _ kind delay <<< "$updates"
+            warn "Telegram ${role}: API error ${kind}"
+            [[ "$kind" == "401" || "$kind" == "409" ]] && return 1
+            sleep "$delay"
+            continue
+        fi
         while IFS='|' read -r update_id chat_id chat_type from_id username first_name message_id kind text; do
-            [[ -z "${update_id:-}" ]] && continue
-            if is_canonical_uint_in_range "$update_id" 0 2147483646; then
-                offset=$(( update_id + 1 ))
+            [[ -n "$update_id" ]] || continue
+            is_canonical_uint_in_range "$update_id" 0 2147483646 || continue
+            if [[ "$chat_type" == "private" && "$chat_id" == "$from_id" && "$from_id" =~ ^[0-9]{5,20}$ ]]; then
+                allowed=1
+                if ! { [[ "$role" == "client" ]] && sales_is_admin "$from_id"; } && ! { [[ "$role" == "admin" ]] && tg_is_admin "$from_id"; }; then
+                    now=$(date +%s)
+                    if (( now - window >= 60 )); then message_counts=(); message_slots=0; window="$now"; fi
+                    count="${message_counts[$from_id]:-0}"
+                    if (( count >= 10 || message_slots >= 2048 && count == 0 )); then
+                        allowed=0
+                        if (( count == 10 )); then
+                            "$api" sendMessage -s --max-time 10 -X POST --data-urlencode "chat_id=$chat_id" \
+                                --data-urlencode 'text=Слишком много сообщений. Повтори через минуту.' >/dev/null 2>&1 || true
+                        fi
+                    fi
+                    if (( count > 0 || message_slots < 2048 )); then
+                        (( count == 0 )) && message_slots=$((message_slots + 1))
+                        message_counts[$from_id]=$((count + 1))
+                    fi
+                fi
+                if [[ "$allowed" == 1 && "$role" == "client" ]]; then
+                    if [[ "$kind" == "photo" || "$kind" == "document" ]]; then
+                        sales_handle_payment_proof "$chat_id" "$from_id" "$username" "$first_name" "$message_id" "$kind"
+                    elif [[ "$kind" == "text" ]]; then
+                        sales_handle_command "$chat_id" "$from_id" "$username" "$first_name" "$text"
+                    fi
+                elif [[ "$allowed" == 1 && "$kind" == "text" ]]; then
+                    if ! tg_handle_command "$chat_id" "$from_id" "$text"; then
+                        warn 'Telegram admin: команда завершилась с ошибкой; автоматического повтора нет'
+                    fi
+                fi
             fi
-            [[ "$chat_type" == "private" ]] || continue
-            if [[ "${kind:-text}" == "photo" || "${kind:-text}" == "document" ]]; then
-                sales_handle_payment_proof "$chat_id" "$from_id" "$username" "$first_name" "$message_id" "$kind"
-            else
-                sales_handle_command "$chat_id" "$from_id" "$username" "$first_name" "$text"
-            fi
+            # Commit only after dispatch; unsupported messages must advance the cursor too.
+            offset=$(( update_id + 1 ))
+            temp=$(mktemp "${state_dir}/.${role}.offset.XXXXXX") || return 1
+            chmod 600 "$temp"
+            printf '%s\n' "$offset" > "$temp" && mv -f "$temp" "${state_dir}/${role}.offset" || return 1
         done <<< "$updates"
         sleep 1
     done
+}
+
+cmd_sales_bot() {
+    [[ -n "${SALES_BOT_TOKEN:-}" ]] || { err "Sales bot token не настроен"; return 1; }
+    sales_apply_bot_menu >/dev/null 2>&1 || true
+    mkdir -p "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR"
+    chmod 700 "$SALES_BOT_DIR" "$SALES_BOT_ORDERS_DIR" "$SALES_BOT_CAPTCHA_DIR" "$SALES_BOT_VERIFIED_DIR"
+    telegram_poll_loop client
 }
 
 install_sales_bot_service() {
@@ -18744,7 +20266,16 @@ tg_reply_pre() {
     local chat_id="$1"
     local title="$2"
     local content="$3"
-    content=$(printf '%s' "$content" | sed -r 's/\x1B\[[0-9;]*[mK]//g' | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' | head -c 3400 || true)
+    content=$(printf '%s' "$content" | python3 -c 'import html,re,sys
+text=re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]","",sys.stdin.read())
+result=[]; used=0
+for c in text:
+ if ord(c)<32 and c not in "\n\t": continue
+ escaped=html.escape(c,quote=False); size=len(escaped.encode("utf-16-le"))//2
+ if used+size>2900:
+  result.append("\n[вывод сокращён]"); break
+ result.append(escaped); used+=size
+print("".join(result),end="")' || true)
     [[ -z "$content" ]] && content="нет вывода"
     tg_reply "$chat_id" "${title}
 <pre>${content}</pre>"
@@ -18769,14 +20300,16 @@ tg_send_photo() {
     local chat_id="$1"
     local photo_path="$2"
     local caption="$3"
-    [[ -z "${TG_TOKEN:-}" || ! -f "${photo_path}" ]] && return
+    local response
+    [[ -n "${TG_TOKEN:-}" && -f "${photo_path}" ]] || return 1
     # Используем только -F для multipart (-F и --data-urlencode несовместимы)
-    tg_api "sendPhoto" -s --max-time 30 \
+    response=$(tg_api "sendPhoto" -s --max-time 30 \
         -X POST \
         -F "chat_id=${chat_id}" \
         -F "caption=${caption}" \
         -F "photo=@${photo_path}" \
-        >/dev/null 2>&1 || true
+        2>/dev/null) || return $?
+    printf '%s' "$response" | tg_response_ok
 }
 
 tg_send_naive_qr() {
@@ -18790,11 +20323,11 @@ tg_send_naive_qr() {
     fi
 
     if command -v qrencode &>/dev/null; then
-        local qr_file="/tmp/naiveproxy_qr_${user}_$$.png"
-        if qrencode -o "${qr_file}" -s 8 "${uri}" 2>/dev/null && [[ -s "${qr_file}" ]]; then
-            tg_send_photo "${chat_id}" "${qr_file}" "📱 Yurich Proxy QR для ${user}@${DOMAIN}"
+        local qr_file="/tmp/naiveproxy_qr_${user}_$$.png" qr_rc=0
+        if printf '%s' "$uri" | qrencode -o "${qr_file}" -s 8 2>/dev/null && [[ -s "${qr_file}" ]]; then
+            tg_send_photo "${chat_id}" "${qr_file}" "📱 Yurich Proxy QR для ${user}@${DOMAIN}" || qr_rc=$?
             rm -f "${qr_file}"
-            return 0
+            return "$qr_rc"
         fi
         rm -f "${qr_file}"
     fi
@@ -18813,11 +20346,11 @@ tg_send_hysteria_qr() {
     fi
 
     if command -v qrencode &>/dev/null; then
-        local qr_file="/tmp/hysteria_qr_${user}_$$.png"
-        if qrencode -o "${qr_file}" -s 8 "${uri}" 2>/dev/null && [[ -s "${qr_file}" ]]; then
-            tg_send_photo "${chat_id}" "${qr_file}" "⚡ Hysteria 2 QR для ${user}@${DOMAIN}"
+        local qr_file="/tmp/hysteria_qr_${user}_$$.png" qr_rc=0
+        if printf '%s' "$uri" | qrencode -o "${qr_file}" -s 8 2>/dev/null && [[ -s "${qr_file}" ]]; then
+            tg_send_photo "${chat_id}" "${qr_file}" "⚡ Hysteria 2 QR для ${user}@${DOMAIN}" || qr_rc=$?
             rm -f "${qr_file}"
-            return 0
+            return "$qr_rc"
         fi
         rm -f "${qr_file}"
     fi
@@ -18826,7 +20359,7 @@ tg_send_hysteria_qr() {
 }
 
 # Обработка одной команды
-tg_handle_command() {
+tg_handle_command() (
     local chat_id="$1"
     local from_id="$2"
     local text="$3"
@@ -18834,21 +20367,36 @@ tg_handle_command() {
     # Отключаем строгий режим внутри обработчика — иначе любая ошибка ломает бот
     set +e
 
-    load_config 2>/dev/null || true
+    load_config 2>/dev/null || return 1
     local is_admin=0
     tg_is_admin "${from_id}" && is_admin=1
+    [[ "$chat_id" == "$from_id" ]] || return 1
+    if [[ "${TG_ADMIN_ONLY:-0}" == "1" && "$is_admin" -ne 1 ]]; then
+        if [[ -n "${SALES_BOT_USERNAME:-}" ]]; then
+            tg_reply "$chat_id" "Это административный бот. Клиентский бот: https://t.me/${SALES_BOT_USERNAME}"
+        else
+            tg_reply "$chat_id" "Это административный бот. Адрес клиентского бота уточни у администратора."
+        fi
+        return
+    fi
 
-    # Очищаем text от \r \n и невидимых символов
+    # Keep line breaks in news; isolate relaxed error handling to this command.
     text="${text//$'\r'/}"
-    text="${text//$'\n'/}"
 
     # Русские кнопки Telegram reply keyboard -> существующие команды
     case "${text}" in
         "🆔 Мой Telegram ID") text="/myid" ;;
-        "🔔 Уведомления") text="/help" ;;
+        "🔔 Уведомления") [[ "$is_admin" -eq 1 ]] && text="/notifications" || text="/help" ;;
         "📱 Приложения") text="/apps" ;;
         "💬 Поддержка") text="/support" ;;
         "📊 Статус") text="/status" ;;
+        "🖥 Серверы") text="/servers" ;;
+        "🌐 Все серверы") text="/network" ;;
+        "🏠 Главное меню") text="/menu" ;;
+        "🧪 Протоколы") text="/protocols" ;;
+        "🔐 Сертификаты") text="/cert" ;;
+        "📅 Сроки подписок") text="/expiring" ;;
+        "🖥 "*) text="/server ${text#🖥 }"; text="${text%% · *}" ;;
         "👥 Пользователи") text="/users" ;;
         "➕ Добавить пользователя") text="/adduser" ;;
         "🗑 Удалить пользователя") text="/deluser" ;;
@@ -18860,11 +20408,23 @@ tg_handle_command() {
         "🌀 WARP") text="/warp" ;;
         "🔀 HAProxy") text="/haproxy" ;;
         "🔍 Диагностика") text="/diagnose" ;;
+        "Инциденты") text="/incidents" ;;
+        "Мониторинг") text="/monitor" ;;
         "📄 Логи") text="/logs" ;;
         "♻️ Restart Caddy") text="/restart" ;;
         "🛠 Автофикс") text="/diagfix" ;;
         "💛 Донат") text="/donate" ;;
         "❓ Помощь") text="/menu" ;;
+        "⬅️ /"*|"➡️ /"*|"✅ /confirm "*) text="${text#* }" ;;
+        "❌ Отмена") text="/cancel" ;;
+        "👤 "*) text="/user ${text#👤 }" ;;
+        "📱 QR: "*) text="/qr ${text#📱 QR: }" ;;
+        "🔗 Подписка: "*) text="/sub ${text#🔗 Подписка: }" ;;
+        "🗑 Удалить: "*) text="/deluser ${text#🗑 Удалить: }" ;;
+        "⏳ Скоро истекают") text="/expiring soon" ;;
+        "⌛ Истекли") text="/expiring expired" ;;
+        "🔕 Без Telegram") text="/expiring no_tg" ;;
+        "📅 Все сроки") text="/expiring" ;;
     esac
 
     # Лимит длины команды — защита от flood/injection, но новости могут быть длиннее обычных команд.
@@ -18874,11 +20434,13 @@ tg_handle_command() {
     fi
 
     # Парсим команду и аргументы
-    local cmd args
-    cmd=$(echo "${text}" | awk '{print $1}' | tr '[:upper:]' '[:lower:]' | tr -d '\r\n[:cntrl:]')
+    local cmd args command_word
+    command_word="${text%%[[:space:]]*}"
+    cmd=$(printf '%s' "$command_word" | tr '[:upper:]' '[:lower:]' | tr -d '[:cntrl:]')
+    cmd="${cmd%%@*}"
     # args = всё после первого пробела
-    if [[ "${text}" == *" "* ]]; then
-        args="${text#* }"
+    if [[ "$text" != "$command_word" ]]; then
+        args="${text#"$command_word"}"
         # Trim leading/trailing whitespace
         args="${args#"${args%%[![:space:]]*}"}"
         args="${args%"${args##*[![:space:]]}"}"
@@ -18886,7 +20448,10 @@ tg_handle_command() {
         args=""
     fi
     # Убираем потенциально опасные символы из args (но оставляем безопасные)
-    args=$(echo "${args}" | tr -d '`$();<>&|\\')
+    case "$cmd" in
+        /news|/broadcast|/news_test|/newstest|/broadcast_test|/broadcasttest) ;;
+        *) args=$(printf '%s' "$args" | tr -d '`$();<>&|\\') ;;
+    esac
 
     if [[ "$is_admin" -ne 1 ]]; then
         case "${cmd}" in
@@ -18899,10 +20464,7 @@ tg_handle_command() {
 Отправь его Ивану Юрьевичу вместе с именем профиля, чтобы подключить уведомления." "user"
                 ;;
             /apps)
-                tg_reply_menu "${chat_id}" "📱 <b>Приложения Yurich Connect</b>
-
-Android: ${ANDROID_APP_RELEASES_URL}
-Windows: ${WINDOWS_APP_RELEASES_URL}" "user"
+                tg_reply_menu "${chat_id}" "$(sales_apps_text)" "user"
                 ;;
             /support)
                 tg_reply_menu "${chat_id}" "💬 <b>Поддержка</b>
@@ -18922,37 +20484,70 @@ Windows: ${WINDOWS_APP_RELEASES_URL}" "user"
         return
     fi
 
+    case "$cmd" in
+        /restart|/diagfix|/update|/privatepage)
+            if [[ "$args" != 'confirm local' ]]; then
+                tg_reply "$chat_id" "⚠️ Это изменит <b>основной сервер</b> и может прервать подключения.
+После проверки резервной копии подтверди командой <code>${cmd} confirm local</code>.
+Выбранная нода не переключает эти операции на удалённый сервер."
+                return
+            fi
+            ;;
+        /addadmin|/deladmin)
+            if [[ "$from_id" != "${TG_CHAT_ID:-}" ]]; then
+                tg_reply "$chat_id" '❌ Состав администраторов меняет только владелец бота.'
+                return
+            fi
+            ;;
+    esac
+
     case "${cmd}" in
+
+        /incidents)
+            tg_incidents_page "$chat_id" "$args"
+            ;;
+        /incack)
+            tg_incident_ack "$chat_id" "$from_id" "$args"
+            ;;
+        /monitor)
+            tg_monitor_show "$chat_id"
+            ;;
 
         /start|/help|/menu)
             tg_reply_menu "${chat_id}" "🛡 <b>Yurich Panel v${VERSION}</b>
-🖥 Сервер: <code>$(hostname)</code>
+🖥 Основной сервер: <code>$(html_escape_text "$(hostname)")</code>
 
 Русское меню включено. Кнопки ниже запускают основные действия, а команды руками тоже работают.
 
 <b>Доступные команды:</b>
 
 📊 <b>Информация</b>
-/status — статус сервера и сертификата
-/stats — статистика трафика и ресурсов
+/servers — выбрать ноду из актуального списка серверов
+/network — вернуться к проверке всех серверов
+/status [нода] — службы, ресурсы и сертификаты
+/protocols [нода] — протоколы и опубликованные relay-маршруты
+/stats — ресурсы и пользователи основного сервера
 /haproxy — HAProxy SNI mux, маршруты Naive/Reality и SNI-лог
-/diagnose — полная диагностика системы
-/logs — последние 20 строк логов
-/users — список пользователей
-/cert — статус TLS сертификата
+/diagnose [нода] — серверные проверки, TLS/SNI, padding, DNS и ресурсы
+/logs [нода] — последние логи без ссылок и секретов
+/users [страница] [поиск] — список пользователей
+/cert [нода] — сертификат выбранного сервера
 
 👥 <b>Пользователи</b>
 /adduser логин [1-12 мес] — создать безопасный пароль, QR и подписку
-/deluser логин — удалить пользователя + страницу
+/deluser логин — запросить удаление с подтверждением
 /qr логин — QR код для подключения
 /sub логин — страница подписки пользователя
 /subreset логин — перевыпустить ссылку подписки
-/expiring — сроки подписок и привязки Telegram
+/expiring [soon|expired|no_tg] [страница] [поиск] — сроки
+/notifications — привязки Telegram и уведомления
 /bindtg логин telegram_id — включить напоминания
 /notifyrun — проверить и отправить напоминания
 /testnotify логин — тест напоминания
 /news_test текст — тест новости себе
-/news текст — рассылка новости всем с Telegram ID
+/news текст — предпросмотр рассылки (до 3000 UTF-16 символов)
+/confirm код — одноразовое подтверждение, действует 5 минут
+/cancel — отменить ожидающее действие
 /devices — отчёт по лимиту устройств
 /lockuser логин — отключить пользователя
 /unlockuser логин — вернуть пользователя
@@ -18962,14 +20557,14 @@ Windows: ${WINDOWS_APP_RELEASES_URL}" "user"
 /xrayadduser логин — создать Xray пользователя + подписка
 /xraystatus — статус Xray
 /hysteria — статус Hysteria 2
-/warp — статус и тест WARP proxy
+/warp [local] — статус и тест WARP только основного сервера
 
 ⚙️ <b>Управление</b>
-/restart — перезапустить Caddy
-/update — обновить Caddy
+/restart confirm local — перезапустить Caddy основного сервера
+/update confirm local — обновить Caddy основного сервера
 /selfupdate — обновить скрипт
-/diagfix — автофикс диагностики
-/privatepage — личная фейковая страница
+/diagfix confirm local — автофикс основного сервера
+/privatepage confirm local — личная фейковая страница основного сервера
 /admins — список администраторов
 /addadmin ID — добавить администратора
 /deladmin ID — удалить администратора
@@ -18977,31 +20572,37 @@ Windows: ${WINDOWS_APP_RELEASES_URL}" "user"
 💛 /donate — поддержать проект"
             ;;
 
-        /status)
-            local caddy_status="🔴 Остановлен"
-            systemctl is-active caddy &>/dev/null && caddy_status="🟢 Работает"
+        /apps)
+            tg_reply_menu "${chat_id}" "$(sales_apps_text)" "admin"
+            ;;
 
-            local cert_info=""
-            if [[ -n "${DOMAIN:-}" ]]; then
-                local not_after expire_ts now_ts cert_days
-                not_after=$(echo | timeout 5 openssl s_client                     -connect "${DOMAIN}:443" -servername "${DOMAIN}" 2>/dev/null                     | openssl x509 -noout -dates 2>/dev/null                     | grep "notAfter" | cut -d= -f2 || echo "")
-                if [[ -n "${not_after}" ]]; then
-                    expire_ts=$(date -d "${not_after}" +%s 2>/dev/null || echo 0)
-                    now_ts=$(date +%s)
-                    cert_days=$(( (expire_ts - now_ts) / 86400 ))
-                    cert_info="
-🔐 Сертификат: ${cert_days} дней"
-                fi
+        /servers)
+            tg_reply_menu "$chat_id" "🖥 <b>Серверы Yurich Connect</b>
+Выбран: <code>$(html_escape_text "$(tg_fleet_node_label "$(tg_fleet_selection "$chat_id")")")</code>.
+Пользователи и подписки управляются на основном сервере." fleet
+            ;;
+
+        /server)
+            if [[ -z "$args" ]] || ! tg_fleet_select "$chat_id" "$args"; then
+                tg_reply "$chat_id" '❌ Выбери действующую ноду через /servers.'
+                return
             fi
+            tg_reply_menu "$chat_id" "🖥 Выбран: <b>$(html_escape_text "$(tg_fleet_node_label "$args")")</b>" admin
+            tg_fleet_show "$chat_id" status "$args"
+            ;;
 
-            tg_reply "${chat_id}" "📡 <b>Статус Yurich Panel</b>
-🖥 Сервер: <code>$(hostname)</code>
-${caddy_status}
-🌐 Домен: <code>${DOMAIN:-не настроен}</code>
-👥 Пользователей: $(get_users | wc -l)
-💾 RAM: $(free -h | awk '/Mem:/{print $3"/"$2}')
-💿 Диск: $(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')
-🕐 $(date '+%Y-%m-%d %H:%M:%S')${cert_info}"
+        /network)
+            tg_fleet_select "$chat_id" all || return 1
+            tg_reply_menu "$chat_id" '🌐 <b>Все серверы</b>' admin
+            tg_fleet_show "$chat_id" status all
+            ;;
+
+        /status)
+            tg_fleet_show "$chat_id" status "$args"
+            ;;
+
+        /protocols)
+            tg_fleet_show "$chat_id" protocols "$args"
             ;;
 
         /stats)
@@ -19010,131 +20611,40 @@ ${caddy_status}
 
         /diagnose)
             tg_reply "${chat_id}" "🔍 Запускаю диагностику, подожди..."
-            local diag_result=""
-            local pass=0 warn=0 fail=0
-
-            # Caddy
-            if systemctl is-active caddy &>/dev/null; then
-                diag_result+="✅ Caddy запущен
-"
-                pass=$((pass+1))
-            else
-                diag_result+="❌ Caddy НЕ запущен
-"
-                fail=$((fail+1))
-            fi
-
-            # Padding
-            local _p
-            _p=$(strings /usr/local/bin/caddy 2>/dev/null | grep -cE "^(Padding|SetPadding|WithPadding)$" || true)
-            _p="${_p//[^0-9]/}"; _p="${_p:-0}"
-            if command -v strings &>/dev/null && [[ "${_p}" -ge 2 ]]; then
-                diag_result+="✅ Naive padding OK
-"
-                pass=$((pass+1))
-            else
-                diag_result+="⚠️ Padding не проверен
-"
-                warn=$((warn+1))
-            fi
-
-            # Caddyfile
-            if grep -qE "^:443,|^http://127\\.0\\.0\\.1:[0-9]+" "${CADDYFILE:-/etc/caddy/Caddyfile}" 2>/dev/null \
-                || { edge_routing_mode_is_haproxy && grep -q "^:${XRAY_CADDY_FALLBACK_PORT:-$XRAY_CADDY_FALLBACK_PORT_DEFAULT}," "${CADDYFILE:-/etc/caddy/Caddyfile}" 2>/dev/null; }; then
-                diag_result+="✅ Caddyfile формат OK
-"
-                pass=$((pass+1))
-            elif grep -qE "^[[:alnum:].-]+:443[[:space:]]*\\{" "${CADDYFILE:-/etc/caddy/Caddyfile}" 2>/dev/null; then
-                diag_result+="⚠️ Caddyfile domain:443 ломает Naive CONNECT
-"
-                warn=$((warn+1))
-            else
-                diag_result+="❌ Caddyfile неправильный формат
-"
-                fail=$((fail+1))
-            fi
-
-            local hosts_overrides hosts_domains
-            hosts_overrides=$(hosts_public_domain_overrides | head -5 || true)
-            if [[ -n "$hosts_overrides" ]]; then
-                hosts_domains=$(printf '%s\n' "$hosts_overrides" | format_hosts_override_domains)
-                diag_result+="⚠️ /etc/hosts: ${hosts_domains}
-"
-                warn=$((warn+1))
-            else
-                diag_result+="✅ /etc/hosts clean
-"
-                pass=$((pass+1))
-            fi
-
-            # ALPN
-            if [[ -n "${DOMAIN:-}" ]]; then
-                local alpn
-                alpn=$(echo | timeout 5 openssl s_client                     -connect "${DOMAIN}:443" -alpn h2 2>/dev/null                     | grep -a "ALPN protocol" | awk '{print $3}' || echo "")
-                if [[ "${alpn}" == "h2" ]]; then
-                    diag_result+="✅ ALPN h2 OK
-"
-                    pass=$((pass+1))
-                else
-                    diag_result+="❌ ALPN не h2
-"
-                    fail=$((fail+1))
-                fi
-            fi
-
-            # UFW
-            if ufw status 2>/dev/null | grep -q "Status: active"; then
-                diag_result+="✅ UFW активен
-"
-                pass=$((pass+1))
-            else
-                diag_result+="⚠️ UFW неактивен
-"
-                warn=$((warn+1))
-            fi
-
-            # Fail2Ban
-            if systemctl is-active fail2ban &>/dev/null; then
-                diag_result+="✅ Fail2Ban активен
-"
-                pass=$((pass+1))
-            else
-                diag_result+="⚠️ Fail2Ban не запущен
-"
-                warn=$((warn+1))
-            fi
-
-            # RAM
-            local ram_pct
-            ram_pct=$(free | awk '/Mem:/{printf "%d", $3/$2*100}')
-            if [[ ${ram_pct} -lt 90 ]]; then
-                diag_result+="✅ RAM: ${ram_pct}%
-"
-                pass=$((pass+1))
-            else
-                diag_result+="❌ RAM критически: ${ram_pct}%
-"
-                fail=$((fail+1))
-            fi
-
-            tg_reply "${chat_id}" "🔍 <b>Диагностика Yurich Panel</b>
-
-${diag_result}
-✅ Пройдено: ${pass}  ⚠️ Внимание: ${warn}  ❌ Проблемы: ${fail}"
+            tg_fleet_show "$chat_id" diagnose "$args"
             ;;
 
         /logs)
-            local log_lines
-            log_lines=$(journalctl -u caddy -n 20 --no-pager 2>/dev/null                 | tail -20 | sed 's/</\&lt;/g; s/>/\&gt;/g' || echo "Логи недоступны")
-            tg_reply "${chat_id}" "📋 <b>Логи Caddy (последние 20):</b>
-<pre>${log_lines}</pre>"
+            tg_fleet_show "$chat_id" logs "$args"
             ;;
 
         /users)
-            local user_list
-            user_list=$(get_users | awk -F: '{print "• <code>"$1"</code>"}' | head -20 || echo "Нет пользователей")
-            tg_reply "${chat_id}" "👥 <b>Пользователи ($(get_users | wc -l)):</b>
-${user_list}"
+            tg_admin_page "$chat_id" users "$args"
+            ;;
+
+        /user)
+            tg_admin_page "$chat_id" detail "$args"
+            ;;
+
+        /notifications)
+            tg_admin_page "$chat_id" notifications "$args"
+            ;;
+
+        /qrpick|/subpick|/delpick)
+            local picker_view=qr
+            [[ "$cmd" == /subpick ]] && picker_view=sub
+            [[ "$cmd" == /delpick ]] && picker_view=delete
+            tg_admin_page "$chat_id" "$picker_view" "$args"
+            ;;
+
+        /confirm)
+            tg_admin_confirm_action "$chat_id" "$args"
+            ;;
+
+        /cancel)
+            local cancel_payload
+            cancel_payload=$(tg_admin_ui cancel --state-dir "$CONFIG_DIR/telegram-state" --chat "$chat_id")
+            tg_admin_send "$chat_id" "$cancel_payload"
             ;;
 
         /adduser)
@@ -19250,10 +20760,12 @@ ${xray_note}
 Raw links:
 <code>${sub_links:-не создано}</code>"
                 if ! tg_send_naive_qr "${chat_id}" "${new_user}" "${uri}"; then
-                    tg_reply "${chat_id}" "⚠️ QR не удалось создать автоматически. URI выше рабочий."
+                    tg_reply "${chat_id}" "⚠️ Не удалось создать или отправить QR. Используй URI выше."
                 fi
                 if [[ "$hy_ok" -eq 1 && -n "$hy_uri" ]]; then
-                    tg_send_hysteria_qr "${chat_id}" "${new_user}" "$hy_uri" || true
+                    if ! tg_send_hysteria_qr "${chat_id}" "${new_user}" "$hy_uri"; then
+                        tg_reply "${chat_id}" "⚠️ Не удалось создать или отправить Hysteria 2 QR. Используй URI выше."
+                    fi
                 fi
                 if [[ "$xray_ok" -eq 1 ]]; then
                     local x_links
@@ -19272,36 +20784,21 @@ Raw links:
             ;;
 
         /deluser)
-            local del_user="${args%% *}"
-            if [[ -z "${del_user}" ]]; then
-                tg_reply "${chat_id}" "❌ Использование: /deluser логин"
-                return
+            if [[ -z "$args" ]]; then
+                tg_admin_page "$chat_id" delete "$args"
+            else
+                tg_admin_stage "$chat_id" delete "$args"
             fi
-
-            if ! is_valid_proxy_user "${del_user}" || ! subscription_user_exists "${del_user}"; then
-                tg_reply "${chat_id}" "❌ Пользователь <code>${del_user}</code> не найден"
-                return
-            fi
-
-            if ! delete_subscription_user_everywhere "${del_user}"; then
-                tg_reply "${chat_id}" "❌ Не удалось полностью удалить <code>${del_user}</code>. Проверь логи панели."
-                return
-            fi
-
-            tg_reply "${chat_id}" "🗑 Пользователь <code>${del_user}</code> полностью удалён
-📄 Подписка, token и публичные ссылки тоже удалены"
             ;;
 
         /qr)
-            local qr_user="${args%% *}"
-            # Если args содержит ":" — значит это конкретный логин с двоеточием (не должно быть)
-            if [[ -z "${qr_user}" ]]; then
-                # QR для первого пользователя
-                qr_user=$(get_users | head -1 | cut -d: -f1)
+            if [[ -z "$args" ]]; then
+                tg_admin_page "$chat_id" qr "$args"
+                return
             fi
-
-            if [[ -z "${qr_user}" ]]; then
-                tg_reply "${chat_id}" "❌ Нет пользователей. Добавь: /adduser логин [месяцы]"
+            local qr_user="${args%% *}"
+            if ! is_valid_proxy_user "$qr_user"; then
+                tg_reply "$chat_id" 'Некорректный логин. Выбери пользователя через /qr.'
                 return
             fi
 
@@ -19331,8 +20828,10 @@ Raw links:
 
             if command -v qrencode &>/dev/null; then
                 local qr_file="/tmp/naiveproxy_qr_${qr_user}_$$.png"
-                if qrencode -o "${qr_file}" -s 8 "${uri}" 2>/dev/null && [[ -s "${qr_file}" ]]; then
-                    tg_send_photo "${chat_id}" "${qr_file}" "📱 Yurich Proxy QR для ${qr_user}@${DOMAIN}"
+                if printf '%s' "$uri" | qrencode -o "${qr_file}" -s 8 2>/dev/null && [[ -s "${qr_file}" ]]; then
+                    if ! tg_send_photo "${chat_id}" "${qr_file}" "📱 Yurich Proxy QR для ${qr_user}@${DOMAIN}"; then
+                        tg_reply "${chat_id}" "⚠️ QR создан, но Telegram не подтвердил отправку. Используй URI ниже."
+                    fi
                     # Дополнительно отправляем URI текстом
                     tg_reply "${chat_id}" "🔗 <b>Yurich Proxy:</b>
 <code>${branded_uri}</code>
@@ -19356,13 +20855,13 @@ Yurich Proxy: <code>${branded_uri}</code>
             ;;
 
         /sub)
-            local sub_user="${args%% *}"
-            if [[ -z "${sub_user}" ]]; then
-                sub_user=$(get_users | head -1 | cut -d: -f1)
-                [[ -z "$sub_user" && -s "$XRAY_USERS_FILE" ]] && sub_user=$(head -1 "$XRAY_USERS_FILE" | cut -d: -f1)
+            if [[ -z "$args" ]]; then
+                tg_admin_page "$chat_id" sub "$args"
+                return
             fi
-            if [[ -z "$sub_user" ]]; then
-                tg_reply "${chat_id}" "❌ Нет пользователей. Создай Naive или Xray пользователя."
+            local sub_user="${args%% *}"
+            if ! is_valid_proxy_user "$sub_user"; then
+                tg_reply "$chat_id" 'Некорректный логин. Выбери пользователя через /sub.'
                 return
             fi
             local sub_out sub_rc
@@ -19396,11 +20895,7 @@ Raw links:
             ;;
 
         /expiring|/expires|/notifylist)
-            local exp_tmp
-            exp_tmp=$(mktemp)
-            cmd_notify_expiry_list > "$exp_tmp" 2>&1
-            tg_reply_file_tail "${chat_id}" "📅 <b>Сроки подписок</b>" "$exp_tmp" 120
-            rm -f "$exp_tmp"
+            tg_admin_page "$chat_id" expiry "$args"
             ;;
 
         /bindtg|/tgbind)
@@ -19443,7 +20938,7 @@ Raw links:
         /notifyrun|/notifynow)
             local notify_tmp notify_rc
             notify_tmp=$(mktemp)
-            cmd_notify_expiry_run > "$notify_tmp" 2>&1
+            cmd_notify_expiry_send > "$notify_tmp" 2>&1
             notify_rc=$?
             if [[ "$notify_rc" -eq 0 ]]; then
                 tg_reply_file_tail "${chat_id}" "🔔 <b>Проверка уведомлений выполнена</b>" "$notify_tmp" 40
@@ -19492,26 +20987,17 @@ Raw links:
             ;;
 
         /news|/broadcast)
-            local news_tmp news_rc
             if [[ -z "$args" ]]; then
                 tg_reply "${chat_id}" "📰 <b>Рассылка новостей Yurich Connect</b>
 
 Сначала проверь внешний вид:
 <code>/news_test текст новости</code>
 
-Потом отправь всем пользователям с привязанным Telegram ID:
+Потом создай предпросмотр и подтверди отправку:
 <code>/news текст новости</code>"
                 return
             fi
-            news_tmp=$(mktemp)
-            cmd_notify_news_broadcast "$args" > "$news_tmp" 2>&1
-            news_rc=$?
-            if [[ "$news_rc" -eq 0 ]]; then
-                tg_reply_file_tail "${chat_id}" "✅ <b>Новость разослана</b>" "$news_tmp" 40
-            else
-                tg_reply_file_tail "${chat_id}" "⚠️ <b>Рассылка завершилась с проблемами</b>" "$news_tmp" 40
-            fi
-            rm -f "$news_tmp"
+            tg_admin_stage "$chat_id" news "$args"
             ;;
 
         /devices)
@@ -19602,37 +21088,33 @@ Raw links:
             ;;
 
         /xraystatus)
-            local xs_tmp
-            xs_tmp=$(mktemp)
-            cmd_xray_status > "$xs_tmp" 2>&1
-            tg_reply_file_tail "${chat_id}" "🧬 <b>Xray статус</b>" "$xs_tmp" 80
-            rm -f "$xs_tmp"
+            tg_fleet_show "$chat_id" protocols "$args"
             ;;
 
         /hysteria|/hy2|/hysteriastatus|/hy2status)
-            local hy_tmp
-            hy_tmp=$(mktemp)
-            cmd_hysteria_status > "$hy_tmp" 2>&1
-            tg_reply_file_tail "${chat_id}" "⚡ <b>Hysteria 2 статус</b>" "$hy_tmp" 80
-            rm -f "$hy_tmp"
+            tg_fleet_show "$chat_id" protocols "$args"
             ;;
 
         /warp|/warpstatus)
+            local warp_node="${args:-$(tg_fleet_selection "$chat_id")}"
+            if [[ "$warp_node" != local ]]; then
+                tg_reply "$chat_id" "⚠️ WARP проверяется только на основном сервере <code>$(html_escape_text "$(hostname)")</code>.
+Выбрано: <code>$(html_escape_text "$(tg_fleet_node_label "$warp_node")")</code>.
+Проверка не выполнялась. Для основного сервера: <code>/warp local</code>."
+                return
+            fi
             local warp_tmp
-            warp_tmp=$(mktemp)
+            warp_tmp=$(mktemp) || return 1
             cmd_warp_status > "$warp_tmp" 2>&1
             echo >> "$warp_tmp"
             cmd_warp_test >> "$warp_tmp" 2>&1 || true
-            tg_reply_file_tail "${chat_id}" "🌀 <b>WARP proxy статус</b>" "$warp_tmp" 100
+            tg_reply_file_tail "${chat_id}" "🌀 <b>WARP proxy: основной сервер</b>
+🖥 <code>$(html_escape_text "$(hostname)")</code>" "$warp_tmp" 100
             rm -f "$warp_tmp"
             ;;
 
         /haproxy|/sni|/sni_mux)
-            local hap_tmp
-            hap_tmp=$(mktemp)
-            cmd_haproxy_status > "$hap_tmp" 2>&1
-            tg_reply_file_tail "${chat_id}" "🔀 <b>HAProxy SNI mux</b>" "$hap_tmp" 120
-            rm -f "$hap_tmp"
+            tg_fleet_show "$chat_id" protocols "$args"
             ;;
 
         /diagfix)
@@ -19680,29 +21162,7 @@ Raw links:
             ;;
 
         /cert)
-            if [[ -z "${DOMAIN:-}" ]]; then
-                tg_reply "${chat_id}" "❌ Домен не настроен"
-                return
-            fi
-            local cert_out
-            cert_out=$(echo | timeout 5 openssl s_client                 -connect "${DOMAIN}:443" -servername "${DOMAIN}" 2>/dev/null                 | openssl x509 -noout -dates -issuer 2>/dev/null || echo "")
-            if [[ -z "${cert_out}" ]]; then
-                tg_reply "${chat_id}" "❌ Не удалось получить сертификат для ${DOMAIN}"
-                return
-            fi
-            local not_after issuer cert_days
-            not_after=$(echo "${cert_out}" | grep "notAfter" | cut -d= -f2)
-            issuer=$(echo "${cert_out}" | grep "issuer" | grep -oP 'O=\K[^,]+' || echo "н/д")
-            expire_ts=$(date -d "${not_after}" +%s 2>/dev/null || echo 0)
-            cert_days=$(( ($(date +%s) - expire_ts) / -86400 ))
-            local cert_icon="🟢"
-            [[ ${cert_days} -lt 30 ]] && cert_icon="🟡"
-            [[ ${cert_days} -lt 7 ]] && cert_icon="🔴"
-            tg_reply "${chat_id}" "${cert_icon} <b>TLS Сертификат</b>
-🌐 Домен: <code>${DOMAIN}</code>
-📅 Истекает: ${not_after}
-⏳ Осталось: <b>${cert_days} дней</b>
-🏢 Выдан: ${issuer}"
+            tg_fleet_show "$chat_id" cert "$args"
             ;;
 
         /restart)
@@ -19765,6 +21225,10 @@ ${admin_list}"
                 tg_reply "${chat_id}" "❌ Использование: /addadmin 123456789"
                 return
             fi
+            if tg_is_admin "$new_admin"; then
+                tg_reply "$chat_id" 'Этот администратор уже добавлен.'
+                return
+            fi
             if [[ -z "${TG_ADMINS}" ]]; then
                 TG_ADMINS="${new_admin}"
             else
@@ -19780,6 +21244,10 @@ ${admin_list}"
                 tg_reply "${chat_id}" "❌ Использование: /deladmin 123456789"
                 return
             fi
+            if [[ "$del_admin" == "${TG_CHAT_ID:-}" ]]; then
+                tg_reply "$chat_id" '❌ Владельца нельзя удалить этой командой.'
+                return
+            fi
             TG_ADMINS=$(echo "${TG_ADMINS}" | tr ',' '
 '                 | grep -Fvx "${del_admin}" | tr '
 ' ',' | sed 's/,$//')
@@ -19791,78 +21259,166 @@ ${admin_list}"
             tg_reply_menu "${chat_id}" "❓ Неизвестная команда. Используй /help или кнопки меню."
             ;;
     esac
-}
+)
 
 # Основной цикл бота (long polling)
 cmd_bot() {
-    [[ -z "${TG_TOKEN:-}" ]] && err "Telegram не настроен. Запусти: sudo bash yurich-panel.sh" && return 1
-
+    [[ -n "${TG_TOKEN:-}" ]] || { err "Telegram не настроен"; return 1; }
     tg_apply_bot_menu_silent
-    info "Запускаю Telegram бот..."
-    info "Бот работает. Нажми Menu или напиши /menu в Telegram."
-    info "Для остановки: Ctrl+C"
-    echo
+    telegram_poll_loop admin
+}
 
-    local offset=0
+install_admin_monitor_service() {
+    case "${TG_MONITOR_ENABLED:-auto}" in
+        1) ;;
+        0) return 0 ;;
+        auto) [[ "${DOMAIN:-}" == poland.* ]] || return 0 ;;
+        *) err "TG_MONITOR_ENABLED должен быть auto, 0 или 1"; return 1 ;;
+    esac
+    tg_monitor_local_node >/dev/null || { err "Некорректный TG_MONITOR_LOCAL_NODE"; return 1; }
+    local helper="/usr/local/lib/yurich-panel/admin-monitor.py"
+    [[ -f "$helper" && ! -L "$helper" ]] || return 1
+    cat > /usr/local/lib/yurich-panel/admin-monitor-run.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+source /usr/local/bin/yurich-panel.sh
+load_config || exit 1
+exec /usr/bin/python3 -B /usr/local/lib/yurich-panel/admin-monitor.py run \
+    --state-dir "${TG_INCIDENTS_STATE_DIR:-/var/lib/yurich-panel/incidents}"
+EOF
+    chmod 700 /usr/local/lib/yurich-panel/admin-monitor-run.sh || return 1
+    cat > /etc/systemd/system/yurich-admin-monitor.service <<'EOF'
+[Unit]
+Description=Yurich read-only fleet incident monitor
+After=network-online.target naiveproxy-bot.service
+Wants=network-online.target
 
-    while true; do
-        # Получаем обновления
-        local response
-        response=$(tg_api "getUpdates?offset=${offset}&timeout=30&allowed_updates=%5B%22message%22%5D" -s --max-time 35 \
-            2>/dev/null || echo "")
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/bin/bash /usr/local/lib/yurich-panel/admin-monitor-run.sh
+TimeoutStartSec=240
+TimeoutStopSec=15
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+EOF
+    cat > /etc/systemd/system/yurich-admin-monitor.timer <<'EOF'
+[Unit]
+Description=Yurich read-only fleet monitoring schedule
 
-        if [[ -z "${response}" ]]; then
-            sleep 5
-            continue
-        fi
+[Timer]
+OnBootSec=90
+OnUnitInactiveSec=3min
+AccuracySec=15s
+RandomizedDelaySec=15s
+Unit=yurich-admin-monitor.service
 
-        # Парсим обновления через python3
-        local updates
-        updates=$(echo "${response}" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    if not data.get('ok'): sys.exit(0)
-    for u in data.get('result', []):
-        uid = u.get('update_id', 0)
-        msg = u.get('message', {})
-        chat = msg.get('chat', {})
-        chat_id = chat.get('id', '')
-        chat_type = chat.get('type', '')
-        from_id = msg.get('from', {}).get('id', '')
-        text = str(msg.get('text') or '')
-        if text:
-            text = text.replace('|', ' ').replace('\\r', ' ').replace('\\n', ' ')
-            print(f'{uid}|{chat_id}|{chat_type}|{from_id}|{text}')
-except: pass
-" 2>/dev/null || echo "")
-
-        while IFS='|' read -r update_id chat_id chat_type from_id text; do
-            [[ -z "${update_id}" ]] && continue
-            # Защита от переполнения
-            if is_canonical_uint_in_range "${update_id}" 0 2147483646; then
-                offset=$(( update_id + 1 ))
-            fi
-            [[ "$chat_type" == "private" ]] || continue
-            tg_handle_command "${chat_id}" "${from_id}" "${text}"
-        done <<< "${updates}"
-
-        sleep 1
-    done
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload || return 1
+    systemctl enable --now yurich-admin-monitor.timer || return 1
 }
 
 # Запуск бота как systemd сервиса
+admin_modules_manifest() {
+    cat <<'MODULE_HASHES'
+6bfb442bdbcbe94d7b7f32b49ef2947cad9f46ccafe8e2eae2c0065725f3e044  admin-bot-health.py
+8ac71b74cbad72047e9fd9e0f791306b080ccd2476db75fdef677b12a7d1e9a1  admin-bot-menu.py
+8f19e343c2815abbabab672b8e2c74beabb1b4178e2e5a213f9dbd118261b4e3  admin-incidents.py
+74d3b595b31d8670a35ea06c99707d2d4d93ae36b260fa76d9316168cd93e3e4  admin-monitor.py
+MODULE_HASHES
+}
+
+install_admin_bot_modules() (
+    local directory="${ADMIN_MODULES_DIR:-/usr/local/lib/yurich-panel}"
+    local source_dir="$(dirname "${BASH_SOURCE[0]}")/ops" staging="" expected module completed=0
+    local base="https://raw.githubusercontent.com/ivan-yurich/naiveproxy/v${VERSION}/ops"
+    umask 077
+    trap '[[ "$completed" != 1 || -z "$staging" ]] || rm -rf -- "$staging"' EXIT
+    [[ "$directory" == /* && ! -L "$directory" && ! -L "$(dirname "$directory")" ]] || return 1
+    if [[ ! -e "$directory" ]]; then
+        install -d -m 755 "$directory" || return 1
+    fi
+    [[ -d "$directory" ]] || return 1
+    [[ "$(stat -c '%u' "$directory")" == 0 ]] || return 1
+    local mode
+    mode=$(stat -c '%a' "$directory") || return 1
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 0022) == 0 )) || return 1
+    staging=$(mktemp -d "$directory/.release-modules.XXXXXXXX") || return 1
+    admin_modules_manifest > "$staging/manifest"
+    while read -r expected module; do
+        case "$module" in admin-bot-health.py|admin-bot-menu.py|admin-incidents.py|admin-monitor.py) ;; *) return 1 ;; esac
+        [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || return 1
+        if [[ -f "$source_dir/$module" && ! -L "$source_dir/$module" ]] \
+            && [[ "$(sha256sum "$source_dir/$module" | awk '{print $1}')" == "$expected" ]]; then
+            cp -- "$source_dir/$module" "$staging/$module" || return 1
+        elif [[ -f "$directory/$module" && ! -L "$directory/$module" ]] \
+            && [[ "$(sha256sum "$directory/$module" | awk '{print $1}')" == "$expected" ]]; then
+            cp -- "$directory/$module" "$staging/$module" || return 1
+        else
+            curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 30 \
+                --max-filesize 524288 "$base/$module" -o "$staging/$module" || return 1
+        fi
+        printf '%s  %s\n' "$expected" "$staging/$module" | sha256sum -c - >/dev/null || return 1
+    done < "$staging/manifest"
+    python3 - "$staging" "$directory" <<'PY'
+import ast, fcntl, hashlib, os, shutil, stat, sys
+from pathlib import Path
+stage, target = map(Path, sys.argv[1:])
+names = ('admin-bot-health.py','admin-bot-menu.py','admin-incidents.py','admin-monitor.py')
+assert os.geteuid() == 0
+for path in (target.parent, target):
+    info = path.lstat()
+    assert stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022
+lock_path = target/'.module-install.lock'
+fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, 'a') as lock:
+    info = os.fstat(lock.fileno())
+    assert stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o077
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    manifest = dict(line.split()[::-1] for line in (stage/'manifest').read_text().splitlines())
+    assert set(manifest) == set(names)
+    previous, changed = {}, []
+    for name in names:
+        candidate, current = stage/name, target/name
+        data = candidate.read_bytes()
+        assert hashlib.sha256(data).hexdigest() == manifest[name]
+        ast.parse(data, filename=name)
+        if current.exists() or current.is_symlink():
+            info = current.lstat()
+            assert stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022
+            backup = stage/(name+'.before')
+            shutil.copyfile(current, backup)
+            os.chmod(backup, stat.S_IMODE(info.st_mode))
+            previous[name] = backup
+        else:
+            previous[name] = None
+        os.chmod(candidate, 0o700)
+    try:
+        for name in names:
+            os.replace(stage/name, target/name)
+            changed.append(name)
+    except BaseException:
+        for name in reversed(changed):
+            if previous[name] is None:
+                os.replace(target/name, stage/(name+'.retired'))
+            else:
+                os.replace(previous[name], target/name)
+        raise
+PY
+    local rc=$?
+    [[ "$rc" == 0 ]] || return "$rc"
+    completed=1
+)
+
 install_bot_service() {
     local script_path="${SCRIPT_PATH:-/usr/local/bin/yurich-panel.sh}"
-    local running_script
+    install_admin_bot_modules || { err "Не удалось установить согласованный комплект модулей бота"; return 1; }
 
-    running_script=$(realpath "$0" 2>/dev/null || echo "")
-    mkdir -p "$(dirname "$script_path")"
-    if [[ -n "$running_script" && -f "$running_script" && "$running_script" != /dev/fd/* && "$running_script" != /proc/* ]]; then
-        if bash -n "$running_script" 2>/dev/null; then
-            install -m 755 "$running_script" "$script_path" 2>/dev/null || true
-        fi
-    fi
+    install_script_entrypoints || return 1
 
     if [[ ! -f "$script_path" ]]; then
         err "Не найден ${script_path}. Сначала обнови скрипт: sudo bash yurich-panel.sh self-update"
@@ -19902,7 +21458,8 @@ EOF
     systemctl daemon-reload
     systemctl enable naiveproxy-bot --quiet
     tg_apply_bot_menu || warn "Команды Telegram Menu можно применить позже: sudo bash yurich-panel.sh bot-menu"
-    systemctl restart naiveproxy-bot
+    systemctl restart naiveproxy-bot || return 1
+    install_admin_monitor_service || return 1
     ok "Telegram бот установлен как системный сервис"
     ok "Статус: systemctl status naiveproxy-bot"
 }
@@ -19934,14 +21491,15 @@ tg_send_stats_to() {
         fi
     fi
 
-    tg_reply "${target_chat}" "📊 <b>Статистика Yurich Panel</b>
+    tg_reply "${target_chat}" "📊 <b>Статистика основного сервера</b>
+Ресурсы и реестр пользователей основного сервера, не health выбранной ноды.
 
-🌐 Домен: <code>${DOMAIN:-н/д}</code>
+🌐 Домен: <code>$(html_escape_text "${DOMAIN:-н/д}")</code>
 📡 Статус: ${caddy_status}
 📦 Caddy: <code>${caddy_ver}</code>
 👥 Пользователей: $(get_users | wc -l)
 
-🖥 Сервер: <code>$(hostname)</code>
+🖥 Основной сервер: <code>$(html_escape_text "$(hostname)")</code>
 💾 RAM: $(free -h | awk '/Mem:/{print $3"/"$2}')
 💿 Диск: $(df -h / | awk 'NR==2{print $3"/"$2" ("$5")"}')
 ⚡ CPU: $(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | tr -d ',')
@@ -21532,7 +23090,13 @@ cmd_reload() {
 }
 
 # ─── ОБНОВЛЕНИЕ ──────────────────────────────────────────────
-cmd_update() {
+cmd_update() (
+    local update_lock_fd lock_dir="${CONFIG_DIR}/locks"
+    umask 077
+    install -d -m 700 "$lock_dir" || return 1
+    [[ ! -L "$lock_dir/caddy-update.lock" ]] || return 1
+    exec {update_lock_fd}>"$lock_dir/caddy-update.lock" || return 1
+    flock -n "$update_lock_fd" || { warn "Обновление Caddy уже выполняется"; return 75; }
     hr
     echo -e "${BOLD}  Обновление Caddy${RESET}"
     hr
@@ -21548,7 +23112,7 @@ cmd_update() {
     local tmp_caddy_dir tmp_caddy backup_bin="" staging_bin="" restore_stage=""
     tmp_caddy_dir=$(mktemp -d /tmp/naiveproxy_caddy_XXXXXX)
     tmp_caddy="${tmp_caddy_dir}/caddy"
-    trap 'rm -rf "${tmp_caddy_dir:-}" 2>/dev/null; rm -f "${backup_bin:-}" "${staging_bin:-}" "${restore_stage:-}" 2>/dev/null; trap - RETURN' RETURN
+    trap 'rm -rf "${tmp_caddy_dir:-}" 2>/dev/null; rm -f "${backup_bin:-}" "${staging_bin:-}" "${restore_stage:-}" 2>/dev/null' EXIT
 
     build_caddy "$tmp_caddy" || return 1
     if ! "$tmp_caddy" validate --config "$CADDYFILE" >/dev/null 2>&1; then
@@ -21601,7 +23165,7 @@ cmd_update() {
     backup_bin=""
     ok "Обновлено: $old_ver → $new_ver"
     load_config; tg_alert_updated "$old_ver" "$new_ver"
-}
+)
 
 # ─── УДАЛЕНИЕ ────────────────────────────────────────────────
 cmd_remove() {
@@ -21911,6 +23475,7 @@ main() {
             notify-unbind-tg|unbind-tg) cmd_notify_unbind_tg "${2:-}" ;;
             notify-expiry-list|notify-list|expiring) cmd_notify_expiry_list ;;
             notify-expiry-run|notify-run) cmd_notify_expiry_run ;;
+            notify-expiry-send) cmd_notify_expiry_send ;;
             expiry-enforce|notify-expiry-enforce) cmd_enforce_expired_users ;;
             notify-expiry-test|notify-test|test-notify) cmd_notify_expiry_test "${2:-}" ;;
             notify-news-test|news-test|broadcast-test) shift; cmd_notify_news_test "$*" ;;
@@ -21963,8 +23528,11 @@ main() {
             nodes-test|node-test) cmd_nodes_test "${2:-all}" ;;
             nodes-deploy|node-deploy) cmd_nodes_deploy_script "${2:-}" ;;
             nodes-sync|node-sync) cmd_nodes_sync_users "${2:-all}" ;;
+            nodes-relay-sync) load_config; cmd_nodes_relay_sync_users ;;
+            nodes-relay-maintain) cmd_nodes_relay_maintain ;;
             nodes-subscriptions|nodes-rebuild-subscriptions) cmd_nodes_rebuild_subscriptions ;;
             node-subscription-export) cmd_node_subscription_export "${2:-}" ;;
+            node-relay-export) cmd_node_relay_source_export "${2:-}" "${3:-}" ;;
             nodes-remove|node-remove) cmd_nodes_remove "${2:-}" ;;
             fail2ban|f2b|security) setup_fail2ban "$(current_ssh_port)" ;;
             language|lang) cmd_language ;;

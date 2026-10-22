@@ -1,0 +1,29 @@
+name: Release Checks
+
+on:
+  push:
+    branches: [main, 'release/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Shell syntax and checksums
+        run: |
+          bash -n yurich-panel.sh
+          bash -n naiveproxy.sh
+          sha256sum -c yurich-panel.sh.sha256 naiveproxy.sh.sha256
+      - name: Package and registry regressions
+        run: python3 -I -B ops/test-public-release.py
+      - name: Root filesystem transaction regressions
+        run: sudo python3 -I -B ops/test-public-release.py

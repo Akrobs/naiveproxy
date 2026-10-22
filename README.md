@@ -6,9 +6,9 @@
 
 Профессиональный Bash-менеджер для развёртывания и сопровождения приватного прокси-сервиса на Ubuntu VPS.
 
-**Проект:** [Сайт](https://ivan-it.net/) · [Telegram](https://t.me/ivan_it_net) · [ВКонтакте](https://vk.ru/ivan_yurievich_it) · [Дзен](https://dzen.ru/ivanyurievich)
+**Проект:** [GitHub](https://github.com/ivan-yurich/naiveproxy) · [Выпуски](https://github.com/ivan-yurich/naiveproxy/releases) · [Безопасность](SECURITY.md)
 
-[![Version](https://img.shields.io/badge/version-5.8.3-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.8.12-D4A017?style=for-the-badge)](https://github.com/ivan-yurich/naiveproxy/tree/v5.8.12)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
 [![Bash](https://img.shields.io/badge/Bash-5.0%2B-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%20%2B%20Commercial-58A6FF?style=for-the-badge)](LICENSE)
@@ -31,7 +31,7 @@
 [Мультисервер](MULTISERVER_GUIDE_RU.md) ·
 [HAProxy](HAPROXY_GUIDE_RU.md) ·
 [FAQ](#faq) ·
-[Changelog](#changelog)
+[Changelog](CHANGELOG.md)
 
 ## О проекте
 
@@ -49,9 +49,24 @@ Yurich Panel — это единый установочный и админис�
 - Telegram Bot API;
 - optional: Xray-core, Hysteria 2, Cloudflare WARP proxy mode, unbound DNS.
 
-## Что нового в текущей ветке 5.8.x
+## Публичный выпуск 5.8.12
 
-Релиз `5.8.3` ускоряет массовую пересборку подписок без смены действующих UUID, паролей и URL. Master получает профили с каждой современной node напрямую, страницы строятся ограниченным пулом workers, а неизменившиеся QR-коды безопасно переиспользуются по SHA-256. Старые node сохраняют совместимый fallback, каждая страница по-прежнему проверяется и публикуется атомарно.
+`5.8.12` объединяет исправленную локальную базу `5.8.11` и обезличивание для публикации. Серверы остаются на `5.8.11`: подготовка публичного пакета не означает обновление серверов. На момент подготовки публичная `main` содержит `5.8.3`.
+
+- Исправлены безопасный импорт без `source`/`eval`, отзыв последнего XHTTP-доступа и повторная синхронизация незавершённых ротаций и блокировок.
+- Усилены ACL приватных адресов с DNS-исключением только для доверенного тега; секреты Telegram исключены из аргументов процессов, данные QR передаются через stdin.
+- Улучшены атомарное обновление основного скрипта и совместимого alias, проверка SHA-256, защита cron через `flock` и проверки безопасности SSH-действий.
+- Включены четыре Python-модуля бота и обработка инцидентов; полный перечень изменений: [CHANGELOG.md](CHANGELOG.md).
+
+**Проверки исправленной базы, предоставленные для выпуска:** Windows: **147 из 156 пройдены**, 9 пропусков из-за платформы. Linux: **47 проверок на 6 узлах и 59 дополнительных**, без пропусков. Это не новый прогон обезличенного пакета `5.8.12`.
+
+Полная установка с нуля и игровая производительность не проверялись. Нет гарантий обхода блокировок, доступности YouTube, работы в конкретной мобильной сети или максимальной скорости.
+
+**Состав:** `yurich-panel.sh`, совместимый `naiveproxy.sh`, их `.sha256` и только четыре runtime-файла в `ops/`: `admin-bot-health.py`, `admin-bot-menu.py`, `admin-incidents.py`, `admin-monitor.py`. Личные ops-материалы, неизвестные конфиги и данные в комплект не входят. Single-script bootstrap проверяет встроенные SHA-256 модулей и использует локальный комплект либо неизменяемый тег `v${VERSION}` (`v5.8.12`), не `main`. Self-update готовит согласованный комплект скриптов, alias, контрольных сумм и модулей.
+
+[Исходники по тегу v5.8.12](https://github.com/ivan-yurich/naiveproxy/tree/v5.8.12) доступны после публикации тега; его содержимое не должно меняться. Не подменяйте тег веткой `main`.
+
+Перед миграцией существующей установки:
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -78,7 +93,7 @@ sudo bash yurich-panel.sh security-audit
 | Faster rebuild | Профили каждой node экспортируются один раз без удалённой пересборки HTML, страницы создаются пулом из 1–4 workers, а неизменившиеся QR переиспользуются |
 | Resilient DNS | Unbound отдаёт краткоживущий проверенный stale-cache при временной недоступности авторитетных DNS |
 | Service hardening | Усилены systemd-ограничения Caddy и аудит AppArmor, auditd, автообновлений, backup и staging-каталогов |
-| Публичные контакты | README содержит официальные ссылки проекта; секреты и настройки конкретного сервера не публикуются |
+| Публичные ссылки | README содержит ссылки на репозиторий; секреты и настройки конкретного сервера не публикуются |
 | HAProxy guide | Добавлена расширенная статья [HAPROXY_GUIDE_RU.md](HAPROXY_GUIDE_RU.md) по TCP/SNI routing на `443/tcp` |
 | Multi-server nodes | Новый пункт меню `29) [NODES] Multi-server management` |
 | Node registry | Root-only реестр `/etc/naiveproxy/nodes.conf` с `name/host/ssh/domain/role/weight/enabled` |
@@ -90,7 +105,6 @@ sudo bash yurich-panel.sh security-audit
 | Multi-server guide | Добавлена подробная инструкция [MULTISERVER_GUIDE_RU.md](MULTISERVER_GUIDE_RU.md) |
 | CLI commands | Добавлены `nodes`, `nodes-add`, `nodes-test`, `nodes-deploy`, `nodes-sync`, `nodes-subscriptions` |
 | Yurich Connect | Кнопки скачивания Android и Windows клиента на странице подписки |
-| Contacts | Telegram-канал и бот уведомлений на странице подписки |
 | Subscription UX | Ссылки на приложения добавлены в быстрый импорт и карточки ОС |
 | REALITY target presets | Список RU/Global кандидатов для `REALITY target` |
 | Live TLS check | Скрипт проверяет DNS/TLS/SNI выбранного target с сервера |
@@ -254,11 +268,11 @@ sudo bash yurich-panel.sh security-audit
 
 ## Быстрый старт
 
-Скачайте скрипт и контрольную сумму, проверьте файл перед запуском:
+После публикации тега `v5.8.12` скачайте скрипт и контрольную сумму из него, проверьте файл перед запуском. Модули бота загружаются проверяемым installer из того же тега; одна лишь загрузка из `main` не устанавливает этот выпуск.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh
-curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/v5.8.12/yurich-panel.sh
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/v5.8.12/yurich-panel.sh.sha256
 sha256sum -c yurich-panel.sh.sha256
 sudo bash yurich-panel.sh
 ```
@@ -420,7 +434,7 @@ DNS (Unbound) поднимает собственный recursive Unbound resolv
 
 Команда `dns-latency-report` строит отдельный отчёт по DNS latency и cache-warm: сначала локально, затем по каждой доступной node, где установлен `/usr/local/bin/yurich-panel.sh`.
 
-Для VPN-клиентов DNS открывается только по указанным CIDR. Если gateway IP, например `10.0.0.1`, ещё не назначен интерфейсу сервера, скрипт предложит создать безопасный локальный gateway `10.0.0.1/32` на `lo`. Полный sing-box Android VPN/TUN конфиг на странице подписки автоматически получит DNS (Unbound).
+Для VPN-клиентов DNS открывается только по указанным CIDR. Если gateway IP (по умолчанию `10.0.0.1`) ещё не назначен интерфейсу сервера, скрипт предложит создать безопасный локальный gateway `10.0.0.1/32` на `lo`. Полный sing-box Android VPN/TUN конфиг на странице подписки автоматически получит DNS (Unbound).
 
 ### Диагностика и SSH
 
@@ -465,7 +479,7 @@ sudo bash yurich-panel.sh bot
 | Управление | `/restart`, `/update`, `/selfupdate`, `/diagfix`, `/privatepage` |
 | Администраторы | `/admins`, `/addadmin`, `/deladmin` |
 
-После `/start` бот показывает постоянные кнопки: статус, пользователи, QR, подписка, Xray, Hysteria, WARP, диагностика, логи, перезапуск Caddy, автофикс и донат.
+После `/start` бот показывает постоянные кнопки: статус, пользователи, QR, подписка, Xray, Hysteria, WARP, диагностика, логи, перезапуск Caddy и автофикс.
 
 Кнопка Telegram `Menu` тоже настраивается автоматически через Bot API. Если меню не появилось сразу, выполни:
 
@@ -478,6 +492,8 @@ Telegram-доступ ограничивается `TG_CHAT_ID` и списко�
 
 `/adduser LOGIN [MONTHS]` сам создаёт случайный пароль. Передавать пароль в Telegram-команде больше нельзя.
 
+Monitor берёт `DOMAIN` из конфигурации, локальную метку узла задаёт `TG_MONITOR_LOCAL_NODE`. Значение `poland` сохранено только для обратной совместимости. Для главного узла с другой меткой мониторинг включается явно: `TG_MONITOR_ENABLED=1`. Не публикуйте реальные значения конфигурации.
+
 ## Страницы подписки
 
 Создать или показать страницу:
@@ -489,8 +505,8 @@ sudo bash yurich-panel.sh subscription USER
 Пример формата:
 
 ```text
-https://<your-domain.example>/s/<secret-token>/
-https://<your-domain.example>/s/<secret-token>/links.txt
+https://proxy.example.com/s/<secret-token>/
+https://proxy.example.com/s/<secret-token>/links.txt
 ```
 
 Перевыпустить токен:
@@ -591,13 +607,13 @@ sudo bash yurich-panel.sh diagnose --fix
 Yurich Proxy alias для будущего Yurich-клиента:
 
 ```text
-yurich://proxy?transport=naive&server=<your-domain.example>&port=443&username=USER&password=PASSWORD
+yurich://proxy?transport=naive&server=proxy.example.com&port=443&username=USER&password=PASSWORD
 ```
 
 Совместимый URI для текущих клиентов:
 
 ```text
-naive+https://USER:PASSWORD@<your-domain.example>:443
+naive+https://USER:PASSWORD@proxy.example.com:443
 ```
 
 `naive-client` JSON:
@@ -605,7 +621,7 @@ naive+https://USER:PASSWORD@<your-domain.example>:443
 ```json
 {
   "listen": "socks://127.0.0.1:1080",
-  "proxy": "https://USER:PASSWORD@<your-domain.example>:443"
+  "proxy": "https://USER:PASSWORD@proxy.example.com:443"
 }
 ```
 
@@ -615,13 +631,13 @@ naive+https://USER:PASSWORD@<your-domain.example>:443
 {
   "type": "http",
   "tag": "naiveproxy-out",
-  "server": "<your-domain.example>",
+  "server": "proxy.example.com",
   "server_port": 443,
   "username": "USER",
   "password": "PASSWORD",
   "tls": {
     "enabled": true,
-    "server_name": "<your-domain.example>"
+    "server_name": "proxy.example.com"
   }
 }
 ```
@@ -673,6 +689,8 @@ sudo bash yurich-panel.sh update
 ```
 
 Обновить сам скрипт:
+
+Self-update устанавливает согласованный комплект, включая четыре SHA-проверенных Python-модуля. До публикации `v5.8.12` обновление из публичной `main` не даёт версию `5.8.12`.
 
 ```bash
 sudo bash yurich-panel.sh self-update
@@ -746,6 +764,12 @@ sudo bash yurich-panel.sh ssh-rescue
 ```
 
 ## Changelog
+
+### v5.8.12
+
+Безопасный импорт, корректный отзыв XHTTP-доступа, повторная синхронизация ротаций и блокировок, усиленные ACL, защита секретов и обновлений, cron/SSH-проверки, четыре runtime-модуля бота и инциденты. Состав, результаты тестов и ограничения: [CHANGELOG.md](CHANGELOG.md).
+
+Ниже сохранена история предыдущих публичных выпусков.
 
 ### v5.8.3
 
@@ -911,7 +935,6 @@ sudo bash yurich-panel.sh ssh-rescue
 - На страницу подписки добавлены ссылки:
   - Yurich Connect Android: `https://github.com/ivan-yurich/Yurich-Connect-Android/releases`;
   - Yurich Connect Windows: `https://github.com/ivan-yurich/yurich-connect-windows/releases`;
-- добавлены контакты проекта: Telegram, VK и `support@example.com`;
 - карточки Windows/Android теперь ведут на официальные release-страницы клиента.
 
 ### v5.6.11
@@ -942,7 +965,7 @@ sudo bash yurich-panel.sh ssh-rescue
 - SSH-панель переведена на terminal-safe ASCII labels вместо emoji;
 - главное меню больше не показывает `�` в VNC/serial-консолях без emoji-шрифтов;
 - диагностика использует `[OK]`, `[WARN]`, `[FAIL]` вместо emoji-статусов;
-- DNS и donate терминальные экраны очищены от emoji;
+- DNS терминальные экраны очищены от emoji;
 - WARP proxy mode теперь пересобирает Caddyfile и добавляет `forward_proxy upstream socks5://127.0.0.1:40000`;
 - Hysteria 2 теперь может выходить через WARP local proxy благодаря `outbounds` в `hysteria.yaml`;
 - Xray WARP outbound переведён с HTTP на SOCKS и получил явное `routing` правило;
@@ -1176,8 +1199,7 @@ sudo bash yurich-panel.sh ssh-rescue
 
 ## Поддержка проекта
 
-- Сайт: [ivan-it.net](https://ivan-it.net/)
-- Новости и связь: [Telegram](https://t.me/ivan_it_net), [ВКонтакте](https://vk.ru/ivan_yurievich_it), [Дзен](https://dzen.ru/ivanyurievich)
+- Исходники и выпуски: [GitHub](https://github.com/ivan-yurich/naiveproxy)
 - Код и сообщения об ошибках: [GitHub](https://github.com/ivan-yurich/naiveproxy/issues)
 
 По вопросам безопасности следуйте [SECURITY.md](SECURITY.md): не публикуйте токены, ключи и клиентские ссылки в открытых issues.
