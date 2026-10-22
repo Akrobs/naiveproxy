@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = "",
-    [string]$ExpectedVersion = "5.8.3"
+    [string]$ExpectedVersion = "5.8.12"
 )
 
 Set-StrictMode -Version Latest
@@ -104,7 +104,7 @@ $publicTextExtensions = [Collections.Generic.HashSet[string]]::new(
     [StringComparer]::OrdinalIgnoreCase
 )
 @(
-    ".conf", ".json", ".md", ".ps1", ".sh", ".sha256", ".toml", ".txt", ".yaml", ".yml"
+    ".conf", ".json", ".md", ".ps1", ".py", ".sh", ".sha256", ".toml", ".txt", ".yaml", ".yml"
 ) | ForEach-Object { [void]$publicTextExtensions.Add($_) }
 $publicTextNames = [Collections.Generic.HashSet[string]]::new(
     [StringComparer]::OrdinalIgnoreCase

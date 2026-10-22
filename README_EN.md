@@ -26,7 +26,7 @@
 
 ---
 
-[![Version](https://img.shields.io/badge/version-5.8.3-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/releases)
+[![Version](https://img.shields.io/badge/version-5.8.12-D4A017?style=for-the-badge&logo=github&logoColor=white)](https://github.com/ivan-yurich/naiveproxy/tree/v5.8.12)
 [![Bash syntax](https://img.shields.io/badge/bash--n-passing-3FB950?style=for-the-badge&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04%2B-E95420?style=for-the-badge&logo=ubuntu&logoColor=white)](https://ubuntu.com)
@@ -39,7 +39,7 @@
 
 ---
 
-**Project:** [Website](https://ivan-it.net/) · [Telegram](https://t.me/ivan_it_net) · [VK](https://vk.ru/ivan_yurievich_it) · [Dzen](https://dzen.ru/ivanyurievich)
+**Project:** [GitHub](https://github.com/ivan-yurich/naiveproxy) · [Releases](https://github.com/ivan-yurich/naiveproxy/releases) · [Security](SECURITY.md)
 
 </div>
 
@@ -57,7 +57,7 @@
 [**🔍 Diagnostics**](#-diagnostics) ·
 [**🧩 Multi-server**](MULTISERVER_GUIDE_RU.md) ·
 [**❓ FAQ**](#-faq) ·
-[**💛 Donate**](#-support-the-project)
+[**Changelog**](CHANGELOG.md)
 
 </div>
 
@@ -77,7 +77,7 @@ from bare VPS to a managed proxy with TLS, firewall and optional private DNS
 <td align="center" width="33%">
 
 ### 🛡️ Security
-**DPI protection**
+**Transport behavior**
 Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 </td>
@@ -93,9 +93,24 @@ Yurich Proxy uses a Naive-compatible Chrome-like transport
 
 ---
 
-## 🎉 What's new in the current 5.8.x branch
+## Public Release 5.8.12
 
-> v5.8.3 speeds up fleet subscription rebuilds without changing existing UUIDs, passwords or subscription URLs. The master directly exports profiles from each updated node, pages are rendered by a bounded worker pool, and unchanged QR images are safely reused by SHA-256. Older nodes retain a compatible fallback, while every page is still validated and published atomically.
+`5.8.12` combines the corrected local `5.8.11` base with anonymization for publication. Servers remain on `5.8.11`; preparing this package does not deploy it. Public `main` contains `5.8.3` at documentation preparation time.
+
+- Safer imports without `source`/`eval`, revocation of the last XHTTP credential, and retryable synchronization of pending rotations and blocks.
+- Private-address ACLs with a DNS exception restricted to a trusted tag; Telegram secrets kept out of process arguments and QR input passed through stdin.
+- Stronger atomic entrypoint/alias updates, SHA-256 verification, `flock` protection for cron, and safety checks before SSH-sensitive actions.
+- Four Python bot runtime modules and incident handling; full release notes: [CHANGELOG.md](CHANGELOG.md) (Russian).
+
+**Previously completed checks supplied for the corrected base:** Windows: **147 of 156 passed**, 9 platform-dependent skips. Linux: **47 checks across 6 nodes plus 59 additional checks**, no skips. These are not a fresh test run of the anonymized `5.8.12` package.
+
+A full fresh installation and gaming performance have not been tested. There are no guarantees of bypassing blocks, YouTube availability, operation on a particular mobile network, or maximum speed.
+
+**Package:** `yurich-panel.sh`, the compatible `naiveproxy.sh` alias, their `.sha256` files, and only four runtime files under `ops/`: `admin-bot-health.py`, `admin-bot-menu.py`, `admin-incidents.py`, `admin-monitor.py`. Personal ops materials, unknown configuration and data files are excluded. Single-script bootstrap verifies embedded module SHA-256 hashes and uses the local package or immutable `v${VERSION}` tag (`v5.8.12`), not `main`. Self-update prepares a consistent set of scripts, alias, checksums and modules.
+
+[Source pinned to v5.8.12](https://github.com/ivan-yurich/naiveproxy/tree/v5.8.12) becomes available after tag publication; the tag must not be moved. Do not substitute the `main` branch for this tag.
+
+Before migrating an existing installation:
 
 ```bash
 sudo bash yurich-panel.sh credentials-status
@@ -103,6 +118,10 @@ sudo bash yurich-panel.sh backup
 sudo bash yurich-panel.sh credentials-migrate
 sudo bash yurich-panel.sh security-audit
 ```
+
+Migration and rollback: [CREDENTIALS_MIGRATION_RU.md](CREDENTIALS_MIGRATION_RU.md). Security reporting: [SECURITY.md](SECURITY.md).
+
+### Earlier 5.x Changes
 
 <table>
 <tr>
@@ -137,7 +156,7 @@ sudo bash yurich-panel.sh security-audit
 ✅ Terminal SSH panel no longer depends on emoji fonts
 ✅ Main menu icons changed to ASCII labels like `[DNS]`, `[WARP]`, `[XRAY]`
 ✅ Diagnostics now use `[OK]`, `[WARN]`, `[FAIL]` in terminal output
-✅ DNS and donate terminal screens are emoji-safe
+✅ DNS terminal screens are emoji-safe
 ✅ WARP proxy mode now regenerates Caddy with `forward_proxy upstream socks5://127.0.0.1:40000`
 ✅ Hysteria 2 server config now gets a WARP SOCKS5 `outbounds` block
 ✅ Xray WARP outbound now uses SOCKS plus explicit routing
@@ -283,9 +302,9 @@ sudo bash yurich-panel.sh security-audit
 
 ### 🎯 Who needs this:
 
-- 🌐 **Bypass blocks** — access to restricted resources
-- 🔒 **Privacy** — no one sees your traffic
-- 🚫 **Ad-free** — on all devices at once
+- **Proxy access**: connect through a configured private endpoint; reachability depends on the network
+- **Transport privacy**: TLS protects the client-to-proxy connection; it does not provide anonymity
+- **Private DNS**: optional Unbound resolver, not an ad-blocking guarantee
 - 👨‍👩‍👧 **For family** — multiple users, different passwords
 - 💼 **For team** — multi-admin, diagnostics, monitoring
 
@@ -295,9 +314,11 @@ sudo bash yurich-panel.sh security-audit
 
 ### Download, verify and run:
 
+Run these commands only after the `v5.8.12` tag is published. The verified module installer obtains the four bot modules from the same tag. Downloading from `main` alone does not install this release.
+
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh
-curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh.sha256
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/v5.8.12/yurich-panel.sh
+curl -fsSLO https://raw.githubusercontent.com/ivan-yurich/naiveproxy/v5.8.12/yurich-panel.sh.sha256
 sha256sum -c yurich-panel.sh.sha256
 sudo bash yurich-panel.sh
 ```
@@ -443,13 +464,13 @@ No `0.0.0.0` bind and no public port 53 rule
 ──────────────────────────────────────────────────────
 Yurich Panel v5.6.49  [ENG]
    Status: ● running  │  Domain: proxy.example.com
-   Telegram: connected  │  Users: 3  │  SSH: 52847
+   Telegram: <state>  |  Users: <count>  |  SSH: <port>
 ──────────────────────────────────────────────────────
    1)  📦 Install Yurich Proxy      10) 📄 Logs
    2)  📊 Status + certificate      11) 🗑  Remove Yurich Proxy
    3)  📱 Client config + QR        16) 🔍 Diagnostics
    4)  👥 Users                     17) 🛡️ DNS (Unbound)
-   5)  🌍 Domains                   18) 💛 Support project
+   5)  🌍 Domains
    6)  📈 Monitoring + stats        ──────────────────
    7)  🤖 Telegram + Bot setup      12) 🔒 SSH Hardening
    8)  🔄 Restart Caddy             13) 🔄 Update system
@@ -468,7 +489,7 @@ Yurich Panel v5.6.49  [ENG]
 sudo bash yurich-panel.sh install        # Full installation
 sudo bash yurich-panel.sh status         # Status + certificate
 sudo bash yurich-panel.sh config         # Config + QR code
-sudo bash yurich-panel.sh config ivan    # Unique user link
+sudo bash yurich-panel.sh config example-user    # Unique user link
 sudo bash yurich-panel.sh qr             # QR code only
 sudo bash yurich-panel.sh cert           # Certificate only
 sudo bash yurich-panel.sh users          # User management
@@ -500,8 +521,8 @@ sudo bash yurich-panel.sh hysteria-repair
 sudo bash yurich-panel.sh hysteria-remove
 
 # === Subscriptions and pages ===
-sudo bash yurich-panel.sh subscription ivan       # User subscription page
-sudo bash yurich-panel.sh subscription-reset ivan # Rotate secret URL
+sudo bash yurich-panel.sh subscription example-user       # User subscription page
+sudo bash yurich-panel.sh subscription-reset example-user # Rotate secret URL
 sudo bash yurich-panel.sh private-page            # Private camouflage page
 sudo bash yurich-panel.sh private-page reset      # Rotate page secret URL
 
@@ -632,7 +653,6 @@ systemctl restart naiveproxy-bot
 `/deladmin ID` — Remove admin
 `/selfupdate` — Update script
 `/privatepage` — Private camouflage page
-`/donate` — Support project
 
 </td>
 </tr>
@@ -642,14 +662,16 @@ systemctl restart naiveproxy-bot
 
 ```bash
 # Create/show user subscription page:
-sudo bash yurich-panel.sh subscription ivan
+sudo bash yurich-panel.sh subscription example-user
 
 # If the link leaks, rotate the token:
-sudo bash yurich-panel.sh subscription-reset ivan
+sudo bash yurich-panel.sh subscription-reset example-user
 ```
 
-The page is created under a secret URL like `https://domain/s/<token>/`, with raw import links available as `links.txt`.
+The page is created under a secret URL like `https://proxy.example.com/s/<token>/`, with raw import links available as `links.txt`.
 It includes a Yurich Proxy alias, compatible `naive+https://` URI, naive-client JSON, Xray/VLESS/Trojan links and setup hints for Windows, Android, iOS/macOS and Linux.
+
+The monitor reads `DOMAIN` from configuration and uses `TG_MONITOR_LOCAL_NODE` for the local node label. The legacy `poland` value remains for compatibility only. A primary node with a different label requires explicit opt-in with `TG_MONITOR_ENABLED=1`. Never publish real configuration values.
 
 ### 🔐 Multi-admin:
 
@@ -686,8 +708,10 @@ sudo bash yurich-panel.sh dns-install
 
 ### 🔍 How it works:
 
+The diagram uses a documentation-only RFC 5737 address; the actual gateway is configured locally.
+
 ```
-VPN client → VPN tunnel → 10.0.0.1:53 → Unbound
+VPN client → VPN tunnel → 192.0.2.1:53 → Unbound
                                       │
                                       ├─ recursive DNS lookup
                                       ├─ DNSSEC validation
@@ -715,7 +739,7 @@ sudo yurich-dns-restart
 
 ### 🔒 Open resolver protection:
 
-Do not enter any `/0` network as a VPN CIDR. The installer rejects it. Use only your real tunnel network, for example `10.0.0.0/24`.
+Do not enter any `/0` network as a VPN CIDR. The installer rejects it. Use only your actual tunnel network; `192.0.2.0/24` is an RFC 5737 documentation example, not a production setting.
 
 If port `53` is busy by `systemd-resolved`, the installer disables only the local stub listener through `/etc/systemd/resolved.conf.d/no-stub.conf`. It does not rewrite `/etc/resolv.conf` unless Ubuntu already manages it.
 
@@ -772,7 +796,7 @@ sudo bash yurich-panel.sh diagnose
   ✅ Correct format ':443, domain'
   ✅ order forward_proxy — OK
   ✅ bcrypt proxy authentication enabled
-  ✅ Users: 4
+  Users: <count>
   ✅ Caddyfile valid
 
 [3/7] TLS and network
@@ -817,7 +841,7 @@ sudo bash yurich-panel.sh diagnose
 
 ```bash
 # ❌ WRONG — clients won't connect:
-your-domain.com:443 { ... }
+proxy.example.com:443 { ... }
 
 # ✅ CORRECT — :443 + servers block required:
 {
@@ -827,8 +851,8 @@ your-domain.com:443 { ... }
     }
 }
 
-:443, your-domain.com {
-    tls your@email.com
+:443, proxy.example.com {
+    tls admin@example.com
     @naive_proxy method CONNECT
     route @naive_proxy {
         request_header Authorization "{http.request.header.Proxy-Authorization}"
@@ -868,9 +892,9 @@ sudo bash yurich-panel.sh ssh-hardening
 ### 🔑 Download SSH key:
 
 ```bash
-scp root@YOUR_IP:/etc/naiveproxy/ssh_private_key ~/.ssh/id_naiveproxy
+scp root@192.0.2.10:/etc/naiveproxy/ssh_private_key ~/.ssh/id_naiveproxy
 chmod 600 ~/.ssh/id_naiveproxy
-ssh -i ~/.ssh/id_naiveproxy -p NEW_PORT user@YOUR_IP
+ssh -i ~/.ssh/id_naiveproxy -p NEW_PORT user@192.0.2.10
 ```
 
 ### 🚨 Fail2Ban 3 levels:
@@ -888,13 +912,13 @@ ssh -i ~/.ssh/id_naiveproxy -p NEW_PORT user@YOUR_IP
 ### 🔗 Yurich Proxy alias for future Yurich clients:
 
 ```
-yurich://proxy?transport=naive&server=YOUR_DOMAIN&port=443&username=USERNAME&password=PASSWORD
+yurich://proxy?transport=naive&server=proxy.example.com&port=443&username=USERNAME&password=PASSWORD
 ```
 
 ### 🔗 Compatible URI for current clients:
 
 ```
-naive+https://USERNAME:PASSWORD@YOUR_DOMAIN:443
+naive+https://USERNAME:PASSWORD@proxy.example.com:443
 ```
 
 ### 📋 JSON for naive-client:
@@ -902,7 +926,7 @@ naive+https://USERNAME:PASSWORD@YOUR_DOMAIN:443
 ```json
 {
   "listen": "socks://127.0.0.1:1080",
-  "proxy": "https://USERNAME:PASSWORD@YOUR_DOMAIN:443",
+  "proxy": "https://USERNAME:PASSWORD@proxy.example.com:443",
   "log": "naive.log"
 }
 ```
@@ -1110,7 +1134,7 @@ The format is `source-node|relay-host|relay-port|transports`. Invalid domains, p
 
 **Important — set up A-record:**
 ```
-your-domain.com → SERVER_IP
+proxy.example.com -> 192.0.2.10
 ```
 
 </details>
@@ -1142,10 +1166,11 @@ sudo bash /usr/local/bin/yurich-panel.sh install
 sudo bash /usr/local/bin/yurich-panel.sh
 # → Option 14) Update script
 
-# Method 2 — one command
-curl -fsSL https://raw.githubusercontent.com/ivan-yurich/naiveproxy/main/yurich-panel.sh \
-  -o /usr/local/bin/yurich-panel.sh && chmod +x /usr/local/bin/yurich-panel.sh
+# Method 2: verified self-update, including the four bot modules
+sudo bash /usr/local/bin/yurich-panel.sh self-update
 ```
+
+Self-update prepares a consistent script/alias/checksum/module set. Until `v5.8.12` is published, public `main` is not a source of this release.
 
 </details>
 
@@ -1162,10 +1187,10 @@ sudo bash yurich-panel.sh diagnose
 
 # 2. Check Caddyfile
 cat /etc/caddy/Caddyfile | grep ":443"
-# Should be: :443, your-domain.com {
+# Should be: :443, proxy.example.com {
 
 # 3. Check ALPN (should be h2)
-echo | openssl s_client -connect YOUR_DOMAIN:443 -alpn h2 -servername YOUR_DOMAIN 2>/dev/null | grep -a "ALPN protocol"
+echo | openssl s_client -connect proxy.example.com:443 -alpn h2 -servername proxy.example.com 2>/dev/null | grep -a "ALPN protocol"
 
 # 4. Check port is open
 ss -tlnp | grep :443
@@ -1186,7 +1211,7 @@ journalctl -u caddy -n 30 --no-pager
 3. **Streisand** — free
 
 **How to connect:**
-1. Copy the compatible URI: `naive+https://user:pass@domain:443`
+1. Copy the compatible URI: `naive+https://USER:PASSWORD@proxy.example.com:443`
 2. Open Hiddify → Import from clipboard
 
 </details>
@@ -1232,11 +1257,11 @@ sudo bash yurich-panel.sh bot-install
 <details>
 <summary><b>How to get Telegram bot token?</b></summary>
 
-1. Open [@BotFather](https://t.me/BotFather) in Telegram
+1. Open Telegram's official `@BotFather`
 2. Send `/newbot`
 3. Enter bot name
 4. Enter username (must end with `bot`)
-5. Copy token like `123456789:ABCdefGHIjkl`
+5. Keep the generated token private; do not paste it into public reports
 
 Enter token in script:
 ```bash
@@ -1249,14 +1274,7 @@ sudo bash yurich-panel.sh
 <details>
 <summary><b>How to find my Telegram Chat ID?</b></summary>
 
-**Method 1 — via bot:**
-1. Send any message to your bot
-2. Open: `https://api.telegram.org/botYOUR_TOKEN/getUpdates`
-3. Find `"chat":{"id":12345}` — that's your ID
-
-**Method 2 — via @userinfobot:**
-1. Message [@userinfobot](https://t.me/userinfobot)
-2. It will show your ID
+Use the panel's Telegram setup to configure the authorized chat. Do not put bot tokens into browser URLs, shell arguments or public reports.
 
 </details>
 
@@ -1316,7 +1334,7 @@ systemctl restart sshd
 fail2ban-client status sshd
 
 # Unban your IP
-fail2ban-client unban YOUR_IP
+fail2ban-client unban 192.0.2.10
 
 # Unban all
 fail2ban-client unban --all
@@ -1354,7 +1372,7 @@ tar -czf naiveproxy-backup-$(date +%Y%m%d).tar.gz \
   /etc/naiveproxy/
 
 # Download
-scp root@YOUR_IP:~/naiveproxy-backup-*.tar.gz ~/Downloads/
+scp root@192.0.2.10:~/naiveproxy-backup-*.tar.gz ~/Downloads/
 
 # Restore
 sudo bash yurich-panel.sh install
@@ -1413,10 +1431,7 @@ You can follow the project, share feedback and report reproducible bugs:
 
 | Channel | Link |
 |---|---|
-| Website | [ivan-it.net](https://ivan-it.net/) |
-| Telegram | [ivan_it_net](https://t.me/ivan_it_net) |
-| VK | [ivan_yurievich_it](https://vk.ru/ivan_yurievich_it) |
-| Dzen | [ivanyurievich](https://dzen.ru/ivanyurievich) |
+| Source and releases | [GitHub](https://github.com/ivan-yurich/naiveproxy) |
 | Bug reports | [GitHub Issues](https://github.com/ivan-yurich/naiveproxy/issues) |
 
 For security reports, follow [SECURITY.md](SECURITY.md). Never post tokens, private keys or client subscription URLs in public issues.
@@ -1426,7 +1441,16 @@ For security reports, follow [SECURITY.md](SECURITY.md). Never post tokens, priv
 ## 📜 Changelog
 
 <details open>
-<summary><b>v5.8.3</b> — faster subscription rebuilds ← CURRENT</summary>
+<summary><b>v5.8.12</b>: public release</summary>
+
+Safer imports, XHTTP revocation, pending rotation/block synchronization, private-address ACLs, secret handling, atomic updates, cron/SSH checks, four bot runtime modules and incident handling. See [CHANGELOG.md](CHANGELOG.md) for the package contents, supplied test results and limitations.
+
+</details>
+
+Earlier public releases:
+
+<details>
+<summary><b>v5.8.3</b> — faster subscription rebuilds</summary>
 
 **Performance with the existing safety guarantees:**
 - Clamps calendar-month subscription expiry to the last valid day and preserves published pages when HTTPS or SSH node fetching fails
@@ -1699,7 +1723,7 @@ For security reports, follow [SECURITY.md](SECURITY.md). Never post tokens, priv
 - Replaced emoji icons in the SSH panel with ASCII labels
 - Main menu now uses labels such as `[DNS]`, `[WARP]`, `[XRAY]`, `[DIAG]`
 - Diagnostics now use `[OK]`, `[WARN]`, `[FAIL]`
-- DNS and donate terminal screens no longer depend on emoji fonts
+- DNS terminal screens no longer depend on emoji fonts
 
 **🌀 WARP routing:**
 
@@ -2080,8 +2104,6 @@ For security reports, follow [SECURITY.md](SECURITY.md). Never post tokens, priv
 - 🟡 `((var++))` → `var=$((var+1))` in 3 places (set -e exit safety)
 - 🟢 Literal `\n` in printf → `\\n`
 - ✅ ShellCheck: 0 errors, 2 harmless warnings
-- ✨ `/donate` command in Telegram bot
-- ✨ Menu item 18 — donation + QR code
 
 </details>
 
@@ -2186,7 +2208,7 @@ Full license text: [LICENSE](LICENSE)
 
 ---
 
-📱 [**Telegram**](https://t.me/ivan_it_net) · 🌐 [**Website**](https://ivan-it.net/) · [**VK**](https://vk.ru/ivan_yurievich_it) · [**Dzen**](https://dzen.ru/ivanyurievich) · 💻 [**GitHub**](https://github.com/ivan-yurich/naiveproxy)
+[**GitHub**](https://github.com/ivan-yurich/naiveproxy) · [**Security**](SECURITY.md)
 
 **Yurich Panel · by Yurich Panel contributors**
 
